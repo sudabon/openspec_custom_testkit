@@ -1,7 +1,0 @@
-# Oracle と品質基盤は人間のレビューを必須にする
-# ブランチ保護で "Require review from Code Owners" を有効化すること
-/tests/oracle/                 @your-org/quality-owners
-/openspec/quality-policy.md    @your-org/quality-owners
-/openspec/schemas/             @your-org/quality-owners
-/scripts/qe-gate.sh            @your-org/quality-owners
-/.github/workflows/            @your-org/quality-owners
