@@ -19,6 +19,8 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm run lint
+      - name: Install OpenSpec CLI
+        run: npm install -g @fission-ai/openspec@1.13.1
       - run: npm test
       - name: Install Playwright browser for smoke
         run: npx playwright install --with-deps chromium
