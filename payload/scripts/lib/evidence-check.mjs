@@ -1,12 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { headRevision } from './git.mjs';
+import { SCHEMA_INTEGRATED } from './critical.mjs';
+import { git, headRevision } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { mutationThreshold } from './policy.mjs';
 import { asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 
-function executionBlock(markdown) {
+export function executionBlock(markdown) {
   const body = section(markdown, '## Execution Records');
   if (body == null) return { error: '## Execution Records がありません' };
   const match = body.match(/```json\s*([\s\S]*?)```/);
@@ -35,7 +36,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     return { errors, notes };
   }
   const text = readFileSync(evidencePath, 'utf8');
-  if (change.schema !== 'quality-driven-e2e') {
+  if (change.schema !== SCHEMA_INTEGRATED) {
     const qualityPath = join(repo, change.path, 'quality.md');
     if (existsSync(qualityPath)) {
       const ids = [...readFileSync(qualityPath, 'utf8').matchAll(/^\|\s*(R\d+)\s*\|/gm)].map(match => match[1]);
@@ -76,7 +77,17 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     else if (existsSync(join(repo, run.source))) {
       if (sha256File(join(repo, run.source)) !== run.source_sha256) errors.push(`run ${run.id} の source hash が一致しません`);
     } else errors.push(`run ${run.id} の source がありません: ${run.source}`);
-    if (revision && run.revision && run.revision !== revision) errors.push(`run ${run.id} の revision が HEAD と一致しません`);
+    if (revision && run.revision && run.revision !== revision) {
+      try {
+        if (!/^[0-9a-f]{40,64}$/.test(run.revision)) throw new Error('invalid revision');
+        git(repo, ['merge-base', '--is-ancestor', run.revision, revision]);
+        const changed = git(repo, ['diff', '--name-only', '-z', run.revision, revision, '--']).split('\0').filter(Boolean);
+        const evidenceRel = evidenceRelative(repo, evidencePath);
+        if (changed.some(path => path !== evidenceRel)) throw new Error('changed inputs');
+      } catch {
+        errors.push(`run ${run.id} の revision が HEAD の検証対象と一致しません`);
+      }
+    }
   }
 
   const results = Array.isArray(data.risk_results) ? data.risk_results : [];
@@ -87,19 +98,16 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     const row = rows[0];
     if (!row) continue;
     seen.add(risk);
-    for (const key of ['failure_modes', 'oracles', 'layer', 'result', 'run_ids']) {
-      if (row[key] == null || row[key] === '' || (Array.isArray(row[key]) && row[key].length === 0 && key !== 'tp_ids')) {
-        if (key !== 'tp_ids') errors.push(`${risk} の ${key} が不足しています`);
-      }
+    for (const key of ['failure_modes', 'oracles', 'run_ids']) {
+      if (!Array.isArray(row[key]) || row[key].length === 0) errors.push(`${risk} の ${key} が不足しています`);
     }
-    if (!Array.isArray(row.failure_modes) || row.failure_modes.length === 0) errors.push(`${risk} の failure_modes が空です`);
-    if (!Array.isArray(row.oracles) || row.oracles.length === 0) errors.push(`${risk} の oracles が空です`);
+    if (!asString(row.layer)) errors.push(`${risk} の layer が不足しています`);
     if (row.result !== 'pass' && row.result !== 'fail') errors.push(`${risk} の結果が未実行または不正です: ${row.result ?? ''}`);
     if (row.result === 'fail') errors.push(`${risk} の結果が fail です`);
     if (/(^|[^A-Za-z])E2E([^A-Za-z]|$)/.test(row.layer ?? '') && change.e2e === 'required' && (!Array.isArray(row.tp_ids) || row.tp_ids.length === 0)) {
       errors.push(`${risk} は E2E 層なのに TP-ID がありません`);
     }
-    for (const runId of row.run_ids ?? []) {
+    for (const runId of Array.isArray(row.run_ids) ? row.run_ids : []) {
       const run = runById.get(runId);
       if (!run) errors.push(`${risk} の run_id ${runId} が runs にありません`);
       else if (row.result === 'pass' && run.exit_code !== 0) errors.push(`${risk} は pass なのに run ${runId} が失敗しています`);
@@ -152,7 +160,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
 
   const history = Array.isArray(data.oracle_changes) ? data.oracle_changes : [];
   const historySection = section(text, '## Oracle Changes') ?? '';
-  const historyProse = historySection.replace(/```json[\s\S]*?```/g, '').trim();
+  const historyProse = historySection.replace(/<!--[\s\S]*?-->/g, '').replace(/```json[\s\S]*?```/g, '').trim();
   const mentionsChange = /再seal|再承認|変更理由/.test(historyProse);
   if (mentionsChange && history.length === 0) errors.push('再sealの履歴が JSON にありません');
   if (history.length) {
@@ -167,8 +175,10 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   let execution = 'unverified';
   if (manifest) {
     const ids = new Set(manifest.run_ids ?? []);
-    const covered = runs.every(run => ids.has(run.id));
-    if (covered && manifest.revision && revision && manifest.revision === revision) execution = 'verified';
+    const covered = runs.length > 0 && runs.every(run => ids.has(run.id) && (!manifest.runs || manifest.runs.some(record =>
+      record.id === run.id && record.change_id === change.id && record.command === run.command &&
+      record.exit_code === run.exit_code && record.source_sha256 === run.source_sha256)));
+    if (!errors.length && covered && manifest.revision && revision && manifest.revision === revision) execution = 'verified';
     else errors.push('CI 実行記録と evidence の run が一致しません');
   }
   notes.push(errors.length ? 'structure: fail' : 'structure: pass', `execution: ${execution}`);

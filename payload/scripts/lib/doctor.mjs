@@ -24,9 +24,6 @@ export function doctor(repo, options = {}) {
       if (!existsSync(abs)) failures.push(`必須ファイルがありません: ${rel}`);
       else if (sha256File(abs) !== expected) failures.push(`必須ファイルが導入内容と違います: ${rel}`);
     }
-    for (const rel of Object.keys(files)) {
-      if (isCritical(rel) && !existsSync(join(repo, rel))) failures.push(`必須ファイルが stamp 後に消えました: ${rel}`);
-    }
   }
   const policyPath = join(repo, 'openspec/quality-policy.md');
   if (!existsSync(policyPath)) failures.push('openspec/quality-policy.md がありません');
@@ -37,6 +34,6 @@ export function doctor(repo, options = {}) {
   const env = assessTarget(repo, options);
   notes.push(...env.messages);
   if (!env.openspecReady) failures.push(`OpenSpec は統合 ready ではありません (${env.reason})`);
-  if (!env.allowWrite && env.reason !== 'ok') failures.push(`配置境界: ${env.reason}`);
+  if (!env.allowWrite) failures.push(`配置境界: ${env.reason}`);
   return { ok: failures.length === 0, failures, notes, stamp: stamp.data };
 }

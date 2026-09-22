@@ -47,7 +47,6 @@ export function evaluateChange(repo, change, options = {}) {
   const wantQuality = options.quality !== false && (change.qe || change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE);
   const wantPlan = options.plan !== false && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_E2E || change.scope === 'integrated');
   if (change.pendingPlan && !change.tasksText && phase === 'plan') warnings.push(`${change.id}: 計画途中(test-plan 未作成)`);
-  if (change.pendingPlan && (change.tasksText || phase === 'final')) failures.push(`${change.id}: test-plan.md がありません`);
 
   if (wantQuality && change.lifecycle !== 'deleted' && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE)) {
     const qualityPath = join(repo, change.path, 'quality.md');

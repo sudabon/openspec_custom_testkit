@@ -5,7 +5,7 @@ export default defineConfig({
   retries: 1, // リトライ成功 = フレークとして記録される
   reporter: [
     ['list'],
-    ['json', { outputFile: 'test-results/e2e-results.json' }],
+    ['json', { outputFile: process.env.TESTKIT_RESULTS_JSON || 'test-results/e2e-results.json' }],
   ],
   use: {
     trace: 'on-first-retry',

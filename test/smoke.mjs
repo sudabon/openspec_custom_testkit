@@ -90,7 +90,6 @@ try {
   mkdirSync(join(repo.dir, 'tests/oracle/demo'), { recursive: true });
   writeFileSync(join(repo.dir, 'tests/oracle/demo/oracle.test.mjs'), 'export {}\n');
   const digest = digestForSchema(repo.dir, 'quality-driven-e2e', ['tests/oracle/demo']);
-  const revision = repo.git(['rev-parse', 'HEAD']).trim();
   const quality = `---
 risk_level: low
 approved_by: "FIXTURE-DUMMY-APPROVAL"
@@ -121,6 +120,8 @@ oracle_digest: "${digest.digest}"
   mkdirSync(join(repo.dir, 'test-results/smoke'), { recursive: true });
   writeFileSync(join(repo.dir, source), browser.stdout);
   const { sha256File } = await import('../payload/scripts/lib/hash.mjs');
+  repo.commit('tested inputs');
+  const revision = repo.git(['rev-parse', 'HEAD']).trim();
   const evidence = `# Evidence
 
 FIXTURE-DUMMY-APPROVAL は人間の承認ではありません。
@@ -167,13 +168,7 @@ FIXTURE-DUMMY-APPROVAL は人間の承認ではありません。
 - なし
 `;
   writeFileSync(join(repo.dir, 'openspec/changes/smoke-counter/evidence.md'), evidence);
-  repo.commit('fixture');
-  const head = repo.git(['rev-parse', 'HEAD']).trim();
-  const evidenceText = readFileSync(join(repo.dir, 'openspec/changes/smoke-counter/evidence.md'), 'utf8').replace(revision, head);
-  writeFileSync(join(repo.dir, 'openspec/changes/smoke-counter/evidence.md'), evidenceText);
-  repo.commit('revision');
-  const finalHead = repo.git(['rev-parse', 'HEAD']).trim();
-  writeFileSync(join(repo.dir, 'openspec/changes/smoke-counter/evidence.md'), evidenceText.replaceAll(head, finalHead));
+  repo.commit('record evidence');
   const change = {
     id: 'smoke-counter',
     path: 'openspec/changes/smoke-counter',

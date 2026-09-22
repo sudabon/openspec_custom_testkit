@@ -18,11 +18,13 @@ jobs:
       base-ref: origin/main
       gate-phase: plan
       test-command: npm test
-      e2e-command: npx playwright test --reporter=json
+      e2e-command: npx playwright test
       e2e-base-url: http://127.0.0.1:4173
 ```
 
 Playwright の `webServer` が localhost のサーバーを起動する構成を標準にする。browser とサーバーの依存は npm mode では `npm ci` と Playwright の導入に含まれる。
+
+JSON reporter は `$TESTKIT_RESULTS_JSON`（絶対パス）へ今回の結果を書き出す必要がある。同梱 `playwright.config.example.ts` を採用すると、この環境変数とローカル実行用の既定パスを切り替える。`--reporter=json` は config の reporter を上書きするため、使う場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` とする。monorepo でもこの絶対パスを変更しない。
 
 ## caller
 
@@ -36,7 +38,7 @@ with:
     pnpm install --frozen-lockfile
     pnpm exec playwright install chromium
   test-command: pnpm test
-  e2e-command: pnpm exec playwright test --reporter=json
+  e2e-command: pnpm exec playwright test
 ```
 
 DB が必要なときは、この setup-command で起動と fixture の初期化まで行う。高度な services は呼び出し側 workflow の `services:` に書き、setup-command からそのポートへ接続する。
@@ -50,7 +52,7 @@ with:
   working-directory: frontend
   setup-mode: npm
   test-command: npm test
-  e2e-command: npx playwright test --reporter=json
+  e2e-command: npx playwright test
 ```
 
 ## E2E を使わない
@@ -81,9 +83,15 @@ with:
 ```yaml
 with:
   e2e-base-url: http://127.0.0.1:3000
-  e2e-command: npx playwright test --reporter=json
+  e2e-command: npx playwright test
 ```
 
 ## 旧 workflow からの変更
 
 旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age` が増えている。
+
+## Evidence と実行記録
+
+`revision` は検証したコミットの SHA を記録する。その後、その change の `evidence.md` だけをコミットしても final ゲートは受理する。実装、Oracle、計画、取得元ファイルなどが変わった場合は再検証する。結果ファイルも先に保存・コミットしてから revision を確定する。
+
+CI は `test-command` / `mutation-command` の標準出力（失敗時は標準エラーも含む）と E2E の JSON を実行ごとのディレクトリに保存する。`manifest.json` の `run_ids` は、コマンド・終了コード・出力 SHA-256 が実行結果と一致した evidence の `runs[].id` である。change ID は `runs[].change_id` に分離する。final ではこの manifest を evidence と照合する。時刻などで出力が変わるコマンドは、その CI 実行の結果で evidence の source と hash を更新するラッパーを使う。別実行の結果を同じものとして扱わない。manifest のないローカル検査は `execution: unverified` のままである。

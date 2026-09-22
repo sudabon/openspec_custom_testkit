@@ -5,7 +5,7 @@ const STATUS_LABEL = { expected: 'pass', unexpected: 'fail', flaky: 'pass', skip
 
 export function plannedIds(planText) {
   const frontmatter = splitFrontmatter(planText);
-  if (frontmatter.has && frontmatter.data && Object.prototype.hasOwnProperty.call(frontmatter.data, 'e2e')) {
+  if (frontmatter.has) {
     if (frontmatter.error) return { error: frontmatter.error, ids: [], applicability: 'unknown' };
     const value = frontmatter.data.e2e;
     if (value !== 'required' && value !== 'not-applicable') {
@@ -59,6 +59,9 @@ export function formatAge(seconds) {
 }
 
 export function buildReport({ changeId, planText, results, maxAge, now = Date.now() }) {
+  if (maxAge != null && (!Number.isFinite(maxAge) || maxAge < 0)) {
+    return { exitCode: 2, stdout: '', stderr: 'max-age には 0 以上の秒数を指定してください\n' };
+  }
   const planned = plannedIds(planText);
   if (planned.error) return { exitCode: 2, stdout: '', stderr: planned.error + '\n' };
   if (!results || typeof results !== 'object') return { exitCode: 2, stdout: '', stderr: 'Playwright JSON が不正です\n' };

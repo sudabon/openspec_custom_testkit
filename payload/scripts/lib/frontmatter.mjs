@@ -61,7 +61,8 @@ export function splitFrontmatter(text) {
 }
 
 export function setFrontmatterScalar(text, key, value) {
-  const lines = String(text).split('\n');
+  const newline = String(text).includes('\r\n') ? '\r\n' : '\n';
+  const lines = String(text).split(/\r?\n/);
   let inFrontmatter = false;
   let found = false;
   for (let i = 0; i < lines.length; i++) {
@@ -77,7 +78,7 @@ export function setFrontmatterScalar(text, key, value) {
     }
   }
   if (!found) throw new Error(`frontmatter に ${key} がありません`);
-  return lines.join('\n');
+  return lines.join(newline);
 }
 
 export function asString(value) {

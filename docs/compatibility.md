@@ -23,3 +23,7 @@
 ## 旧 reporter の誤合格
 
 `test/baseline-notes.md` に記録した。期待値は緩和していない。
+
+## 統合版の digest 正規化
+
+`manifest-sha256:` は Oracle の全ファイルをパスでソートし、重複を除外して計算する。旧 `sha256:` の計算法は変えない。修正前の統合版で、複数の `oracle_paths` を逆順や重複ありで seal した場合は digest が変わるため、人間確認のうえ一度再 seal し、evidence の履歴に記録する。

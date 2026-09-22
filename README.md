@@ -39,3 +39,5 @@ npm pack --dry-run
 ```
 
 smoke は localhost だけで動き、外部へ送信しません。browser や OpenSpec CLI が無いときに成功として skip しません。
+
+CI の `e2e-command` は今回の Playwright JSON を `$TESTKIT_RESULTS_JSON` へ保存します。同梱 `playwright.config.example.ts` はこの変数を使用します。設定例と evidence の実行照合は [CI の組み込み例](examples/ci/README.md) を参照してください。

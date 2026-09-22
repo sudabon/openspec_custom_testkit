@@ -86,7 +86,7 @@ export function assessTarget(target, options = {}) {
 
   const versionRun = run(execFile, 'openspec', ['--version'], probeCwd);
   let version = null;
-  if (versionRun.code !== 'ENOENT' && versionRun.code === 0) {
+  if (versionRun.code === 0) {
     version = versionRun.stdout.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
   }
   const cliMissing = versionRun.code === 'ENOENT' || version == null;

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_INTEGRATED } from './lib/critical.mjs';
+import { SCHEMA_INTEGRATED, SCHEMA_QE } from './lib/critical.mjs';
 import { digestForSchema } from './lib/digest.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { asList, asString, setFrontmatterScalar, splitFrontmatter, validDate } from './lib/frontmatter.mjs';
@@ -85,7 +85,7 @@ function commandDigest(id) {
     return 1;
   }
   const selected = selectChanges({ repo, names: [id], env: process.env });
-  const schema = selected.changes[0]?.schema === SCHEMA_INTEGRATED ? SCHEMA_INTEGRATED : 'quality-driven';
+  const schema = selected.changes[0]?.schema === SCHEMA_INTEGRATED ? SCHEMA_INTEGRATED : SCHEMA_QE;
   const digest = digestForSchema(repo, schema, asList(frontmatter.data.oracle_paths));
   if (digest.error === 'MISSING') console.log(`MISSING:${digest.path}`);
   else console.log(digest.digest ?? '');
@@ -118,7 +118,7 @@ function commandSeal(id) {
     console.error('quality.md が未承認です。approved_by を記入してから seal してください');
     return 1;
   }
-  const digest = digestForSchema(repo, integrated ? SCHEMA_INTEGRATED : 'quality-driven', asList(frontmatter.data.oracle_paths));
+  const digest = digestForSchema(repo, integrated ? SCHEMA_INTEGRATED : SCHEMA_QE, asList(frontmatter.data.oracle_paths));
   if (!digest.digest || digest.empty || digest.error) {
     console.error(`Oracle テストが見つかりません: ${digest.path ?? '(空)'}`);
     return 1;

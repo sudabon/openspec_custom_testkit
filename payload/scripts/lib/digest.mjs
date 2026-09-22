@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { byteCompare, sha256 } from './hash.mjs';
 
 function listFiles(repo, oraclePath) {
@@ -12,6 +13,7 @@ function listFiles(repo, oraclePath) {
   } catch {
     return { error: 'MISSING', path: rel };
   }
+  let currentPath = rel;
   const files = [];
   const addFile = fileRel => {
     files.push(fileRel.split('\\').join('/'));
@@ -20,6 +22,7 @@ function listFiles(repo, oraclePath) {
     for (const name of readdirSync(dirAbs)) {
       const childAbs = join(dirAbs, name);
       const childRel = `${dirRel}/${name}`;
+      currentPath = childRel;
       const listed = lstatSync(childAbs);
       if (listed.isSymbolicLink()) {
         if (statSync(childAbs).isFile()) addFile(childRel);
@@ -29,12 +32,16 @@ function listFiles(repo, oraclePath) {
       else if (listed.isFile()) addFile(childRel);
     }
   };
-  if (rootStat.isSymbolicLink()) {
-    if (!statSync(abs).isFile()) return { error: 'MISSING', path: rel };
-    addFile(rel);
-  } else if (rootStat.isDirectory()) walk(abs, rel);
-  else if (rootStat.isFile()) addFile(rel);
-  else return { error: 'MISSING', path: rel };
+  try {
+    if (rootStat.isSymbolicLink()) {
+      if (!statSync(abs).isFile()) return { error: 'MISSING', path: rel };
+      addFile(rel);
+    } else if (rootStat.isDirectory()) walk(abs, rel);
+    else if (rootStat.isFile()) addFile(rel);
+    else return { error: 'MISSING', path: rel };
+  } catch {
+    return { error: 'MISSING', path: currentPath };
+  }
   files.sort(byteCompare);
   return { files };
 }
@@ -58,12 +65,13 @@ export function legacyDigest(repo, oraclePaths) {
 export function manifestDigest(repo, oraclePaths) {
   const paths = (oraclePaths ?? []).map(path => String(path).trim()).filter(Boolean);
   if (paths.length === 0) return { digest: '', empty: true, error: 'empty' };
-  const files = [];
+  const fileSet = new Set();
   for (const path of paths) {
     const listed = listFiles(repo, path);
     if (listed.error) return listed;
-    files.push(...listed.files);
+    for (const file of listed.files) fileSet.add(file);
   }
+  const files = [...fileSet].sort(byteCompare);
   if (files.length === 0) return { digest: '', empty: true, error: 'empty' };
   const rolling = createHash('sha256');
   for (const rel of files) {
@@ -79,6 +87,6 @@ export function manifestDigest(repo, oraclePaths) {
 }
 
 export function digestForSchema(repo, schema, oraclePaths) {
-  if (schema === 'quality-driven-e2e') return manifestDigest(repo, oraclePaths);
+  if (schema === SCHEMA_INTEGRATED) return manifestDigest(repo, oraclePaths);
   return legacyDigest(repo, oraclePaths);
 }

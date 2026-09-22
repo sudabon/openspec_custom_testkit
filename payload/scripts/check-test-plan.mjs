@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { SCHEMA_QE, SCHEMA_E2E } from './lib/critical.mjs';
 import { evaluateChange } from './lib/evaluate.mjs';
 import { toplevel } from './lib/git.mjs';
 import { selectChanges } from './lib/select.mjs';
@@ -29,7 +30,7 @@ for (const change of selected.changes) {
     tags: true,
     env: process.env,
   });
-  if (change.scope === 'out-of-scope' || change.schema === 'quality-driven') {
+  if (change.scope === 'out-of-scope' || change.schema === SCHEMA_QE) {
     console.log(`${change.id}: E2E計画の対象外 (${change.reason})`);
     continue;
   }
@@ -38,7 +39,7 @@ for (const change of selected.changes) {
     failed = 1;
   }
   for (const line of result.oks) console.log(`  ${line}`);
-  if (result.failures.length === 0 && (change.e2e === 'required' || change.schema === 'spec-driven-e2e')) {
+  if (result.failures.length === 0 && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
     console.log(`${change.id}: tag-presence pass（実行 coverage ではありません）`);
   }
 }

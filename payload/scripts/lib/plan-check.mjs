@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED } from './critical.mjs';
 import { asString, splitFrontmatter } from './frontmatter.mjs';
@@ -9,7 +9,16 @@ function walk(dir, out = []) {
   if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     const abs = join(dir, name);
-    const listed = statSync(abs);
+    let listed;
+    try {
+      listed = lstatSync(abs);
+      if (listed.isSymbolicLink()) {
+        if (statSync(abs).isFile()) out.push(abs);
+        continue;
+      }
+    } catch {
+      throw new Error(`ファイルを参照できません: ${abs}`);
+    }
     if (listed.isDirectory()) walk(abs, out);
     else if (listed.isFile()) out.push(abs);
   }
@@ -54,7 +63,7 @@ export function checkTestPlan(repo, change) {
   }
   const planPath = join(repo, change.path, 'test-plan.md');
   if (!existsSync(planPath)) {
-    if (change.schema === SCHEMA_E2E || change.e2e === 'required' || change.e2e === 'unknown') {
+    if ([SCHEMA_E2E, SCHEMA_INTEGRATED].includes(change.schema) || change.scope === 'integrated') {
       errors.push(`${change.id}: test-plan.md がありません`);
     }
     return { errors, notes, requiredTags: [] };
@@ -103,7 +112,12 @@ export function checkTestPlan(repo, change) {
   }
 
   if (change.schema === SCHEMA_INTEGRATED) {
-    const scenarios = change.skipSpecs ? [] : scenariosOf(repo, change.path);
+    let scenarios = [];
+    try {
+      scenarios = change.skipSpecs ? [] : scenariosOf(repo, change.path);
+    } catch (err) {
+      errors.push(err.message);
+    }
     const assigned = new Set([...ids(tp, 'Scenario'), ...delegated.map(row => asString(row.Scenario))]);
     for (const scenario of scenarios) {
       if (!assigned.has(scenario)) errors.push(`${change.id}: シナリオ未割当: ${scenario}`);
@@ -134,7 +148,12 @@ export function checkTagPresence(repo, change, tpIds) {
   const errors = [];
   if (!tpIds.length) return errors;
   const root = join(repo, installedE2eRoot(repo));
-  const files = walk(root).filter(file => statSync(file).isFile());
+  let files;
+  try {
+    files = walk(root);
+  } catch (err) {
+    return [err.message];
+  }
   const corpus = files.map(file => readFileSync(file, 'utf8'));
   if (!corpus.some(text => hasBoundedToken(text, change.id))) {
     errors.push(`${change.id}: @${change.id} が ${installedE2eRoot(repo)} にありません`);

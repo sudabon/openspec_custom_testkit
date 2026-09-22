@@ -647,3 +647,53 @@ test('doctor rejects an incomplete migration and passes after force repair', asy
     repo.cleanup();
   }
 });
+
+test('committed evidence accepts the tested ancestor but rejects subsequent code changes', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    ctx.repo.commit('tested inputs');
+    ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    putEvidence(ctx, ctx.data);
+    ctx.repo.commit('record evidence');
+    assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
+    write(ctx.repo, 'implementation.mjs', 'export const changed = true;');
+    ctx.repo.commit('change implementation');
+    assert.match(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n'), /revision/);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('unchanged Oracle template instructions do not count as reseal history', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    const template = readFileSync(new URL('../payload/openspec/schemas/quality-driven-e2e/templates/evidence.md', import.meta.url), 'utf8');
+    putEvidence(ctx, ctx.data, template.split('## Oracle Changes')[1].split('## 欠落例')[0]);
+    assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
+    ctx.data.risk_results[0].failure_modes = [];
+    putEvidence(ctx, ctx.data);
+    assert.equal(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.filter(line => line.includes('failure_modes')).length, 1);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('CI verifies committed evidence against actual command output and rejects mismatches', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    write(ctx.repo, 'openspec/changes/demo/tasks.md', change().tasksText);
+    ctx.data.runs[0].command = 'printf "{}\\n"';
+    ctx.repo.commit('tested inputs');
+    ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    putEvidence(ctx, ctx.data);
+    ctx.repo.commit('record evidence');
+    const env = { ...process.env, BASE_REF: base, SETUP_MODE: 'caller', GATE_PHASE: 'final', TEST_COMMAND: ctx.data.runs[0].command };
+    const passed = runCiJob(env, { cwd: ctx.repo.dir });
+    assert.equal(passed.code, 0, passed.lines.join('\n'));
+    assert.match(passed.lines.join('\n'), /execution: verified/);
+    const manifest = JSON.parse(readFileSync(join(passed.runDir, 'manifest.json'), 'utf8'));
+    assert.ok(manifest.run_ids.includes('run-1'));
+    assert.equal(manifest.run_ids.includes('demo'), false);
+    const failed = runCiJob({ ...env, TEST_COMMAND: 'printf "different\\n"' }, { cwd: ctx.repo.dir });
+    assert.notEqual(failed.code, 0);
+    assert.match(failed.lines.join('\n'), /CI 実行記録/);
+  } finally { ctx.repo.cleanup(); }
+});

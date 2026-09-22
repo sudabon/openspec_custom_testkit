@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { headRevision, toplevel } from './lib/git.mjs';
 import { buildReport } from './lib/report.mjs';
 import { selectChanges } from './lib/select.mjs';
-import { parseTasks, taskState } from './lib/tasks.mjs';
-import { appendFileSync } from 'node:fs';
+import { SCHEMA_E2E } from './lib/critical.mjs';
+import { executionBlock } from './lib/evidence-check.mjs';
+import { sha256File } from './lib/hash.mjs';
 import { pathToFileURL } from 'node:url';
 
 export function runCiJob(env = process.env, deps = {}) {
@@ -24,11 +25,31 @@ export function runCiJob(env = process.env, deps = {}) {
   try {
     repo = toplevel(cwd);
   } catch (err) {
-    return finish(repoOf(cwd), 2, [`git リポジトリを特定できません: ${err.message}`], null, env);
+    return finish(cwd, 2, [`git リポジトリを特定できません: ${err.message}`], null, env);
   }
   const workRel = env.WORKING_DIRECTORY || '.';
   const work = resolve(repo, workRel);
   if (work !== repo && !work.startsWith(repo + '/')) return finish(repo, 1, ['working-directory がリポジトリの外です'], null, env);
+
+  const selected = selectChanges({ repo, base: env.BASE_REF || 'origin/main', env });
+  if (selected.exitCode === 2) return finish(repo, 2, [selected.error], null, env);
+  const maxAge = env.REPORT_MAX_AGE ? Number(env.REPORT_MAX_AGE) : null;
+  if (maxAge != null && (!Number.isFinite(maxAge) || maxAge < 0)) {
+    return finish(repo, 2, ['report-max-age には 0 以上の秒数を指定してください'], null, env);
+  }
+  if (selected.changes.length === 0) lines.push('計画ゲートは対象なしです。回帰テストと構成済み smoke は省略しません。');
+  const phase = env.GATE_PHASE === 'final' ? 'final' : 'plan';
+  const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
+  const runDir = join(repo, 'test-results/testkit', runId);
+  const executions = [];
+  const record = (name, command, result, source) => {
+    mkdirSync(runDir, { recursive: true });
+    if (!source) {
+      source = join(runDir, `${name}.log`);
+      writeFileSync(source, result.output);
+    }
+    if (existsSync(source)) executions.push({ id: `${runId}-${name}`, command, exit_code: result.code, source_sha256: sha256File(source) });
+  };
 
   const mode = env.SETUP_MODE || 'npm';
   if (mode === 'npm') {
@@ -54,42 +75,23 @@ export function runCiJob(env = process.env, deps = {}) {
     return finish(repo, 1, [`未対応の setup-mode です: ${mode}`], null, env);
   }
 
-  const selected = selectChanges({ repo, base: env.BASE_REF || 'origin/main', env });
-  if (selected.exitCode === 2) {
-    lines.push(selected.error);
-    return finish(repo, 2, lines, null, env);
-  }
-  if (selected.changes.length === 0) lines.push('計画ゲートは対象なしです。回帰テストと構成済み smoke は省略しません。');
-
-  let phase = env.GATE_PHASE === 'final' ? 'final' : 'plan';
-  if (selected.changes.some(change => change.lifecycle === 'archived' || change.lifecycle === 'deleted' || taskState(parseTasks(change.tasksText)).complete)) {
-    phase = 'final';
-  }
-
-  const levels = [];
-  for (const change of selected.changes) {
-    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env });
-    lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
-    for (const failure of result.failures) lines.push(`✗ ${failure}`);
-    if (result.failures.length) code = code || 1;
-    if (result.level !== 'none') levels.push(result.level);
-  }
-  const level = maxLevel(levels);
-  if (phase === 'final' && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
+  const evaluations = selected.changes.map(change => evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env }));
+  const level = maxLevel(evaluations.map(result => result.level));
+  if ((phase === 'final' || evaluations.some(result => result.phase === 'final')) && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
   if (env.TEST_COMMAND) {
     const test = run(execFile, 'bash', ['-c', env.TEST_COMMAND], work, { ...env, E2E_BASE_URL: env.E2E_BASE_URL || '' });
+    record('test', env.TEST_COMMAND, test);
     lines.push(...test.lines);
     if (test.code) code = code || test.code;
   }
   if (level === 'high' && !env.MUTATION_COMMAND) fail(1, 'risk_level=high では mutation-command が必要です');
   if (level === 'high' && env.MUTATION_COMMAND) {
     const mutation = run(execFile, 'bash', ['-c', env.MUTATION_COMMAND], work, env);
+    record('mutation', env.MUTATION_COMMAND, mutation);
     lines.push(...mutation.lines);
     if (mutation.code) code = code || mutation.code;
   }
-  const required = selected.changes.filter(change => change.e2e === 'required' || change.schema === 'spec-driven-e2e');
-  const runId = `${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
-  const runDir = join(repo, 'test-results/testkit', runId);
+  const required = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
   if (required.length && !env.E2E_COMMAND) fail(1, 'E2E required の change がありますが e2e-command がありません');
   if (env.E2E_COMMAND) {
     mkdirSync(runDir, { recursive: true });
@@ -100,24 +102,24 @@ export function runCiJob(env = process.env, deps = {}) {
       TESTKIT_RUN_DIR: runDir,
       TESTKIT_RESULTS_JSON: resultsPath,
     });
+    record('e2e', env.E2E_COMMAND, e2e, resultsPath);
     lines.push(...e2e.lines);
     if (e2e.code) code = code || e2e.code;
-    let revision = '';
+    let results;
+    let resultsError;
     try {
-      revision = headRevision(repo);
-    } catch {
-      revision = '';
+      results = JSON.parse(readFileSync(resultsPath, 'utf8'));
+    } catch (err) {
+      resultsError = err;
     }
-    const runIds = [];
     for (const change of required) {
       if (!existsSync(resultsPath)) {
         fail(2, `${change.id}: 今回の results.json がありません。前回の結果は使いません`);
         continue;
       }
-      let results;
       let plan;
       try {
-        results = JSON.parse(readFileSync(resultsPath, 'utf8'));
+        if (resultsError) throw resultsError;
         plan = readFileSync(join(repo, change.path, 'test-plan.md'), 'utf8');
       } catch (err) {
         fail(2, `${change.id}: レポートを読めません (${err.message})`);
@@ -127,31 +129,49 @@ export function runCiJob(env = process.env, deps = {}) {
         changeId: change.id,
         planText: plan,
         results,
-        maxAge: env.REPORT_MAX_AGE ? Number(env.REPORT_MAX_AGE) : null,
+        maxAge,
       });
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
       lines.push(report.stdout.trimEnd());
       if (report.exitCode) code = code || report.exitCode;
-      runIds.push(change.id);
     }
-    writeFileSync(join(runDir, 'manifest.json'), JSON.stringify({ revision, run_ids: runIds, results: 'results.json' }, null, 2));
   }
-  return finish(repo, code, lines, { riskLevel: level, phase, runDir: env.E2E_COMMAND ? runDir : null }, env);
+  let manifest;
+  if (executions.length) {
+    const matched = [];
+    for (const change of selected.changes) {
+      const evidencePath = join(repo, change.path, 'evidence.md');
+      if (!existsSync(evidencePath)) continue;
+      const data = executionBlock(readFileSync(evidencePath, 'utf8')).data;
+      for (const evidence of Array.isArray(data?.runs) ? data.runs : []) {
+        const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code && run.source_sha256 === evidence.source_sha256);
+        if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });
+      }
+    }
+    manifest = { revision: headRevision(repo), run_ids: [...new Set(matched.map(run => run.id))], runs: matched, executions, results: env.E2E_COMMAND ? 'results.json' : null };
+    writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  }
+  for (const [index, change] of selected.changes.entries()) {
+    const result = evaluations[index].phase === 'final' && manifest
+      ? evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest })
+      : evaluations[index];
+    lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
+    for (const warning of result.warnings) lines.push(`! ${warning}`);
+    for (const failure of result.failures) lines.push(`✗ ${failure}`);
+    if (result.failures.length) code = code || 1;
+  }
+  return finish(repo, code, lines, { riskLevel: level, phase, runDir: executions.length || env.E2E_COMMAND ? runDir : null }, env);
 }
 
 function run(execFile, file, args, cwd, env) {
   try {
     const stdout = execFile(file, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    return { code: 0, lines: stdout ? [String(stdout).trimEnd()] : [] };
+    return { code: 0, output: String(stdout ?? ''), lines: stdout ? [String(stdout).trimEnd()] : [] };
   } catch (err) {
     const stdout = err.stdout?.toString?.() ?? '';
     const stderr = err.stderr?.toString?.() ?? err.message;
-    return { code: err.status || 1, lines: [`${file} ${args.join(' ')} failed`, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
+    return { code: err.status || 1, output: stdout + stderr, lines: [`${file} ${args.join(' ')} failed`, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
   }
-}
-
-function repoOf(cwd) {
-  return cwd;
 }
 
 function finish(repo, code, lines, meta, env) {

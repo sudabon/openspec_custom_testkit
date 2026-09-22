@@ -39,3 +39,7 @@ test('在庫切れ商品は注文できない', { tag: ['@add-checkout', '@TP-00
 ## 禁止事項
 - 失敗を通すためのアサーション緩和・削除は禁止。期待値の変更が必要な場合は
   仕様変更なので、変更せずに人間へエスカレーションする
+
+### CI の結果出力先
+
+`TESTKIT_RESULTS_JSON` が設定された実行では、その絶対パスへ JSON reporter の結果を保存する。同梱 example config はこの変数を使用する。CLI で reporter を上書きする場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` を使う。ローカルの既定パスを CI で固定使用しない。
