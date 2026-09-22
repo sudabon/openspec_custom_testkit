@@ -1,0 +1,25 @@
+{
+  "name": "openspec-quality-kit",
+  "version": "0.1.2",
+  "description": "Bootstrap kit that distributes a Quality Engineering workflow (quality-driven schema, AI Quality Policy, oracle seal gate, independent-verification subagents) into an OpenSpec project.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "openspec-quality-kit": "./install.mjs"
+  },
+  "scripts": {
+    "test": "bash test/selftest.sh"
+  },
+  "files": [
+    "install.mjs",
+    "payload",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sudabon/openspec_quality_kit.git"
+  }
+}

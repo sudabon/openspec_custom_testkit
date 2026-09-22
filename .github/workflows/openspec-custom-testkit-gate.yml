@@ -1,0 +1,100 @@
+name: openspec-custom-testkit-gate
+
+on:
+  workflow_call:
+    inputs:
+      openspec-version:
+        description: OpenSpec CLI の版。初期値は fork 基準 1.13.1
+        type: string
+        default: "1.13.1"
+      node-version:
+        description: Node.js の版
+        type: string
+        default: "22"
+      working-directory:
+        description: npm ci と各 command の作業ディレクトリ。change 検出の git root はリポジトリ最上位
+        type: string
+        default: "."
+      base-ref:
+        description: merge-base に使う ref。shell へ展開せず環境変数で渡す
+        type: string
+        default: origin/main
+      gate-phase:
+        description: plan または final。全タスク完了と archive は plan 指定でも final に上がる
+        type: string
+        default: plan
+      setup-mode:
+        description: npm または caller
+        type: string
+        default: npm
+      setup-command:
+        description: caller mode の準備コマンド。runtime、依存、browser、DB は呼び出し側の責務
+        type: string
+        default: ""
+      test-command:
+        description: Oracle と代替検証を含むテスト。最終検証では空にできない
+        type: string
+        default: ""
+      mutation-command:
+        description: high で必須。閾値未満は非ゼロ終了
+        type: string
+        default: ""
+      e2e-command:
+        description: Playwright JSON を TESTKIT_RESULTS_JSON へ書くコマンド
+        type: string
+        default: ""
+      e2e-base-url:
+        description: 既存サーバーを使うときの URL。webServer を使う場合は Playwright 側の設定
+        type: string
+        default: ""
+      report-max-age:
+        description: 結果 JSON の最大経過秒。空なら鮮度では拒否しない
+        type: string
+        default: ""
+    outputs:
+      risk-level:
+        description: 対象 change の最大 risk_level
+        value: ${{ jobs.gate.outputs.risk-level }}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      risk-level: ${{ steps.job.outputs.risk_level }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Install pinned OpenSpec
+        env:
+          OPENSPEC_VERSION: ${{ inputs.openspec-version }}
+        run: npm install -g "@fission-ai/openspec@${OPENSPEC_VERSION}"
+
+      - name: Integrated gate
+        id: job
+        env:
+          OPENSPEC_VERSION: ${{ inputs.openspec-version }}
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+          BASE_REF: ${{ inputs.base-ref }}
+          GATE_PHASE: ${{ inputs.gate-phase }}
+          SETUP_MODE: ${{ inputs.setup-mode }}
+          SETUP_COMMAND: ${{ inputs.setup-command }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+          MUTATION_COMMAND: ${{ inputs.mutation-command }}
+          E2E_COMMAND: ${{ inputs.e2e-command }}
+          E2E_BASE_URL: ${{ inputs.e2e-base-url }}
+          REPORT_MAX_AGE: ${{ inputs.report-max-age }}
+        run: node scripts/ci-job.mjs
+
+      - name: Save run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testkit-results
+          path: test-results/testkit/
+          if-no-files-found: ignore
