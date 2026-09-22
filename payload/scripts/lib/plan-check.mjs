@@ -1,34 +1,21 @@
-import { existsSync, readFileSync, readdirSync, lstatSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED } from './critical.mjs';
 import { asString, splitFrontmatter } from './frontmatter.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
+import { listFiles } from './files.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
 
-function walk(dir, out = []) {
-  if (!existsSync(dir)) return out;
-  for (const name of readdirSync(dir)) {
-    const abs = join(dir, name);
-    let listed;
-    try {
-      listed = lstatSync(abs);
-      if (listed.isSymbolicLink()) {
-        if (statSync(abs).isFile()) out.push(abs);
-        continue;
-      }
-    } catch {
-      throw new Error(`ファイルを参照できません: ${abs}`);
-    }
-    if (listed.isDirectory()) walk(abs, out);
-    else if (listed.isFile()) out.push(abs);
-  }
-  return out;
+function filesOf(repo, root) {
+  const listed = listFiles(repo, root, { optional: true });
+  if (listed.error) throw new Error(`ファイルを参照できません: ${listed.path} (${listed.code})`);
+  return listed.files.map(path => join(repo, path));
 }
 
 function scenariosOf(repo, dir) {
-  const root = join(repo, dir, 'specs');
+  const root = `${dir}/specs`;
   const found = [];
-  for (const file of walk(root)) {
+  for (const file of filesOf(repo, root)) {
     if (!file.endsWith('.md')) continue;
     const text = readFileSync(file, 'utf8');
     for (const match of text.matchAll(/^#### Scenario:\s*(.+)\s*$/gm)) found.push(match[1].trim());
@@ -63,9 +50,7 @@ export function checkTestPlan(repo, change) {
   }
   const planPath = join(repo, change.path, 'test-plan.md');
   if (!existsSync(planPath)) {
-    if ([SCHEMA_E2E, SCHEMA_INTEGRATED].includes(change.schema) || change.scope === 'integrated') {
-      errors.push(`${change.id}: test-plan.md がありません`);
-    }
+    errors.push(`${change.id}: test-plan.md がありません`);
     return { errors, notes, requiredTags: [] };
   }
   const text = readFileSync(planPath, 'utf8');
@@ -147,14 +132,13 @@ export function checkTestPlan(repo, change) {
 export function checkTagPresence(repo, change, tpIds) {
   const errors = [];
   if (!tpIds.length) return errors;
-  const root = join(repo, installedE2eRoot(repo));
-  let files;
+  const root = installedE2eRoot(repo);
+  let corpus;
   try {
-    files = walk(root);
+    corpus = filesOf(repo, root).map(file => readFileSync(file, 'utf8'));
   } catch (err) {
     return [err.message];
   }
-  const corpus = files.map(file => readFileSync(file, 'utf8'));
   if (!corpus.some(text => hasBoundedToken(text, change.id))) {
     errors.push(`${change.id}: @${change.id} が ${installedE2eRoot(repo)} にありません`);
   }

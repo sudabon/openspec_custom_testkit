@@ -250,12 +250,12 @@ test('evidence separates structure from execution and keeps legacy risk-id check
       tags: false,
       manifest: { revision: '0'.repeat(40), run_ids: ['run-1'] },
     });
-    assert.ok(mismatched.failures.some(line => line.includes('一致しません')));
-    assert.ok(mismatched.warnings.includes('structure: fail'));
+    assert.deepEqual(mismatched.failures, []);
+    assert.ok(mismatched.warnings.includes('execution: unverified'));
 
     putEvidence(ctx, ctx.data, '再sealした');
     const reseal = evaluateChange(ctx.repo.dir, change(), { phase: 'final', tags: false });
-    assert.ok(reseal.failures.some(line => line.includes('再sealの履歴が JSON にありません')));
+    assert.deepEqual(reseal.failures, []);
 
     ctx.data.oracle_changes = [{
       reason: 'expected value changed',
@@ -674,7 +674,7 @@ test('unchanged Oracle template instructions do not count as reseal history', ()
   } finally { ctx.repo.cleanup(); }
 });
 
-test('CI verifies committed evidence against actual command output and rejects mismatches', () => {
+test('CI verifies matching command output and leaves independent reruns unverified', () => {
   const ctx = evidenceRepo('low');
   try {
     const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
@@ -693,7 +693,85 @@ test('CI verifies committed evidence against actual command output and rejects m
     assert.ok(manifest.run_ids.includes('run-1'));
     assert.equal(manifest.run_ids.includes('demo'), false);
     const failed = runCiJob({ ...env, TEST_COMMAND: 'printf "different\\n"' }, { cwd: ctx.repo.dir });
-    assert.notEqual(failed.code, 0);
-    assert.match(failed.lines.join('\n'), /CI 実行記録/);
+    assert.equal(failed.code, 0);
+    assert.match(failed.lines.join('\n'), /execution: unverified/);
+  } finally { ctx.repo.cleanup(); }
+});
+
+
+test('CI reruns a real node test without rejecting nondeterministic timing output', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    write(ctx.repo, 'openspec/changes/demo/tasks.md', change().tasksText);
+    write(ctx.repo, 'runner.test.mjs', "import test from 'node:test'; test('works', () => {});\n");
+    ctx.data.runs[0].command = 'node --test runner.test.mjs';
+    ctx.repo.commit('inputs');
+    ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    putEvidence(ctx, ctx.data);
+    ctx.repo.commit('evidence');
+    const env = { ...process.env, BASE_REF: base, SETUP_MODE: 'caller', GATE_PHASE: 'final', TEST_COMMAND: ctx.data.runs[0].command };
+    delete env.NODE_TEST_CONTEXT; // Child node:test must emit its own real TAP report.
+    const first = runCiJob(env, { cwd: ctx.repo.dir });
+    assert.equal(first.code, 0, first.lines.join('\n'));
+    assert.match(readFileSync(join(first.runDir, 'test.log'), 'utf8'), /duration_ms/);
+    write(ctx.repo, ctx.data.runs[0].source, readFileSync(join(first.runDir, 'test.log')));
+    ctx.data.runs[0].source_sha256 = sha256File(join(ctx.repo.dir, ctx.data.runs[0].source));
+    // Source artifacts are recorded with the evidence, after the tested inputs.
+    putEvidence(ctx, ctx.data);
+    ctx.repo.commit('record actual output');
+    const second = runCiJob(env, { cwd: ctx.repo.dir });
+    assert.equal(second.code, 0, second.lines.join('\n'));
+    assert.match(second.lines.join('\n'), /execution: unverified/);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('manifest coverage is separate from structure errors and requires full run records', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    putEvidence(ctx, ctx.data);
+    const manifest = { revision: ctx.revision, run_ids: ['run-1'], runs: [{ ...ctx.data.runs[0], change_id: 'demo' }] };
+    const evaluate = value => evaluateChange(ctx.repo.dir, change(), { phase: 'final', manifest: value });
+    assert.ok(evaluate(manifest).warnings.includes('execution: verified'));
+    assert.ok(evaluate({ revision: ctx.revision, run_ids: ['run-1'] }).warnings.includes('execution: unverified'));
+    for (const field of ['command', 'exit_code', 'source_sha256', 'change_id']) {
+      const mismatch = structuredClone(manifest);
+      mismatch.runs[0][field] = 'different';
+      const result = evaluate(mismatch);
+      assert.deepEqual(result.failures, []);
+      assert.ok(result.warnings.includes('execution: unverified'));
+    }
+    ctx.data.falsification.performed = false;
+    putEvidence(ctx, ctx.data);
+    assert.deepEqual(evaluate(manifest).failures, ['独立反証の実施記録がありません']);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('revision validation accepts multiple evidence files and unrelated merge documentation', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    ctx.repo.commit('inputs');
+    ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    ctx.repo.git(['checkout', '-b', 'base-docs']);
+    write(ctx.repo, 'docs/unrelated.md', 'base documentation');
+    ctx.repo.commit('base changes');
+    ctx.repo.git(['checkout', 'main']);
+    putEvidence(ctx, ctx.data);
+    write(ctx.repo, 'openspec/changes/other/evidence.md', '# Other evidence');
+    ctx.repo.commit('two evidence records');
+    ctx.repo.git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'merge', '--no-ff', 'base-docs', '-m', 'PR merge']);
+    assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
+    write(ctx.repo, 'openspec/changes/demo/test-plan.md', readFileSync(join(ctx.repo.dir, 'openspec/changes/demo/test-plan.md'), 'utf8') + '\nchanged inputs');
+    ctx.repo.commit('change plan');
+    assert.match(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n'), /revision/);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('ordinary Oracle prose is not treated as structured reseal history', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    putEvidence(ctx, ctx.data, 'Oracle の変更理由はありません');
+    assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
   } finally { ctx.repo.cleanup(); }
 });

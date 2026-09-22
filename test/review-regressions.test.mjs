@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { normalizeE2eRoot } from '../lib/cli.mjs';
 import { manifestDigest } from '../payload/scripts/lib/digest.mjs';
-import { setFrontmatterScalar } from '../payload/scripts/lib/frontmatter.mjs';
+import { setFrontmatterScalar, splitFrontmatter } from '../payload/scripts/lib/frontmatter.mjs';
 import { checkTagPresence, checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
 import { plannedIds, buildReport } from '../payload/scripts/lib/report.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
@@ -128,4 +128,64 @@ test('shipped Playwright example writes JSON to the CI-provided output path', as
     const report = buildReport({ changeId: 'demo', planText: 'TP-001', results: JSON.parse(readFileSync(output, 'utf8')) });
     assert.equal(report.exitCode, 0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('seal replaces only the scalar with mixed and CR-only line endings', () => {
+  for (const text of ['---\noracle_digest: ""\n---\nbody\r\nmore\n', '---\roracle_digest: ""\r---\rbody\r']) {
+    const sealed = setFrontmatterScalar(text, 'oracle_digest', 'hash');
+    assert.equal(sealed, text.replace('oracle_digest: ""', 'oracle_digest: "hash"'));
+    assert.equal(splitFrontmatter(sealed).data.oracle_digest, 'hash');
+  }
+});
+
+test('linked directories retain E2E tags, scenarios and Oracle contents without recursion loops', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'shared/a.spec.ts', 'test("@demo @TP-001", () => {});');
+    write(repo, 'shared/spec.md', '#### Scenario: linked scenario\n');
+    mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
+    symlinkSync('../../shared', join(repo.dir, 'tests/e2e/linked'));
+    symlinkSync('.', join(repo.dir, 'shared/cycle'));
+    assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']), []);
+    assert.deepEqual(manifestDigest(repo.dir, ['tests/e2e']).files, ['tests/e2e/linked/a.spec.ts', 'tests/e2e/linked/spec.md']);
+    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
+    symlinkSync('../../../shared', join(repo.dir, 'openspec/changes/demo/specs'));
+    const plan = checkTestPlan(repo.dir, { id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', e2e: 'required' });
+    assert.ok(plan.errors.some(line => line.includes('シナリオ未割当: linked scenario')));
+  } finally { repo.cleanup(); }
+});
+
+test('unreadable Oracle files and directories report their exact path and error code', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'oracle/first', 'ok');
+    write(repo, 'oracle/locked/file', 'secret');
+    for (const path of ['oracle/locked', 'oracle/locked/file']) {
+      chmodSync(join(repo.dir, path), 0);
+      try {
+        const result = manifestDigest(repo.dir, ['oracle']);
+        assert.equal(result.error, 'UNREADABLE');
+        assert.equal(result.path, path);
+        assert.equal(result.code, 'EACCES');
+      } finally { chmodSync(join(repo.dir, path), 0o755); }
+    }
+    symlinkSync('loop', join(repo.dir, 'oracle/loop'));
+    const loop = manifestDigest(repo.dir, ['oracle']);
+    assert.equal(loop.error, 'UNREADABLE');
+    assert.equal(loop.path, 'oracle/loop');
+    assert.equal(loop.code, 'ELOOP');
+  } finally { repo.cleanup(); }
+});
+
+test('CI preserves summaries and outputs when HEAD disappears during a command', () => {
+  const repo = gitRepo();
+  try {
+    const output = join(repo.dir, 'github-output');
+    const result = runCiJob({ ...process.env, BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'git symbolic-ref HEAD refs/heads/unborn', GITHUB_OUTPUT: output }, { cwd: repo.dir });
+    assert.equal(result.code, 2);
+    assert.match(result.lines.join('\n'), /revision/);
+    assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+    assert.ok(readFileSync(join(result.summaryDir, 'summary.txt'), 'utf8').includes('revision'));
+  } finally { repo.cleanup(); }
 });

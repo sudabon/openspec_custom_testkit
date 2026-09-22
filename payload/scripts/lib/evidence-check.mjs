@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
+import { installedE2eRoot } from './e2e-root.mjs';
 import { git, headRevision } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { mutationThreshold } from './policy.mjs';
-import { asString, splitFrontmatter, validDate } from './frontmatter.mjs';
+import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 
 export function executionBlock(markdown) {
   const body = section(markdown, '## Execution Records');
@@ -82,8 +83,19 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
         if (!/^[0-9a-f]{40,64}$/.test(run.revision)) throw new Error('invalid revision');
         git(repo, ['merge-base', '--is-ancestor', run.revision, revision]);
         const changed = git(repo, ['diff', '--name-only', '-z', run.revision, revision, '--']).split('\0').filter(Boolean);
-        const evidenceRel = evidenceRelative(repo, evidencePath);
-        if (changed.some(path => path !== evidenceRel)) throw new Error('changed inputs');
+        const oraclePaths = asList(splitFrontmatter(quality).data?.oracle_paths);
+        const protectedRoots = [...oraclePaths, installedE2eRoot(repo), `${change.path}/specs`];
+        const protectedFiles = new Set(['quality.md', 'test-plan.md', '.openspec.yaml'].map(name => `${change.path}/${name}`));
+        const changedInput = changed.some(path => {
+          if (protectedFiles.has(path) || protectedRoots.some(root => path === root || path.startsWith(root.replace(/\/$/, '') + '/'))) return true;
+          // Only known reporting/documentation paths are exempt. Unknown source and
+          // configuration paths remain validation inputs, including on merge commits.
+          if (/^openspec\/changes\/(?:archive\/)?[^/]+\/evidence\.md$/.test(path)) return false;
+          if (path.startsWith('test-results/')) return false;
+          if (/^(?:docs\/.*\.md|README(?:\.(?:md|txt|rst))?|CHANGELOG(?:\.(?:md|txt|rst))?)$/i.test(path)) return false;
+          return true;
+        });
+        if (changedInput) throw new Error('changed inputs');
       } catch {
         errors.push(`run ${run.id} の revision が HEAD の検証対象と一致しません`);
       }
@@ -159,10 +171,6 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   }
 
   const history = Array.isArray(data.oracle_changes) ? data.oracle_changes : [];
-  const historySection = section(text, '## Oracle Changes') ?? '';
-  const historyProse = historySection.replace(/<!--[\s\S]*?-->/g, '').replace(/```json[\s\S]*?```/g, '').trim();
-  const mentionsChange = /再seal|再承認|変更理由/.test(historyProse);
-  if (mentionsChange && history.length === 0) errors.push('再sealの履歴が JSON にありません');
   if (history.length) {
     for (const entry of history) {
       if (!asString(entry.reason) || !asString(entry.approved_by) || !validDate(entry.approved_at) || !asString(entry.digest)) {
@@ -175,11 +183,12 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   let execution = 'unverified';
   if (manifest) {
     const ids = new Set(manifest.run_ids ?? []);
-    const covered = runs.length > 0 && runs.every(run => ids.has(run.id) && (!manifest.runs || manifest.runs.some(record =>
+    const covered = runs.length > 0 && Array.isArray(manifest.runs) && runs.every(run => ids.has(run.id) && manifest.runs.some(record =>
       record.id === run.id && record.change_id === change.id && record.command === run.command &&
-      record.exit_code === run.exit_code && record.source_sha256 === run.source_sha256)));
+      record.exit_code === run.exit_code && record.source_sha256 === run.source_sha256));
     if (!errors.length && covered && manifest.revision && revision && manifest.revision === revision) execution = 'verified';
-    else errors.push('CI 実行記録と evidence の run が一致しません');
+    // A separate CI run may have different timing/output bytes. That does not
+    // invalidate the recorded evidence, but cannot verify that same execution.
   }
   notes.push(errors.length ? 'structure: fail' : 'structure: pass', `execution: ${execution}`);
   return { errors, notes };

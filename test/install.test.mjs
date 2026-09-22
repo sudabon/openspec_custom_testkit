@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main } from '../lib/cli.mjs';
+import { main, transformBytes } from '../lib/cli.mjs';
 import { mergeConfig } from '../lib/config-merge.mjs';
 import { capture } from './support.mjs';
 
@@ -268,4 +268,13 @@ test('payload claude files are not gitignored', () => {
   );
   const rootClaude = execFileSync('git', ['check-ignore', '--', '.claude/settings.json'], { cwd: repo, encoding: 'utf8' }).trim();
   assert.equal(rootClaude, '.claude/settings.json');
+});
+
+
+test('legacy transform option preserves non-transformable paths and remaps E2E files', () => {
+  const bytes = Buffer.from('tests/e2e');
+  for (let i = 0; i < 2; i++) {
+    assert.equal(transformBytes('openspec/quality-policy.md', bytes, 'custom/e2e', { legacy: true }).toString(), 'tests/e2e');
+    assert.equal(transformBytes('playwright.config.example.ts', bytes, 'custom/e2e', { legacy: true }).toString(), 'custom/e2e');
+  }
 });

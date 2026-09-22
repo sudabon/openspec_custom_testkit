@@ -183,7 +183,11 @@ FIXTURE-DUMMY-APPROVAL は人間の承認ではありません。
     pendingPlan: false,
     tasksText: readFileSync(join(repo.dir, 'openspec/changes/smoke-counter/tasks.md'), 'utf8'),
   };
-  const manifest = { revision: repo.git(['rev-parse', 'HEAD']).trim(), run_ids: ['run-smoke'] };
+  const manifest = {
+    revision: repo.git(['rev-parse', 'HEAD']).trim(),
+    run_ids: ['run-smoke'],
+    runs: [{ id: 'run-smoke', change_id: 'smoke-counter', command: 'playwright test', exit_code: browser.code, source_sha256: sha256File(join(repo.dir, source)) }],
+  };
   const happy = evaluateChange(repo.dir, change, { phase: 'final', tags: false, manifest });
   if (happy.failures.length) {
     console.error(happy.failures.join('\n'));
@@ -191,6 +195,14 @@ FIXTURE-DUMMY-APPROVAL は人間の承認ではありません。
   }
   if (!happy.warnings.some(line => line.includes('structure: pass')) || !happy.warnings.some(line => line.includes('execution: verified'))) {
     console.error(happy.warnings.join('\n'));
+    process.exit(1);
+  }
+
+  const mismatched = structuredClone(manifest);
+  mismatched.runs[0].source_sha256 = '0'.repeat(64);
+  const unverified = evaluateChange(repo.dir, change, { phase: 'final', tags: false, manifest: mismatched });
+  if (unverified.failures.length || !unverified.warnings.includes('execution: unverified')) {
+    console.error('異なる実行出力を verified として扱いました');
     process.exit(1);
   }
 

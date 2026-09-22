@@ -39,33 +39,31 @@ export function parseYamlText(text) {
 
 export function splitFrontmatter(text) {
   const source = String(text);
-  if (!source.startsWith('---\n') && !source.startsWith('---\r\n')) {
-    return { has: false, data: {}, body: source, raw: '', error: null };
-  }
-  const end = source.search(/\r?\n---\s*(?:\r?\n|$)/);
-  if (end === -1) return { has: true, data: null, body: source, raw: '', error: 'frontmatter が閉じていません' };
-  const raw = source.slice(source.indexOf('\n') + 1, end);
-  const parsed = parseYamlText(raw);
+  const opening = source.match(/^---(?:\r\n|\n|\r)/);
+  if (!opening) return { has: false, data: {}, body: source, raw: '', error: null };
+  const closing = /(?:\r\n|\n|\r)---[ \t]*(?:(?:\r\n|\n|\r)|$)/.exec(source.slice(3));
+  if (!closing) return { has: true, data: null, body: source, raw: '', error: 'frontmatter が閉じていません' };
+  const end = 3 + closing.index;
+  const raw = source.slice(opening[0].length, end);
+  const body = source.slice(end + closing[0].length);
+  const parsed = parseYamlText(raw.replace(/\r\n|\r/g, '\n'));
   if (parsed.errors.length || parsed.alias || parsed.tagged) {
     return {
       has: true,
       data: null,
-      body: source.slice(end).replace(/^\r?\n---\s*/, ''),
+      body,
       raw,
       error: parsed.errors[0] || (parsed.alias ? 'alias は使えません' : '未対応の tag です'),
     };
   }
-  const fence = source.slice(end).match(/^\r?\n---\s*/);
-  const body = source.slice(end + (fence ? fence[0].length : 0));
   return { has: true, data: parsed.data ?? {}, body, raw, error: null };
 }
 
 export function setFrontmatterScalar(text, key, value) {
-  const newline = String(text).includes('\r\n') ? '\r\n' : '\n';
-  const lines = String(text).split(/\r?\n/);
+  const lines = String(text).split(/(\r\n|\n|\r)/);
   let inFrontmatter = false;
   let found = false;
-  for (let i = 0; i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i += 2) {
     if (i === 0 && lines[i] === '---') {
       inFrontmatter = true;
       continue;
@@ -78,7 +76,7 @@ export function setFrontmatterScalar(text, key, value) {
     }
   }
   if (!found) throw new Error(`frontmatter に ${key} がありません`);
-  return lines.join(newline);
+  return lines.join('');
 }
 
 export function asString(value) {

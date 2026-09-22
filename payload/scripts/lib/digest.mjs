@@ -1,50 +1,9 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { fileError, listFiles } from './files.mjs';
 import { join } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { byteCompare, sha256 } from './hash.mjs';
-
-function listFiles(repo, oraclePath) {
-  const rel = String(oraclePath).replace(/\\/g, '/').replace(/\/+$/, '');
-  const abs = join(repo, rel);
-  let rootStat;
-  try {
-    rootStat = lstatSync(abs);
-  } catch {
-    return { error: 'MISSING', path: rel };
-  }
-  let currentPath = rel;
-  const files = [];
-  const addFile = fileRel => {
-    files.push(fileRel.split('\\').join('/'));
-  };
-  const walk = (dirAbs, dirRel) => {
-    for (const name of readdirSync(dirAbs)) {
-      const childAbs = join(dirAbs, name);
-      const childRel = `${dirRel}/${name}`;
-      currentPath = childRel;
-      const listed = lstatSync(childAbs);
-      if (listed.isSymbolicLink()) {
-        if (statSync(childAbs).isFile()) addFile(childRel);
-        continue;
-      }
-      if (listed.isDirectory()) walk(childAbs, childRel);
-      else if (listed.isFile()) addFile(childRel);
-    }
-  };
-  try {
-    if (rootStat.isSymbolicLink()) {
-      if (!statSync(abs).isFile()) return { error: 'MISSING', path: rel };
-      addFile(rel);
-    } else if (rootStat.isDirectory()) walk(abs, rel);
-    else if (rootStat.isFile()) addFile(rel);
-    else return { error: 'MISSING', path: rel };
-  } catch {
-    return { error: 'MISSING', path: currentPath };
-  }
-  files.sort(byteCompare);
-  return { files };
-}
 
 export function legacyDigest(repo, oraclePaths) {
   const paths = (oraclePaths ?? []).map(path => String(path).trim()).filter(Boolean);
@@ -58,7 +17,10 @@ export function legacyDigest(repo, oraclePaths) {
   files.sort(byteCompare);
   if (files.length === 0) return { digest: '', empty: true };
   let body = '';
-  for (const rel of files) body += `${sha256(readFileSync(join(repo, rel)))}  ${rel}\n`;
+  for (const rel of files) {
+    try { body += `${sha256(readFileSync(join(repo, rel)))}  ${rel}\n`; }
+    catch (error) { return fileError(error, rel); }
+  }
   return { digest: `sha256:${sha256(body)}`, files };
 }
 
@@ -78,7 +40,9 @@ export function manifestDigest(repo, oraclePaths) {
     const pathBytes = Buffer.from(rel, 'utf8');
     const length = Buffer.alloc(4);
     length.writeUInt32BE(pathBytes.length);
-    const contentHash = createHash('sha256').update(readFileSync(join(repo, rel))).digest();
+    let contentHash;
+    try { contentHash = createHash('sha256').update(readFileSync(join(repo, rel))).digest(); }
+    catch (error) { return fileError(error, rel); }
     rolling.update(length);
     rolling.update(pathBytes);
     rolling.update(contentHash);

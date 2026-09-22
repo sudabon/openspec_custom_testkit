@@ -87,6 +87,8 @@ export function evaluateChange(repo, change, options = {}) {
         if (digest.error === 'MISSING') {
           if ((required && enforceSeal) || recorded) failures.push(`oracle_paths が存在しません: ${digest.path}`);
           else warnings.push(`Oracle未作成: ${digest.path}`);
+        } else if (digest.error === 'UNREADABLE') {
+          failures.push(`oracle_paths を読み取れません: ${digest.path} (${digest.code})`);
         } else if (digest.empty || digest.error === 'empty') {
           if ((required && enforceSeal) || recorded) failures.push('空の Oracle 集合は seal できません');
           else warnings.push('Oracle が空です');

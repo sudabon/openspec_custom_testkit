@@ -3,13 +3,15 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
+import { effectivePhase, evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { headRevision, toplevel } from './lib/git.mjs';
 import { buildReport } from './lib/report.mjs';
 import { selectChanges } from './lib/select.mjs';
 import { SCHEMA_E2E } from './lib/critical.mjs';
 import { executionBlock } from './lib/evidence-check.mjs';
 import { sha256File } from './lib/hash.mjs';
+import { asString, splitFrontmatter } from './lib/frontmatter.mjs';
+import { parseTasks, taskState } from './lib/tasks.mjs';
 import { pathToFileURL } from 'node:url';
 
 export function runCiJob(env = process.env, deps = {}) {
@@ -75,9 +77,12 @@ export function runCiJob(env = process.env, deps = {}) {
     return finish(repo, 1, [`未対応の setup-mode です: ${mode}`], null, env);
   }
 
-  const evaluations = selected.changes.map(change => evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env }));
-  const level = maxLevel(evaluations.map(result => result.level));
-  if ((phase === 'final' || evaluations.some(result => result.phase === 'final')) && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
+  const level = maxLevel(selected.changes.map(change => {
+    const path = join(repo, change.path, 'quality.md');
+    return existsSync(path) ? asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level) : 'none';
+  }));
+  const hasFinal = selected.changes.some(change => effectivePhase(phase, change, taskState(parseTasks(change.tasksText))) === 'final');
+  if ((phase === 'final' || hasFinal) && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
   if (env.TEST_COMMAND) {
     const test = run(execFile, 'bash', ['-c', env.TEST_COMMAND], work, { ...env, E2E_BASE_URL: env.E2E_BASE_URL || '' });
     record('test', env.TEST_COMMAND, test);
@@ -148,13 +153,15 @@ export function runCiJob(env = process.env, deps = {}) {
         if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });
       }
     }
-    manifest = { revision: headRevision(repo), run_ids: [...new Set(matched.map(run => run.id))], runs: matched, executions, results: env.E2E_COMMAND ? 'results.json' : null };
-    writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    try {
+      manifest = { revision: headRevision(repo), run_ids: [...new Set(matched.map(run => run.id))], runs: matched, executions };
+      writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    } catch (err) {
+      fail(2, `CI の revision・実行記録を保存できません: ${err.message}`);
+    }
   }
-  for (const [index, change] of selected.changes.entries()) {
-    const result = evaluations[index].phase === 'final' && manifest
-      ? evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest })
-      : evaluations[index];
+  for (const change of selected.changes) {
+    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest });
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);

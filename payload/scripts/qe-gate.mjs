@@ -87,6 +87,10 @@ function commandDigest(id) {
   const selected = selectChanges({ repo, names: [id], env: process.env });
   const schema = selected.changes[0]?.schema === SCHEMA_INTEGRATED ? SCHEMA_INTEGRATED : SCHEMA_QE;
   const digest = digestForSchema(repo, schema, asList(frontmatter.data.oracle_paths));
+  if (digest.error === 'UNREADABLE') {
+    console.error(`Oracle を読み取れません: ${digest.path} (${digest.code})`);
+    return 1;
+  }
   if (digest.error === 'MISSING') console.log(`MISSING:${digest.path}`);
   else console.log(digest.digest ?? '');
   return 0;
@@ -120,7 +124,9 @@ function commandSeal(id) {
   }
   const digest = digestForSchema(repo, integrated ? SCHEMA_INTEGRATED : SCHEMA_QE, asList(frontmatter.data.oracle_paths));
   if (!digest.digest || digest.empty || digest.error) {
-    console.error(`Oracle テストが見つかりません: ${digest.path ?? '(空)'}`);
+    console.error(digest.error === 'UNREADABLE'
+      ? `Oracle を読み取れません: ${digest.path} (${digest.code})`
+      : `Oracle テストが見つかりません: ${digest.path ?? '(空)'}`);
     return 1;
   }
   writeFileSync(file, setFrontmatterScalar(text, 'oracle_digest', digest.digest));
