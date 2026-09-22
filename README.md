@@ -1,0 +1,2 @@
+# openspec_custom_testkit
+openspecと連携したe2eテストとQuality Engineeringを実現するワークフロー
