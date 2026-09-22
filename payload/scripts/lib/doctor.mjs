@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { isCritical, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
-import { readJsonIfExists } from './e2e-root.mjs';
+import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 import { policyIssues } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
@@ -23,6 +23,11 @@ export function doctor(repo, options = {}) {
       const abs = join(repo, rel);
       if (!existsSync(abs)) failures.push(`必須ファイルがありません: ${rel}`);
       else if (sha256File(abs) !== expected) failures.push(`必須ファイルが導入内容と違います: ${rel}`);
+    }
+    try {
+      installedE2eRoot(repo);
+    } catch (err) {
+      failures.push(err.message);
     }
   }
   const policyPath = join(repo, 'openspec/quality-policy.md');

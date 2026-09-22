@@ -22,6 +22,7 @@ if (selected.changes.length === 0 && selected.ok) {
   process.exit(0);
 }
 let failed = selected.ok ? 0 : 1;
+const cache = {};
 for (const change of selected.changes) {
   const result = evaluateChange(repo, change, {
     phase: 'plan',
@@ -29,6 +30,7 @@ for (const change of selected.changes) {
     plan: true,
     tags: true,
     env: process.env,
+    cache,
   });
   if (change.scope === 'out-of-scope' || change.schema === SCHEMA_QE) {
     console.log(`${change.id}: E2E計画の対象外 (${change.reason})`);

@@ -54,7 +54,7 @@
 
 `revision` は検証対象のコミット SHA です。コード・テスト・Oracle・計画をコミットしてから確定します。その後の各 change の evidence.md、test-results/、通常の docs/*.md・README・CHANGELOG の更新は許容します（Oracle や E2E ルートに指定した文書は検証対象です）。検証対象が変わった場合は再実行します。
 
-CI と記録済み run のコマンド・終了コード・出力ハッシュが一致した場合だけ `execution: verified` になります。別実行の時刻や所要時間で出力が変わる場合は `unverified` であり、それだけではゲートは失敗しません。
+CI が同じ `command` を実行して同じ `exit_code` を得た run を再現済みとし、全 run を再現できた場合だけ `execution: verified` になります。出力は時刻や所要時間で実行ごとに変わるため、出力ハッシュは照合に使いません（`source` はコミット済みファイルと `source_sha256` の一致を検査します）。再現できない run があると `unverified` ですが、それだけではゲートは失敗しません。
 
 `result` は実行後に `pass` または `fail` だけを書きます。空のままは未実行です。
 

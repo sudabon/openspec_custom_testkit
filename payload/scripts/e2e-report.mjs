@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { toplevel } from './lib/git.mjs';
 import { buildReport, parseReporterArgs } from './lib/report.mjs';
+import { resolveNamed } from './lib/select.mjs';
 
 const USAGE = `usage: e2e-report.mjs <change-id> [results.json] [--max-age <seconds>]
 
@@ -16,7 +18,18 @@ if (parsed.error || !parsed.changeId) {
   console.error(parsed.error || USAGE);
   process.exit(2);
 }
-const planPath = join(process.cwd(), 'openspec/changes', parsed.changeId, 'test-plan.md');
+let repo;
+try {
+  repo = toplevel(process.cwd());
+} catch {
+  repo = process.cwd();
+}
+const change = resolveNamed(repo, parsed.changeId);
+if (!change) {
+  console.error(`change が存在しません: ${parsed.changeId}`);
+  process.exit(2);
+}
+const planPath = join(repo, change.dir, 'test-plan.md');
 let planText;
 let raw;
 try {
@@ -38,7 +51,7 @@ try {
   console.error('Playwright JSON が不正です');
   process.exit(2);
 }
-const report = buildReport({ changeId: parsed.changeId, planText, results, maxAge: parsed.maxAge });
+const report = buildReport({ changeId: change.id, planText, results, maxAge: parsed.maxAge });
 if (report.stderr) console.error(report.stderr.trimEnd());
 if (report.stdout) process.stdout.write(report.stdout);
 process.exit(report.exitCode);

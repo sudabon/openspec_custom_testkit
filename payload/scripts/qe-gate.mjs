@@ -6,7 +6,7 @@ import { digestForSchema } from './lib/digest.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { asList, asString, setFrontmatterScalar, splitFrontmatter, validDate } from './lib/frontmatter.mjs';
 import { toplevel } from './lib/git.mjs';
-import { selectChanges } from './lib/select.mjs';
+import { isChangeName, selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: qe-gate.mjs seal <change>
        qe-gate.mjs digest <change>
@@ -137,6 +137,7 @@ function commandSeal(id) {
 const [command, ...rest] = process.argv.slice(2);
 let code = 2;
 if (command === 'check') code = commandCheck(rest);
+else if ((command === 'digest' || command === 'seal') && rest[0] && !isChangeName(rest[0])) console.error(`change 名が不正です: ${rest[0]}`);
 else if (command === 'digest') code = rest[0] ? commandDigest(rest[0]) : (console.error(USAGE), 2);
 else if (command === 'seal') code = rest[0] ? commandSeal(rest[0]) : (console.error(USAGE), 2);
 else console.error(USAGE);

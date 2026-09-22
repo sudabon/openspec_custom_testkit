@@ -94,4 +94,4 @@ with:
 
 `revision` は検証したコミットの SHA を記録する。その後、その change の `evidence.md` だけをコミットしても final ゲートは受理する。実装、Oracle、計画、取得元ファイルなどが変わった場合は再検証する。結果ファイルも先に保存・コミットしてから revision を確定する。
 
-CI は `test-command` / `mutation-command` の標準出力（失敗時は標準エラーも含む）と E2E の JSON を実行ごとのディレクトリに保存する。`manifest.json` の `run_ids` は、コマンド・終了コード・出力 SHA-256 が実行結果と一致した evidence の `runs[].id` である。change ID は `runs[].change_id` に分離する。final ではこの manifest を evidence と照合する。時刻などで出力が変わるコマンドは、その CI 実行の結果で evidence の source と hash を更新するラッパーを使う。別実行の結果を同じものとして扱わない。manifest のないローカル検査は `execution: unverified` のままである。
+CI は `test-command` / `mutation-command` の標準出力（失敗時は標準エラーも含む）と E2E の JSON を実行ごとのディレクトリに保存する。各コマンドの出力は標準出力・標準エラーそれぞれ 64 MiB までで、超えた場合は終了コードを判定できないため exit 2 で失敗する。`manifest.json` の `run_ids` は、CI が同じコマンドを実行して同じ終了コードを得た evidence の `runs[].id` である。change ID は `runs[].change_id` に分離する。出力は時刻や所要時間で実行ごとに変わるため、出力のハッシュは照合に使わない。evidence の `source` は、コミット済みファイルと `source_sha256` の一致を構造検査で確認する。final ではこの manifest を evidence と照合し、全 run を再現できた change だけを `execution: verified` と表示する。再現できない run があっても、それだけではゲートは失敗しない。manifest のないローカル検査は `execution: unverified` のままである。

@@ -1,25 +1,252 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { normalizeE2eRoot } from '../lib/cli.mjs';
-import { manifestDigest } from '../payload/scripts/lib/digest.mjs';
+import { fileURLToPath } from 'node:url';
+import { main, normalizeE2eRoot } from '../lib/cli.mjs';
+import { legacyDigest, manifestDigest } from '../payload/scripts/lib/digest.mjs';
+import { doctor } from '../payload/scripts/lib/doctor.mjs';
+import { installedE2eRoot } from '../payload/scripts/lib/e2e-root.mjs';
 import { setFrontmatterScalar, splitFrontmatter } from '../payload/scripts/lib/frontmatter.mjs';
-import { checkTagPresence, checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
+import { checkTagPresence, checkTestPlan, tpRows } from '../payload/scripts/lib/plan-check.mjs';
 import { plannedIds, buildReport } from '../payload/scripts/lib/report.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { gitRepo } from './support.mjs';
+import { capture, gitRepo } from './support.mjs';
 
 function write(repo, path, text) {
   mkdirSync(join(repo.dir, path, '..'), { recursive: true });
   writeFileSync(join(repo.dir, path), text);
 }
 
+const script = rel => fileURLToPath(new URL(`../payload/scripts/${rel}`, import.meta.url));
+
 test('E2E root normalization handles whitespace and repeated separators without allowing escape', () => {
   assert.equal(normalizeE2eRoot(' ./x/ '), 'x');
   assert.equal(normalizeE2eRoot('a//b'), 'a/b');
-  for (const path of ['//server/share', ' /tmp/x ', 'x/../y']) assert.throws(() => normalizeE2eRoot(path));
+  assert.equal(normalizeE2eRoot('a/./b/.'), 'a/b');
+  for (const path of ['//server/share', ' /tmp/x ', 'x/../y', '.', './.', ' ./ ']) assert.throws(() => normalizeE2eRoot(path));
+});
+
+test('installer refuses the repository root as the E2E root', async () => {
+  const repo = gitRepo();
+  try {
+    await assert.rejects(main(['install', '--dry-run', '--target', repo.dir, '--e2e-root', '.']), /リポジトリ直下/);
+  } finally { repo.cleanup(); }
+});
+
+test('gates re-validate the E2E root read back from current and legacy stamps', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/a.spec.ts', 'test("@demo @TP-001", () => {});');
+    write(repo, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: './tests/e2e/' }));
+    assert.equal(installedE2eRoot(repo.dir), 'tests/e2e');
+    assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']), []);
+    for (const [file, e2eRoot] of [['.openspec-custom-testkit.json', '../../elsewhere'], ['.openspec-custom-testkit.json', '.'], ['.openspec-e2e-kit.json', '/etc']]) {
+      rmSync(join(repo.dir, '.openspec-custom-testkit.json'), { force: true });
+      write(repo, file, JSON.stringify({ e2eRoot }));
+      assert.throws(() => installedE2eRoot(repo.dir), error => error.code === 'BROKEN_STAMP' && error.message.includes(file));
+      assert.match(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']).join('\n'), /e2eRoot が不正です/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('an invalid recorded E2E root blocks doctor and install until --e2e-root rewrites the stamp', async () => {
+  const repo = gitRepo();
+  const legacyOnly = gitRepo();
+  try {
+    write(repo, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: '.' }));
+    assert.match(doctor(repo.dir).failures.join('\n'), /\.openspec-custom-testkit\.json の e2eRoot が不正です/);
+    const blocked = await capture(main, ['install', '--dry-run', '--target', repo.dir]);
+    assert.equal(blocked.code, 1, blocked.text);
+    assert.match(blocked.text, /\.openspec-custom-testkit\.json の e2eRoot が不正です/);
+    const repaired = await capture(main, ['install', '--force', '--target', repo.dir, '--e2e-root', 'tests/e2e']);
+    assert.equal(repaired.code, 0, repaired.text);
+    assert.match(repaired.text, /不正なため使いません/);
+    assert.equal(installedE2eRoot(repo.dir), 'tests/e2e');
+
+    write(legacyOnly, '.openspec-e2e-kit.json', JSON.stringify({ version: '0.2.0', e2eRoot: '/abs/e2e' }));
+    assert.equal((await capture(main, ['install', '--dry-run', '--target', legacyOnly.dir])).code, 1);
+    const legacy = await capture(main, ['install', '--dry-run', '--target', legacyOnly.dir, '--e2e-root', 'e2e']);
+    assert.equal(legacy.code, 0, legacy.text);
+    assert.match(legacy.text, /\.openspec-e2e-kit\.json の e2eRoot は不正なため使いません/);
+  } finally {
+    repo.cleanup();
+    legacyOnly.cleanup();
+  }
+});
+
+test('testkit-gate rejects --base and --phase without a value instead of scanning every change', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/unrelated/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    for (const args of [['check', '--phase', 'final', '--base'], ['check', '--base', ''], ['check', '--phase'], ['select', '--base']]) {
+      const result = spawnSync(process.execPath, [script('testkit-gate.mjs'), ...args], { cwd: repo.dir, encoding: 'utf8' });
+      assert.equal(result.status, 2, args.join(' '));
+      assert.match(result.stderr, /--(base|phase) には/);
+      assert.doesNotMatch(result.stdout, /unrelated/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('CI keeps large passing output and reports an output overflow as undecidable', () => {
+  const repo = gitRepo();
+  try {
+    const large = runCiJob({ ...process.env, BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'node -e "process.stdout.write(\'x\'.repeat(2 * 1024 * 1024))"' }, { cwd: repo.dir });
+    assert.equal(large.code, 0, large.lines.join('\n').slice(0, 500));
+    const buffers = [];
+    const overflow = runCiJob({ BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'noisy' }, {
+      cwd: repo.dir,
+      execFile: (_file, _args, options) => {
+        buffers.push(options.maxBuffer);
+        throw Object.assign(new Error('spawnSync bash ENOBUFS'), { code: 'ENOBUFS', status: null, stdout: 'partial', stderr: '' });
+      },
+    });
+    assert.equal(overflow.code, 2);
+    assert.match(overflow.lines.join('\n'), /64 MiB を超えた/);
+    assert.ok(buffers.length && buffers.every(size => size >= 64 * 1024 * 1024));
+    assert.equal(readFileSync(join(overflow.runDir, 'test.log'), 'utf8'), 'partial');
+    assert.equal(existsSync(join(overflow.runDir, 'manifest.json')), false);
+  } finally { repo.cleanup(); }
+});
+
+test('quality: false skips archived legacy QE evidence, and quality: true checks it once', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-09-22-legacy/quality.md', '| R1 | low |\n');
+    write(repo, 'openspec/changes/archive/2026-09-22-legacy/evidence.md', 'R1\n');
+    const legacy = {
+      id: 'legacy', path: 'openspec/changes/archive/2026-09-22-legacy', schema: 'quality-driven', scope: 'legacy-qe',
+      lifecycle: 'archived', qe: true, e2e: 'not-applicable', errors: [], tasksText: '- [ ] 1.1 open\n',
+    };
+    const skipped = evaluateChange(repo.dir, legacy, { quality: false, plan: true });
+    assert.deepEqual(skipped.failures, []);
+    assert.deepEqual(skipped.warnings, []);
+    const checked = evaluateChange(repo.dir, legacy, { quality: true, plan: false });
+    assert.equal(checked.warnings.filter(line => line === 'structure: legacy').length, 1);
+    assert.equal(checked.failures.filter(line => line.includes('未完了タスク')).length, 1);
+  } finally { repo.cleanup(); }
+});
+
+test('integrated seal is enforced for unnumbered and CRLF implementation tasks; legacy keeps the numbered rule', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/oracle/demo/oracle.test.mjs', 'test\n');
+    write(repo, 'openspec/changes/demo/quality.md', '---\nrisk_level: low\napproved_by: "FIXTURE-DUMMY-APPROVAL"\napproved_at: "2026-09-22"\noracle_paths: ["tests/oracle/demo"]\noracle_digest: ""\n---\n## Risk Register\n| ID | Level |\n|----|-------|\n| R1 | low |\n');
+    const failures = (tasksText, schema = 'quality-driven-e2e') => evaluateChange(repo.dir, {
+      id: 'demo', path: 'openspec/changes/demo', schema, scope: schema === 'quality-driven' ? 'legacy-qe' : 'integrated',
+      lifecycle: 'active', qe: true, e2e: 'not-applicable', errors: [], tasksText,
+    }, { phase: 'plan', plan: false, env: { QE_SEAL_REQUIRED_LEVELS: 'low medium high' } }).failures.join('\n');
+    for (const tasks of [
+      '- [x] Implement the handler\n',
+      '- [x] 1.1 oracle\r\n- [x] 2.1 impl\r\n',
+      '## 2. Implementation\n- [x] Implement the handler\n',
+      '## 1. Oracle\n- [ ] 1.1 oracle\n## Notes\n- [x] Implement the handler\n',
+    ]) {
+      assert.match(failures(tasks), /seal が必要/, JSON.stringify(tasks));
+    }
+    for (const tasks of ['## 1. Oracle\n- [x] Write the oracle\n- [ ] 2.1 impl\n', '# Tasks\n## 1. Oracle\n### Unit\n- [x] Write the oracle\n- [ ] 2.1 impl\n']) {
+      assert.doesNotMatch(failures(tasks), /seal/, JSON.stringify(tasks));
+    }
+    assert.doesNotMatch(failures('- [x] Implement the handler\n', 'quality-driven'), /seal/);
+    assert.match(failures('- [x] 2.1 impl\n', 'quality-driven'), /seal が必要/);
+  } finally { repo.cleanup(); }
+});
+
+test('legacy digest ignores oracle_paths overlap and still accepts seals written by upstream qe-gate.sh', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/oracle/a.test.mjs', 'a');
+    write(repo, 'tests/oracle/core/b.test.mjs', 'b');
+    const merged = legacyDigest(repo.dir, ['tests/oracle']);
+    const overlapping = legacyDigest(repo.dir, ['tests/oracle/core', 'tests/oracle']);
+    assert.equal(overlapping.digest, merged.digest);
+    assert.deepEqual(overlapping.files, merged.files);
+    assert.equal(merged.compatDigest, undefined);
+    const quality = recorded => `---\nrisk_level: medium\napproved_by: "FIXTURE-DUMMY-APPROVAL"\noracle_paths: ["tests/oracle", "tests/oracle/core"]\noracle_digest: "${recorded}"\n---\n## Risk Register\n| ID | Level |\n|----|-------|\n| R1 | medium |\n`;
+    write(repo, 'openspec/changes/legacy/quality.md', quality(''));
+    const upstreamGate = fileURLToPath(new URL('../upstream/baselines/qe/payload/scripts/qe-gate.sh', import.meta.url));
+    const upstream = execFileSync('bash', [upstreamGate, 'digest', 'legacy'], { cwd: repo.dir, encoding: 'utf8' }).trim();
+    assert.equal(overlapping.compatDigest, upstream);
+    assert.notEqual(upstream, merged.digest);
+    const legacy = {
+      id: 'legacy', path: 'openspec/changes/legacy', schema: 'quality-driven', scope: 'legacy-qe',
+      lifecycle: 'active', qe: true, e2e: 'not-applicable', errors: [], tasksText: '- [x] 2.1 impl\n- [ ] 3.1 evidence\n',
+    };
+    for (const recorded of [upstream, merged.digest]) {
+      write(repo, 'openspec/changes/legacy/quality.md', quality(recorded));
+      assert.deepEqual(evaluateChange(repo.dir, legacy, { phase: 'plan', env: {} }).failures, []);
+    }
+    write(repo, 'openspec/changes/legacy/quality.md', quality('sha256:deadbeef'));
+    assert.match(evaluateChange(repo.dir, legacy, { phase: 'plan', env: {} }).failures.join('\n'), /再 seal/);
+  } finally { repo.cleanup(); }
+});
+
+test('reporter resolves plans from the repository root, including archives, and rejects path-like ids', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-09-22-shop/test-plan.md', '---\ne2e: required\n---\n## E2E観点一覧\n| TP-ID |\n|-------|\n| TP-001 |\n');
+    write(repo, 'app/results.json', JSON.stringify({
+      stats: { startTime: new Date().toISOString() },
+      suites: [{ specs: [{ title: 'buy', tags: ['@shop', '@TP-001'], tests: [{ status: 'expected', results: [{ status: 'passed' }] }] }] }],
+    }));
+    const cwd = join(repo.dir, 'app');
+    const ok = spawnSync(process.execPath, [script('e2e-report.mjs'), 'shop', 'results.json'], { cwd, encoding: 'utf8' });
+    assert.equal(ok.status, 0, ok.stderr + ok.stdout);
+    for (const id of ['../../..', 'archive', 'shop/../../x']) {
+      const bad = spawnSync(process.execPath, [script('e2e-report.mjs'), id, 'results.json'], { cwd, encoding: 'utf8' });
+      assert.equal(bad.status, 2, id);
+      assert.match(bad.stderr, /change が存在しません/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('qe-gate seal and digest reject path-like change names before touching files', () => {
+  const repo = gitRepo();
+  try {
+    const quality = '---\napproved_by: "FIXTURE-DUMMY-APPROVAL"\noracle_paths: ["outside"]\noracle_digest: ""\n---\n';
+    write(repo, 'outside/quality.md', quality);
+    for (const command of ['seal', 'digest']) {
+      const result = spawnSync(process.execPath, [script('qe-gate.mjs'), command, '../../outside'], { cwd: repo.dir, encoding: 'utf8' });
+      assert.equal(result.status, 2, command);
+      assert.match(result.stderr, /change 名が不正です/);
+    }
+    assert.equal(readFileSync(join(repo.dir, 'outside/quality.md'), 'utf8'), quality);
+  } finally { repo.cleanup(); }
+});
+
+test('reporter and gate read TP-IDs from the same table column', () => {
+  const repo = gitRepo();
+  try {
+    const change = { id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', scope: 'integrated', e2e: 'required', skipSpecs: true };
+    const plan = '---\ne2e: required\n---\n## E2E観点一覧\n| ID | Requirement |\n|----|-------------|\n| TP-001 | demo |\n';
+    for (const [text, expected] of [[plan, []], [plan.replace('| ID |', '| TP-ID |'), ['TP-001']]]) {
+      write(repo, 'openspec/changes/demo/test-plan.md', text);
+      assert.deepEqual(plannedIds(text).ids, expected);
+      assert.deepEqual(tpRows(text).map(row => row['TP-ID']), expected);
+      assert.deepEqual(checkTestPlan(repo.dir, change).requiredTags, expected);
+    }
+    const report = buildReport({ changeId: 'demo', planText: plan, results: { suites: [] } });
+    assert.equal(report.exitCode, 1);
+    assert.match(report.stdout, /required の TP が 0 件です/);
+  } finally { repo.cleanup(); }
+});
+
+test('tag presence reads only test sources once per gate run', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/README.md', '@demo @TP-001');
+    write(repo, 'tests/e2e/trace.zip', Buffer.from([0, 0xff, 0xfe, 0x40]));
+    assert.match(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']).join('\n'), /@demo が tests\/e2e にありません/);
+    write(repo, 'tests/e2e/demo.spec.ts', 'test("x", { tag: ["@demo", "@TP-001"] }, () => {});');
+    const cache = {};
+    assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001'], cache), []);
+    const corpus = cache.tagCorpus;
+    assert.equal(corpus.texts.length, 1);
+    checkTagPresence(repo.dir, { id: 'other' }, ['TP-001'], cache);
+    assert.equal(cache.tagCorpus, corpus);
+  } finally { repo.cleanup(); }
 });
 
 test('seal updates CRLF frontmatter preserving line endings and body', () => {

@@ -199,10 +199,10 @@ FIXTURE-DUMMY-APPROVAL は人間の承認ではありません。
   }
 
   const mismatched = structuredClone(manifest);
-  mismatched.runs[0].source_sha256 = '0'.repeat(64);
+  mismatched.runs[0].exit_code = 1;
   const unverified = evaluateChange(repo.dir, change, { phase: 'final', tags: false, manifest: mismatched });
   if (unverified.failures.length || !unverified.warnings.includes('execution: unverified')) {
-    console.error('異なる実行出力を verified として扱いました');
+    console.error('異なる終了コードの実行を verified として扱いました');
     process.exit(1);
   }
 

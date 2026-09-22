@@ -192,7 +192,12 @@ function allActive(repo) {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function resolveNamed(repo, name, baseRef) {
+export function isChangeName(name) {
+  return Boolean(name) && name !== '.' && name !== '..' && name !== 'archive' && !/[\\/\0]/.test(name);
+}
+
+export function resolveNamed(repo, name, baseRef) {
+  if (!isChangeName(name)) return null;
   const active = `openspec/changes/${name}`;
   if (existsSync(join(repo, active))) return { id: name, lifecycle: 'active', dir: active, baseDir: active };
   const archiveRoot = join(repo, 'openspec/changes/archive');

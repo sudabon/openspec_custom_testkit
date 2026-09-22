@@ -28,6 +28,7 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 ## タグとトレーサビリティ
 - すべてのテストに { tag: ['@<change-id>', '@TP-NNN'] } を付与する。change id と TP-ID はトークン境界で一致させる。接頭辞や正規表現の部分一致では coverage にしない
 - タグがファイルにあるだけでは実行済みにしない。Playwright の実 attempt がある expected または flaky だけを coverage にする
+- 計画ゲートのタグ存在検査は E2E ルート配下のテストソース（`.js`/`.ts` 系と `.feature`）だけを読む。README や画像・trace のタグは数えない
 - テスト名は test-plan.md の Intent と Expected を日本語で要約したものにする
 
 ```ts

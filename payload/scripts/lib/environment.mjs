@@ -18,6 +18,7 @@ function run(execFile, cmd, args, cwd) {
     const stdout = execFile(cmd, args, {
       cwd,
       encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return { code: 0, stdout: String(stdout ?? ''), error: null };

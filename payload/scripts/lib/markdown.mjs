@@ -43,7 +43,3 @@ export function hasBoundedToken(text, token) {
   const re = new RegExp(`(?:^|[^A-Za-z0-9._-])@?${escapeRegExp(token)}(?![A-Za-z0-9._-])`);
   return re.test(String(text));
 }
-
-export function escapeRegExpToken(token) {
-  return escapeRegExp(token);
-}

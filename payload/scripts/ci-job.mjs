@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { effectivePhase, evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { headRevision, toplevel } from './lib/git.mjs';
@@ -13,6 +13,8 @@ import { sha256File } from './lib/hash.mjs';
 import { asString, splitFrontmatter } from './lib/frontmatter.mjs';
 import { parseTasks, taskState } from './lib/tasks.mjs';
 import { pathToFileURL } from 'node:url';
+
+const MAX_OUTPUT_MIB = 64;
 
 export function runCiJob(env = process.env, deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
@@ -30,8 +32,9 @@ export function runCiJob(env = process.env, deps = {}) {
     return finish(cwd, 2, [`git リポジトリを特定できません: ${err.message}`], null, env);
   }
   const workRel = env.WORKING_DIRECTORY || '.';
-  const work = resolve(repo, workRel);
-  if (work !== repo && !work.startsWith(repo + '/')) return finish(repo, 1, ['working-directory がリポジトリの外です'], null, env);
+  const root = resolve(repo);
+  const work = resolve(root, workRel);
+  if (work !== root && !work.startsWith(root + sep)) return finish(repo, 1, ['working-directory がリポジトリの外です'], null, env);
 
   const selected = selectChanges({ repo, base: env.BASE_REF || 'origin/main', env });
   if (selected.exitCode === 2) return finish(repo, 2, [selected.error], null, env);
@@ -50,7 +53,7 @@ export function runCiJob(env = process.env, deps = {}) {
       source = join(runDir, `${name}.log`);
       writeFileSync(source, result.output);
     }
-    if (existsSync(source)) executions.push({ id: `${runId}-${name}`, command, exit_code: result.code, source_sha256: sha256File(source) });
+    if (!result.truncated && existsSync(source)) executions.push({ id: `${runId}-${name}`, command, exit_code: result.code, source_sha256: sha256File(source) });
   };
 
   const mode = env.SETUP_MODE || 'npm';
@@ -149,7 +152,7 @@ export function runCiJob(env = process.env, deps = {}) {
       if (!existsSync(evidencePath)) continue;
       const data = executionBlock(readFileSync(evidencePath, 'utf8')).data;
       for (const evidence of Array.isArray(data?.runs) ? data.runs : []) {
-        const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code && run.source_sha256 === evidence.source_sha256);
+        const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code);
         if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });
       }
     }
@@ -160,23 +163,28 @@ export function runCiJob(env = process.env, deps = {}) {
       fail(2, `CI の revision・実行記録を保存できません: ${err.message}`);
     }
   }
+  const cache = {};
   for (const change of selected.changes) {
-    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest });
+    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache });
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);
     if (result.failures.length) code = code || 1;
   }
-  return finish(repo, code, lines, { riskLevel: level, phase, runDir: executions.length || env.E2E_COMMAND ? runDir : null }, env);
+  return finish(repo, code, lines, { riskLevel: level, phase, runDir: existsSync(runDir) ? runDir : null }, env);
 }
 
 function run(execFile, file, args, cwd, env) {
   try {
-    const stdout = execFile(file, args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const stdout = execFile(file, args, { cwd, env, encoding: 'utf8', maxBuffer: MAX_OUTPUT_MIB * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
     return { code: 0, output: String(stdout ?? ''), lines: stdout ? [String(stdout).trimEnd()] : [] };
   } catch (err) {
     const stdout = err.stdout?.toString?.() ?? '';
     const stderr = err.stderr?.toString?.() ?? err.message;
+    if (err.code === 'ENOBUFS') {
+      const message = `${file} ${args.join(' ')}: 出力が ${MAX_OUTPUT_MIB} MiB を超えたため中断しました。終了コードを判定できません`;
+      return { code: 2, truncated: true, output: stdout + stderr, lines: [message, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
+    }
     return { code: err.status || 1, output: stdout + stderr, lines: [`${file} ${args.join(' ')} failed`, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
   }
 }

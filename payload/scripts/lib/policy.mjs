@@ -41,7 +41,3 @@ export function policyIssues(policyText) {
   if (issues.length) issues.push(SAMPLE);
   return issues;
 }
-
-export function policyCompatible(policyText) {
-  return policyIssues(policyText).length === 0;
-}

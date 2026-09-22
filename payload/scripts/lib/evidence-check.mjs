@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, relative, resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
 import { git, headRevision } from './git.mjs';
@@ -25,6 +25,38 @@ function insideRepo(repo, rel) {
   const abs = resolve(repo, rel);
   const root = resolve(repo);
   return abs === root || abs.startsWith(root + sep);
+}
+
+function validationInputMatcher(repo, change, quality) {
+  const roots = [...asList(splitFrontmatter(quality).data?.oracle_paths), installedE2eRoot(repo), `${change.path}/specs`]
+    .map(root => String(root).replace(/\/+$/, ''));
+  const files = new Set(['quality.md', 'test-plan.md', '.openspec.yaml'].map(name => `${change.path}/${name}`));
+  return path => {
+    if (files.has(path) || roots.some(root => path === root || path.startsWith(`${root}/`))) return true;
+    // Only known reporting/documentation paths are exempt. Unknown source and
+    // configuration paths remain validation inputs, including on merge commits.
+    if (/^openspec\/changes\/(?:archive\/)?[^/]+\/evidence\.md$/.test(path)) return false;
+    if (path.startsWith('test-results/')) return false;
+    if (/^(?:docs\/.*\.md|README(?:\.(?:md|txt|rst))?|CHANGELOG(?:\.(?:md|txt|rst))?)$/i.test(path)) return false;
+    return true;
+  };
+}
+
+function revisionProblem(repo, run, head, isInput) {
+  if (!/^[0-9a-f]{40,64}$/.test(run.revision)) return `run ${run.id} の revision が完全なコミット SHA ではありません: ${run.revision}`;
+  try {
+    git(repo, ['merge-base', '--is-ancestor', run.revision, head]);
+  } catch (err) {
+    if (err.status === 1) return `run ${run.id} の revision が HEAD の祖先ではありません`;
+    return `run ${run.id} の revision を git で確認できません (${err.message})`;
+  }
+  let changed;
+  try {
+    changed = git(repo, ['diff', '--name-only', '-z', run.revision, head, '--']).split('\0').filter(Boolean);
+  } catch (err) {
+    return `run ${run.id} の revision からの差分を取得できません (${err.message})`;
+  }
+  return changed.some(isInput) ? `run ${run.id} の revision が HEAD の検証対象と一致しません` : null;
 }
 
 export function checkEvidence(repo, change, { digest, policyText, manifest }) {
@@ -65,8 +97,8 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   let revision = null;
   try {
     revision = headRevision(repo);
-  } catch {
-    revision = null;
+  } catch (err) {
+    if (runs.length) errors.push(`HEAD を解決できないため run の revision を検証できません (${err.message})`);
   }
   for (const run of runs) {
     for (const key of ['id', 'command', 'started_at', 'revision', 'source', 'source_sha256']) {
@@ -78,27 +110,18 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     else if (existsSync(join(repo, run.source))) {
       if (sha256File(join(repo, run.source)) !== run.source_sha256) errors.push(`run ${run.id} の source hash が一致しません`);
     } else errors.push(`run ${run.id} の source がありません: ${run.source}`);
-    if (revision && run.revision && run.revision !== revision) {
-      try {
-        if (!/^[0-9a-f]{40,64}$/.test(run.revision)) throw new Error('invalid revision');
-        git(repo, ['merge-base', '--is-ancestor', run.revision, revision]);
-        const changed = git(repo, ['diff', '--name-only', '-z', run.revision, revision, '--']).split('\0').filter(Boolean);
-        const oraclePaths = asList(splitFrontmatter(quality).data?.oracle_paths);
-        const protectedRoots = [...oraclePaths, installedE2eRoot(repo), `${change.path}/specs`];
-        const protectedFiles = new Set(['quality.md', 'test-plan.md', '.openspec.yaml'].map(name => `${change.path}/${name}`));
-        const changedInput = changed.some(path => {
-          if (protectedFiles.has(path) || protectedRoots.some(root => path === root || path.startsWith(root.replace(/\/$/, '') + '/'))) return true;
-          // Only known reporting/documentation paths are exempt. Unknown source and
-          // configuration paths remain validation inputs, including on merge commits.
-          if (/^openspec\/changes\/(?:archive\/)?[^/]+\/evidence\.md$/.test(path)) return false;
-          if (path.startsWith('test-results/')) return false;
-          if (/^(?:docs\/.*\.md|README(?:\.(?:md|txt|rst))?|CHANGELOG(?:\.(?:md|txt|rst))?)$/i.test(path)) return false;
-          return true;
-        });
-        if (changedInput) throw new Error('changed inputs');
-      } catch {
-        errors.push(`run ${run.id} の revision が HEAD の検証対象と一致しません`);
-      }
+  }
+  const earlier = revision ? runs.filter(run => run.revision && run.revision !== revision) : [];
+  if (earlier.length) {
+    let isInput = null;
+    try {
+      isInput = validationInputMatcher(repo, change, quality);
+    } catch (err) {
+      errors.push(err.message);
+    }
+    for (const run of isInput ? earlier : []) {
+      const problem = revisionProblem(repo, run, revision, isInput);
+      if (problem) errors.push(problem);
     }
   }
 
@@ -182,18 +205,13 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
 
   let execution = 'unverified';
   if (manifest) {
+    // Output bytes differ between runs (timestamps, durations), so a CI rerun can only
+    // reproduce the recorded command and exit code. The recorded source is hashed above.
     const ids = new Set(manifest.run_ids ?? []);
     const covered = runs.length > 0 && Array.isArray(manifest.runs) && runs.every(run => ids.has(run.id) && manifest.runs.some(record =>
-      record.id === run.id && record.change_id === change.id && record.command === run.command &&
-      record.exit_code === run.exit_code && record.source_sha256 === run.source_sha256));
+      record.id === run.id && record.change_id === change.id && record.command === run.command && record.exit_code === run.exit_code));
     if (!errors.length && covered && manifest.revision && revision && manifest.revision === revision) execution = 'verified';
-    // A separate CI run may have different timing/output bytes. That does not
-    // invalidate the recorded evidence, but cannot verify that same execution.
   }
   notes.push(errors.length ? 'structure: fail' : 'structure: pass', `execution: ${execution}`);
   return { errors, notes };
-}
-
-export function evidenceRelative(repo, absPath) {
-  return relative(repo, absPath).split(sep).join('/');
 }

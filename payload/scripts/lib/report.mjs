@@ -1,5 +1,6 @@
 import { hasBoundedToken } from './markdown.mjs';
-import { asString, splitFrontmatter } from './frontmatter.mjs';
+import { splitFrontmatter } from './frontmatter.mjs';
+import { tpRows } from './plan-check.mjs';
 
 const STATUS_LABEL = { expected: 'pass', unexpected: 'fail', flaky: 'pass', skipped: 'skip' };
 
@@ -12,8 +13,7 @@ export function plannedIds(planText) {
       return { error: `e2e の値が不正です: ${value}`, ids: [], applicability: 'unknown' };
     }
     if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable' };
-    const section = planText.split(/^## E2E観点一覧\s*$/m)[1]?.split(/^## /m)[0] ?? '';
-    const ids = [...section.matchAll(/\|\s*(TP-\d{3})(?!\d)\s*\|/g)].map(match => match[1]);
+    const ids = tpRows(planText).map(row => row['TP-ID']);
     return { ids: [...new Set(ids)], applicability: 'required' };
   }
   const ids = [...planText.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]);
@@ -134,8 +134,4 @@ export function parseReporterArgs(argv) {
     } else positional.push(arg);
   }
   return { help, maxAge, changeId: positional[0] ?? '', resultsPath: positional[1] ?? 'test-results/e2e-results.json' };
-}
-
-export function asReporterApplicability(value) {
-  return asString(value);
 }

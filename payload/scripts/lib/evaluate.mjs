@@ -83,7 +83,7 @@ export function evaluateChange(repo, change, options = {}) {
         const digest = digestForSchema(repo, change.schema, asList(frontmatter.data.oracle_paths));
         const recorded = asString(frontmatter.data.oracle_digest);
         const required = declared && sealRequired(change, declared, env);
-        const enforceSeal = change.schema === SCHEMA_INTEGRATED ? (tasks.implStarted || phase === 'final') : tasks.implStarted;
+        const enforceSeal = change.schema === SCHEMA_INTEGRATED ? (tasks.implStarted || phase === 'final') : tasks.legacyImplStarted;
         if (digest.error === 'MISSING') {
           if ((required && enforceSeal) || recorded) failures.push(`oracle_paths が存在しません: ${digest.path}`);
           else warnings.push(`Oracle未作成: ${digest.path}`);
@@ -92,9 +92,9 @@ export function evaluateChange(repo, change, options = {}) {
         } else if (digest.empty || digest.error === 'empty') {
           if ((required && enforceSeal) || recorded) failures.push('空の Oracle 集合は seal できません');
           else warnings.push('Oracle が空です');
-        } else if (recorded && recorded !== digest.digest) {
+        } else if (recorded && recorded !== digest.digest && recorded !== digest.compatDigest) {
           failures.push('seal 後に Oracle が変更されています(人間が確認のうえ再 seal し、evidence の再seal履歴に記録)');
-        } else if (recorded && recorded === digest.digest) oks.push('Oracle は seal 時から変更されていません');
+        } else if (recorded) oks.push('Oracle は seal 時から変更されていません');
         else if (required && enforceSeal) failures.push(`risk_level=${declared} では実装開始前に Oracle の seal が必要です`);
         else if (digest.digest) warnings.push('Oracle は未 seal です');
 
@@ -109,26 +109,17 @@ export function evaluateChange(repo, change, options = {}) {
         }
       }
     }
-  } else if (phase === 'final' && change.lifecycle === 'archived' && change.schema === SCHEMA_QE) {
-    const evidence = checkEvidence(repo, change, { manifest: options.manifest });
-    failures.push(...evidence.errors);
-    warnings.push(...evidence.notes);
-    if (!change.tasksText || !tasks.complete) failures.push('未完了タスクが残っています');
   }
 
   if (wantPlan && change.lifecycle !== 'deleted' && (change.tasksText || change.schema === SCHEMA_E2E || phase === 'final')) {
     const plan = checkTestPlan(repo, change);
     failures.push(...plan.errors);
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
-      try {
-        failures.push(...checkTagPresence(repo, change, plan.requiredTags));
-      } catch (err) {
-        failures.push(err.message);
-      }
+      failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');
     }
   }
-  return { failures, warnings, oks, level, phase };
+  return { failures: [...new Set(failures)], warnings, oks, level, phase };
 }
 
 export function maxLevel(levels) {

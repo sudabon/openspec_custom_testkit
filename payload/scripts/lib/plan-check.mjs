@@ -6,6 +6,8 @@ import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
 
+const TAG_SOURCE = /\.(?:[cm]?[jt]sx?|feature)$/i;
+
 function filesOf(repo, root) {
   const listed = listFiles(repo, root, { optional: true });
   if (listed.error) throw new Error(`ファイルを参照できません: ${listed.path} (${listed.code})`);
@@ -42,6 +44,10 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: bad || null, e2eLayer };
 }
 
+export function tpRows(planText) {
+  return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
+}
+
 export function checkTestPlan(repo, change) {
   const errors = [];
   const notes = [];
@@ -67,7 +73,7 @@ export function checkTestPlan(repo, change) {
     }
   }
 
-  const tp = parseTable(section(text, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
+  const tp = tpRows(text);
   const delegated = parseTable(section(text, '## 対象外シナリオ')).rows.filter(row => asString(row.Scenario));
   const tpIds = tp.map(row => row['TP-ID']);
   if (new Set(tpIds).size !== tpIds.length) errors.push(`${change.id}: TP-ID が重複しています`);
@@ -129,21 +135,26 @@ export function checkTestPlan(repo, change) {
   return { errors, notes, requiredTags: [...new Set(legacyIds)] };
 }
 
-export function checkTagPresence(repo, change, tpIds) {
+function loadTagCorpus(repo) {
+  try {
+    const root = installedE2eRoot(repo);
+    const texts = filesOf(repo, root).filter(file => TAG_SOURCE.test(file)).map(file => readFileSync(file, 'utf8'));
+    return { root, texts };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+export function checkTagPresence(repo, change, tpIds, cache = {}) {
   const errors = [];
   if (!tpIds.length) return errors;
-  const root = installedE2eRoot(repo);
-  let corpus;
-  try {
-    corpus = filesOf(repo, root).map(file => readFileSync(file, 'utf8'));
-  } catch (err) {
-    return [err.message];
-  }
-  if (!corpus.some(text => hasBoundedToken(text, change.id))) {
-    errors.push(`${change.id}: @${change.id} が ${installedE2eRoot(repo)} にありません`);
+  const corpus = cache.tagCorpus ??= loadTagCorpus(repo);
+  if (corpus.error) return [corpus.error];
+  if (!corpus.texts.some(text => hasBoundedToken(text, change.id))) {
+    errors.push(`${change.id}: @${change.id} が ${corpus.root} にありません`);
   }
   for (const tp of tpIds) {
-    const found = corpus.some(text => hasBoundedToken(text, change.id) && hasBoundedToken(text, tp));
+    const found = corpus.texts.some(text => hasBoundedToken(text, change.id) && hasBoundedToken(text, tp));
     if (!found) errors.push(`${change.id}: @${tp} が @${change.id} と同一テスト文脈にありません`);
   }
   return errors;

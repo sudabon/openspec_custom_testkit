@@ -24,9 +24,12 @@ function parseTail(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--json') continue;
-    if (arg === '--base') base = argv[++i];
-    else if (arg === '--phase') phase = argv[++i];
-    else names.push(arg);
+    if (arg === '--base' || arg === '--phase') {
+      const value = argv[++i];
+      if (!value) return { error: arg === '--base' ? '--base には ref が必要です' : '--phase には plan または final が必要です' };
+      if (arg === '--base') base = value;
+      else phase = value;
+    } else names.push(arg);
   }
   return { base, phase, names };
 }
@@ -59,6 +62,10 @@ if (command !== 'select' && command !== 'check') {
   process.exit(2);
 }
 const args = parseTail(rest);
+if (args.error) {
+  console.error(args.error);
+  process.exit(2);
+}
 if (command === 'check' && args.phase !== 'plan' && args.phase !== 'final') {
   console.error('--phase は plan または final です');
   process.exit(2);
@@ -87,6 +94,7 @@ if (selected.exitCode === 2) {
 }
 let failures = 0;
 const levels = [];
+const cache = {};
 for (const change of selected.changes) {
   const result = evaluateChange(repo, change, {
     phase: args.phase,
@@ -94,6 +102,7 @@ for (const change of selected.changes) {
     plan: true,
     tags: true,
     env: process.env,
+    cache,
   });
   console.log(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
   for (const line of result.oks) console.log(`  ✓ ${line}`);

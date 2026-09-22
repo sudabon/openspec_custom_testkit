@@ -8,20 +8,24 @@ import { byteCompare, sha256 } from './hash.mjs';
 export function legacyDigest(repo, oraclePaths) {
   const paths = (oraclePaths ?? []).map(path => String(path).trim()).filter(Boolean);
   if (paths.length === 0) return { digest: '', empty: true };
-  const files = [];
+  const listed = [];
   for (const path of paths) {
-    const listed = listFiles(repo, path);
-    if (listed.error) return listed;
-    files.push(...listed.files);
+    const result = listFiles(repo, path);
+    if (result.error) return result;
+    listed.push(...result.files);
   }
-  files.sort(byteCompare);
-  if (files.length === 0) return { digest: '', empty: true };
-  let body = '';
-  for (const rel of files) {
-    try { body += `${sha256(readFileSync(join(repo, rel)))}  ${rel}\n`; }
+  if (listed.length === 0) return { digest: '', empty: true };
+  const hashes = new Map();
+  for (const rel of listed) {
+    if (hashes.has(rel)) continue;
+    try { hashes.set(rel, sha256(readFileSync(join(repo, rel)))); }
     catch (error) { return fileError(error, rel); }
   }
-  return { digest: `sha256:${sha256(body)}`, files };
+  const digestOf = rels => `sha256:${sha256(rels.map(rel => `${hashes.get(rel)}  ${rel}\n`).join(''))}`;
+  const files = [...hashes.keys()].sort(byteCompare);
+  if (files.length === listed.length) return { digest: digestOf(files), files };
+  // upstream qe-gate.sh hashes a file once for every oracle_path that contains it; keep accepting its seals.
+  return { digest: digestOf(files), files, compatDigest: digestOf(listed.sort(byteCompare)) };
 }
 
 export function manifestDigest(repo, oraclePaths) {

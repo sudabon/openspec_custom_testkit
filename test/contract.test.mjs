@@ -674,7 +674,7 @@ test('unchanged Oracle template instructions do not count as reseal history', ()
   } finally { ctx.repo.cleanup(); }
 });
 
-test('CI verifies matching command output and leaves independent reruns unverified', () => {
+test('CI verifies the recorded command and exit code and leaves other commands unverified', () => {
   const ctx = evidenceRepo('low');
   try {
     const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
@@ -699,7 +699,7 @@ test('CI verifies matching command output and leaves independent reruns unverifi
 });
 
 
-test('CI reruns a real node test without rejecting nondeterministic timing output', () => {
+test('CI verifies a real node test rerun whose output bytes differ from the recorded source', () => {
   const ctx = evidenceRepo('low');
   try {
     const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
@@ -716,6 +716,9 @@ test('CI reruns a real node test without rejecting nondeterministic timing outpu
     const first = runCiJob(env, { cwd: ctx.repo.dir });
     assert.equal(first.code, 0, first.lines.join('\n'));
     assert.match(readFileSync(join(first.runDir, 'test.log'), 'utf8'), /duration_ms/);
+    const manifest = JSON.parse(readFileSync(join(first.runDir, 'manifest.json'), 'utf8'));
+    assert.notEqual(manifest.runs[0].source_sha256, ctx.data.runs[0].source_sha256);
+    assert.match(first.lines.join('\n'), /execution: verified/);
     write(ctx.repo, ctx.data.runs[0].source, readFileSync(join(first.runDir, 'test.log')));
     ctx.data.runs[0].source_sha256 = sha256File(join(ctx.repo.dir, ctx.data.runs[0].source));
     // Source artifacts are recorded with the evidence, after the tested inputs.
@@ -723,7 +726,7 @@ test('CI reruns a real node test without rejecting nondeterministic timing outpu
     ctx.repo.commit('record actual output');
     const second = runCiJob(env, { cwd: ctx.repo.dir });
     assert.equal(second.code, 0, second.lines.join('\n'));
-    assert.match(second.lines.join('\n'), /execution: unverified/);
+    assert.match(second.lines.join('\n'), /execution: verified/);
   } finally { ctx.repo.cleanup(); }
 });
 
@@ -735,13 +738,16 @@ test('manifest coverage is separate from structure errors and requires full run 
     const evaluate = value => evaluateChange(ctx.repo.dir, change(), { phase: 'final', manifest: value });
     assert.ok(evaluate(manifest).warnings.includes('execution: verified'));
     assert.ok(evaluate({ revision: ctx.revision, run_ids: ['run-1'] }).warnings.includes('execution: unverified'));
-    for (const field of ['command', 'exit_code', 'source_sha256', 'change_id']) {
+    for (const field of ['command', 'exit_code', 'change_id']) {
       const mismatch = structuredClone(manifest);
       mismatch.runs[0][field] = 'different';
       const result = evaluate(mismatch);
       assert.deepEqual(result.failures, []);
       assert.ok(result.warnings.includes('execution: unverified'));
     }
+    const rerun = structuredClone(manifest);
+    rerun.runs[0].source_sha256 = '0'.repeat(64);
+    assert.ok(evaluate(rerun).warnings.includes('execution: verified'));
     ctx.data.falsification.performed = false;
     putEvidence(ctx, ctx.data);
     assert.deepEqual(evaluate(manifest).failures, ['独立反証の実施記録がありません']);
@@ -765,6 +771,42 @@ test('revision validation accepts multiple evidence files and unrelated merge do
     write(ctx.repo, 'openspec/changes/demo/test-plan.md', readFileSync(join(ctx.repo.dir, 'openspec/changes/demo/test-plan.md'), 'utf8') + '\nchanged inputs');
     ctx.repo.commit('change plan');
     assert.match(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n'), /revision/);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('revision failures name missing objects, non-ancestors, a broken stamp and an unborn HEAD instead of changed inputs', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    ctx.repo.commit('inputs');
+    const tested = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    const failures = () => evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n');
+    const record = (revision, message) => {
+      ctx.data.runs[0].revision = revision;
+      putEvidence(ctx, ctx.data);
+      ctx.repo.commit(message);
+    };
+
+    record('f'.repeat(40), 'missing object');
+    const missing = failures();
+    assert.match(missing, /revision を git で確認できません/);
+    assert.doesNotMatch(missing, /検証対象と一致しません/);
+
+    ctx.repo.git(['checkout', '-b', 'side']);
+    write(ctx.repo, 'side.txt', 'side');
+    ctx.repo.commit('side');
+    const side = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    ctx.repo.git(['checkout', 'main']);
+    record(side, 'side evidence');
+    assert.match(failures(), /HEAD の祖先ではありません/);
+
+    write(ctx.repo, '.openspec-custom-testkit.json', '{broken');
+    record(tested, 'broken stamp');
+    const stamp = failures();
+    assert.match(stamp, /\.openspec-custom-testkit\.json が壊れています/);
+    assert.doesNotMatch(stamp, /revision/);
+
+    ctx.repo.git(['symbolic-ref', 'HEAD', 'refs/heads/unborn']);
+    assert.match(failures(), /HEAD を解決できない/);
   } finally { ctx.repo.cleanup(); }
 });
 
