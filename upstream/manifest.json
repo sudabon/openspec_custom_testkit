@@ -1,0 +1,188 @@
+{
+  "openspecFork": "1.13.1",
+  "sources": [
+    {
+      "id": "qe",
+      "url": "https://github.com/sudabon/openspec_quality_kit",
+      "sha": "e537d10da53112fce684f31d1602c1e061ab87a2",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2026 sudabon",
+      "packageVersion": "0.1.2",
+      "stampFile": ".openspec-quality-kit.json",
+      "files": [
+        {
+          "path": ".claude/agents/qe-falsifier.md",
+          "sha256": "ba9f3c967b5b7326d049de5f3650b0212d7e207f0fe45e39c8324e3cb8fcf8a3",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": ".claude/agents/qe-oracle-writer.md",
+          "sha256": "acd25580f7037652a6091d82a6481c497c8291813dbd7df99754a44072e257a7",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": ".github/CODEOWNERS.example",
+          "sha256": "aa707c73c647a2d23348f5e4fec344aa5dc60207a73b365bb68dc338007acd58",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/quality-policy.md",
+          "sha256": "c388c2e793524a665f5692d750af3f376963363a14635fdf76c9ca57de382dcf",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": true
+        },
+        {
+          "path": "openspec/schemas/quality-driven/schema.yaml",
+          "sha256": "d66ef3fc051682522bc8bd10c1591f0c108bef628cfc126c98829eb474979fc4",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/design.md",
+          "sha256": "6ccc87f5017fb190e69e8759dd4e20d5ac3320cc4dabf152708bf8f2aa5205f8",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/evidence.md",
+          "sha256": "84e81fb2fbb455a0e4d97c5d0c86198d0da30f1615ea6d2d3429df24a9231955",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/proposal.md",
+          "sha256": "7869a6a2aae2437faf8d65d5592b9119942c1380e45df97502a2c5969ba99705",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/quality.md",
+          "sha256": "0a30053ad250df15e1793acdeefa1c4cf7906cc1943729017457af0cc168b9f1",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/spec.md",
+          "sha256": "1cccfb573f031c6352bed2a879b7035ff710bc909112fc23d10bdcfcdd8d4318",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/quality-driven/templates/tasks.md",
+          "sha256": "fa67d99fb4a93b12d702f89ea83e1838219d1cad1c90a4192c402278001cd30e",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "scripts/qe-gate.sh",
+          "sha256": "b4b9634f4c94e3b9ca36edd506dce647094a1daab2023d754f3f8e09382124da",
+          "transformE2eRoot": false,
+          "critical": true,
+          "protected": false
+        }
+      ]
+    },
+    {
+      "id": "e2e",
+      "url": "https://github.com/sudabon/openspec_e2e_test",
+      "sha": "53e354fa366f02cf412e9ce93419463a37e8255c",
+      "license": "MIT",
+      "copyright": "Copyright (c) 2026 sudabon",
+      "packageVersion": "0.2.0",
+      "stampFile": ".openspec-e2e-kit.json",
+      "files": [
+        {
+          "path": ".claude/skills/e2e-conventions/SKILL.md",
+          "sha256": "0b5f3ba41b93e098fd2c5b6bdea619796ebb17d41a09491710019372e2b0a6f7",
+          "transformE2eRoot": true,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/schema.yaml",
+          "sha256": "32c6466a38d88093ce1743fb9e79d5ce0b767d32d25917b1dc59fbbfad3f2314",
+          "transformE2eRoot": true,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/templates/design.md",
+          "sha256": "e47df296318c6622f0b0911407e16b1578169403b96f61bf35fe1db7f7b417d6",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/templates/proposal.md",
+          "sha256": "ea0879a322bb1a3c6e3002c67b5a29e31120dcb17219e3000d43775f48481284",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/templates/spec.md",
+          "sha256": "1f370642f106589d901c0568e81b5f7741e9289da48df41b70dd21ad99592a0c",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/templates/tasks.md",
+          "sha256": "270df307e37d5fc9bc4c886e1bff13867e9929d1a99db6a243bdece528579579",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "openspec/schemas/spec-driven-e2e/templates/test-plan.md",
+          "sha256": "22296641c3f4bcb26918a56209c190a0c7190c6c9159c32b4f98c94462592f6d",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "playwright.config.example.ts",
+          "sha256": "44ce95a98d8632488abe2d3cd0adfdb214d219785cfb4615133586f9ddf67a61",
+          "transformE2eRoot": true,
+          "critical": false,
+          "protected": false
+        },
+        {
+          "path": "scripts/check-test-plan.sh",
+          "sha256": "a4304b6b8cb0e072402f786bea3b1c698f9c06993eebb2c3cef2b1539a131868",
+          "transformE2eRoot": true,
+          "critical": true,
+          "protected": false
+        },
+        {
+          "path": "scripts/e2e-report.mjs",
+          "sha256": "424fec14a7039f1450820623c7efe32ed26005e7907976576f983e04c5fc153f",
+          "transformE2eRoot": false,
+          "critical": true,
+          "protected": false
+        },
+        {
+          "path": "tests/e2e/fixtures/README.md",
+          "sha256": "6b30249e49a9efb02c07722a8aa9566a80e93f4c33ed0293a118831b856f3c47",
+          "transformE2eRoot": false,
+          "critical": false,
+          "protected": false
+        }
+      ]
+    }
+  ]
+}
