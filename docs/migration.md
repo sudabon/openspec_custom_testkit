@@ -3,9 +3,9 @@
 ## 導入
 
 ```bash
-npx openspec-custom-testkit install --language Japanese
-npx openspec-custom-testkit update
-npx openspec-custom-testkit install --dry-run --target ../other
+npx github:sudabon/openspec_custom_testkit install --language Japanese
+npx github:sudabon/openspec_custom_testkit update
+npx github:sudabon/openspec_custom_testkit install --dry-run --target ../other
 ```
 
 終了コードは 0 が処理の正常終了、1 が実行失敗、2 が引数不正である。0 は統合完了を意味しない。未移行が残るときは出力と `.openspec-custom-testkit.json` の `migration.status` が `incomplete` になる。完了の確認は導入先で次を実行する。
