@@ -12,6 +12,7 @@ import { setFrontmatterScalar, splitFrontmatter } from '../payload/scripts/lib/f
 import { checkTagPresence, checkTestPlan, tpRows } from '../payload/scripts/lib/plan-check.mjs';
 import { plannedIds, buildReport } from '../payload/scripts/lib/report.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
+import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
 import { capture, gitRepo } from './support.mjs';
 
@@ -402,6 +403,48 @@ test('unreadable Oracle files and directories report their exact path and error 
     assert.equal(loop.error, 'UNREADABLE');
     assert.equal(loop.path, 'oracle/loop');
     assert.equal(loop.code, 'ELOOP');
+  } finally { repo.cleanup(); }
+});
+
+test('blank risk levels are invalid instead of being dropped from the maximum', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/demo/quality.md', `---
+risk_level: low
+approved_by: "FIXTURE-DUMMY-APPROVAL"
+approved_at: "2026-09-22"
+oracle_paths: []
+oracle_digest: ""
+---
+## Risk Register
+| ID | Level |
+|----|-------|
+| R1 | low |
+| R2 |  |
+`);
+    const result = evaluateChange(repo.dir, {
+      id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', scope: 'integrated',
+      lifecycle: 'active', qe: true, e2e: 'not-applicable', errors: [], tasksText: '- [ ] 1.1 open\n', skipSpecs: true,
+    }, { phase: 'plan', plan: false });
+    assert.match(result.failures.join('\n'), /Risk が不正です: '\(空\)'/);
+    assert.equal(result.oks.some(line => line.startsWith('risk_level:')), false);
+  } finally { repo.cleanup(); }
+});
+
+test('QE_SCHEMA sends a custom schema through the legacy quality checks', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/custom/.openspec.yaml', 'schema: custom-qe\n');
+    write(repo, 'openspec/changes/custom/tasks.md', '- [x] 1.1 done\n');
+    const selected = selectChanges({ repo: repo.dir, names: ['custom'], env: { QE_SCHEMA: 'custom-qe' } });
+    assert.equal(selected.changes[0].qe, true);
+    assert.equal(selected.changes[0].scope, 'out-of-scope');
+    const checked = evaluateChange(repo.dir, selected.changes[0], { phase: 'plan', quality: true, plan: false });
+    assert.match(checked.failures.join('\n'), /quality\.md がないまま tasks\.md が作成されています/);
+    const ignored = selectChanges({ repo: repo.dir, names: ['custom'], env: {} });
+    const skipped = evaluateChange(repo.dir, ignored.changes[0], { phase: 'plan' });
+    assert.deepEqual(skipped.failures, []);
+    assert.match(skipped.warnings.join('\n'), /無関係な schema/);
   } finally { repo.cleanup(); }
 });
 

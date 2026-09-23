@@ -48,7 +48,8 @@ function results(specs) {
         tests: [{
           projectName: spec.project ?? '',
           status: spec.status,
-          results: spec.attempts === 0 ? [] : [{ status: spec.attemptStatus ?? spec.status }],
+          expectedStatus: spec.expectedStatus,
+          results: spec.attempts === 0 ? [] : [{ status: spec.attemptStatus ?? spec.status, expectedStatus: spec.expectedStatus }],
         }],
       })),
     }],
@@ -56,6 +57,32 @@ function results(specs) {
 }
 
 const plan = '## E2E観点一覧\n| TP-ID |\n| TP-001 |\n| TP-002 |\n';
+
+test('expected Playwright failures do not count as passing coverage', () => {
+  const tagged = { title: 'rejects bad input', tags: ['@add-checkout', '@TP-001'] };
+  const only = buildReport({
+    changeId: 'add-checkout',
+    planText: 'TP-001',
+    results: results([{ ...tagged, status: 'expected', expectedStatus: 'failed', attemptStatus: 'failed' }]),
+    now: Date.parse('2026-09-22T00:00:01.000Z'),
+  });
+  assert.equal(only.exitCode, 1);
+  assert.match(only.stdout, /expected-fail/);
+  assert.match(only.stdout, /カバレッジ欠落: TP-001/);
+  assert.doesNotMatch(only.stdout, /pass 1/);
+
+  const covered = buildReport({
+    changeId: 'add-checkout',
+    planText: 'TP-001',
+    results: results([
+      { ...tagged, status: 'expected', expectedStatus: 'failed', attemptStatus: 'failed' },
+      { title: 'accepts good input', tags: ['@add-checkout', '@TP-001'], status: 'expected', attemptStatus: 'passed' },
+    ]),
+    now: Date.parse('2026-09-22T00:00:01.000Z'),
+  });
+  assert.equal(covered.exitCode, 0, covered.stdout);
+  assert.match(covered.stdout, /pass 1/);
+});
 
 test('reporter classifies attempt status and prefers failure over a coverage gap', () => {
   const tagged = { title: 'adds one', tags: ['@add-checkout', '@TP-001'] };
@@ -231,6 +258,11 @@ test('falsification, residual, review, and mutation fail independently', () => {
     putEvidence(mutation, mutation.data);
     const weak = evaluateChange(mutation.repo.dir, change(), { phase: 'final', tags: false });
     assert.ok(weak.failures.some(line => line.includes('閾値未満')));
+    mutation.data.mutation = { command: 'mut', status: 'passed', score: 'N/A', threshold: 70 };
+    putEvidence(mutation, mutation.data);
+    const unavailable = evaluateChange(mutation.repo.dir, change(), { phase: 'final', tags: false });
+    assert.ok(unavailable.failures.some(line => line.includes('数値ではありません')));
+    assert.equal(unavailable.failures.some(line => line.includes('閾値未満')), false);
   } finally {
     mutation.repo.cleanup();
   }
@@ -751,6 +783,29 @@ test('manifest coverage is separate from structure errors and requires full run 
     ctx.data.falsification.performed = false;
     putEvidence(ctx, ctx.data);
     assert.deepEqual(evaluate(manifest).failures, ['独立反証の実施記録がありません']);
+  } finally { ctx.repo.cleanup(); }
+});
+
+test('content-preserving archive moves do not invalidate a verified revision', () => {
+  const ctx = evidenceRepo('low');
+  try {
+    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    ctx.repo.commit('tested inputs');
+    ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
+    putEvidence(ctx, ctx.data);
+    ctx.repo.commit('record evidence');
+    mkdirSync(join(ctx.repo.dir, 'openspec/changes/archive'), { recursive: true });
+    ctx.repo.git(['mv', 'openspec/changes/demo', 'openspec/changes/archive/2026-09-23-demo']);
+    ctx.repo.commit('archive');
+    const archived = change({
+      path: 'openspec/changes/archive/2026-09-23-demo',
+      lifecycle: 'archived',
+    });
+    assert.deepEqual(evaluateChange(ctx.repo.dir, archived, { phase: 'final' }).failures, []);
+    const qualityPath = 'openspec/changes/archive/2026-09-23-demo/quality.md';
+    write(ctx.repo, qualityPath, `${readFileSync(join(ctx.repo.dir, qualityPath), 'utf8')}\nchanged\n`);
+    ctx.repo.commit('edit archived quality');
+    assert.match(evaluateChange(ctx.repo.dir, archived, { phase: 'final' }).failures.join('\n'), /revision/);
   } finally { ctx.repo.cleanup(); }
 });
 

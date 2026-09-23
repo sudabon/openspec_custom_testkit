@@ -38,7 +38,8 @@ export function evaluateChange(repo, change, options = {}) {
   const oks = [];
   let level = 'none';
 
-  if (change.scope === 'out-of-scope' && change.errors.length === 0 && change.e2e !== 'unknown') {
+  const selectedCustomQe = change.qe === true && change.scope === 'out-of-scope' && change.lifecycle !== 'deleted';
+  if (change.scope === 'out-of-scope' && !selectedCustomQe && change.errors.length === 0 && change.e2e !== 'unknown') {
     warnings.push(change.reason);
     return { failures, warnings, oks, level, phase };
   }
@@ -46,9 +47,10 @@ export function evaluateChange(repo, change, options = {}) {
 
   const wantQuality = options.quality !== false && (change.qe || change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE);
   const wantPlan = options.plan !== false && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_E2E || change.scope === 'integrated');
+  const legacyQe = change.schema === SCHEMA_QE || selectedCustomQe;
   if (change.pendingPlan && !change.tasksText && phase === 'plan') warnings.push(`${change.id}: 計画途中(test-plan 未作成)`);
 
-  if (wantQuality && change.lifecycle !== 'deleted' && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE)) {
+  if (wantQuality && change.lifecycle !== 'deleted' && (change.schema === SCHEMA_INTEGRATED || legacyQe)) {
     const qualityPath = join(repo, change.path, 'quality.md');
     if (!existsSync(qualityPath)) {
       if (change.tasksText) failures.push('quality.md がないまま tasks.md が作成されています');

@@ -35,7 +35,11 @@ function flatten(results) {
       for (const test of spec.tests ?? []) {
         const attempts = test.results ?? [];
         const raw = attempts.length === 0 ? 'no-attempt' : (test.status ?? attempts.at(-1)?.status ?? 'unknown');
-        const status = STATUS_LABEL[raw] ?? raw;
+        const expectedStatus = test.expectedStatus ?? attempts.at(-1)?.expectedStatus ?? 'passed';
+        const attemptPassed = attempts.some(attempt => expectedStatus !== 'failed' && (attempt.status === 'passed' || attempt.status === 'expected' || attempt.status === 'flaky'));
+        let status = STATUS_LABEL[raw] ?? raw;
+        if (status === 'pass' && expectedStatus === 'failed') status = 'expected-fail';
+        else if (status === 'pass' && !attemptPassed) status = 'fail';
         rows.push({
           spec,
           title,

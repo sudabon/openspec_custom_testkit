@@ -33,15 +33,15 @@ export function qualityModel(text) {
   const risks = parseTable(section(text, '## Risk Register')).rows.filter(row => /^R\d+$/.test(row.ID ?? ''));
   const oracles = parseTable(section(text, '## Test Oracles')).rows.filter(row => /^O\d+$/.test(row.ID ?? ''));
   const layers = parseTable(section(text, '## Test Layer Mapping')).rows;
-  const levels = risks.map(row => (row.Level ?? '').trim()).filter(Boolean);
+  const levels = risks.map(row => (row.Level ?? '').trim());
   const rank = { low: 1, medium: 2, high: 3 };
   let max = null;
-  const bad = levels.find(level => !rank[level]);
-  if (!bad) {
+  const rawBad = levels.find(level => !rank[level]);
+  if (rawBad == null) {
     for (const level of levels) if (!max || rank[level] > rank[max]) max = level;
   }
   const e2eLayer = layers.some(row => /(^|[^A-Za-z])E2E([^A-Za-z]|$)/.test(Object.values(row).join(' ')));
-  return { risks, oracles, layers, levels, max, badLevel: bad || null, e2eLayer };
+  return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer };
 }
 
 export function tpRows(planText) {

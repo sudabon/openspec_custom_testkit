@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve, sep } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
-import { git, headRevision } from './git.mjs';
+import { git, headRevision, parseNameStatus } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { mutationThreshold } from './policy.mjs';
@@ -42,7 +42,51 @@ function validationInputMatcher(repo, change, quality) {
   };
 }
 
-function revisionProblem(repo, run, head, isInput) {
+function blobAt(repo, rev, path) {
+  try {
+    return git(repo, ['rev-parse', '--verify', `${rev}:${path}`]).trim();
+  } catch {
+    return null;
+  }
+}
+
+function sameArchiveMove(change, fromPath, toPath) {
+  const destPrefix = `${String(change.path).replace(/\/+$/, '')}/`;
+  const sourcePrefix = `openspec/changes/${change.id}/`;
+  if (!destPrefix.startsWith('openspec/changes/archive/') || !fromPath?.startsWith(sourcePrefix) || !toPath?.startsWith(destPrefix)) return false;
+  return fromPath.slice(sourcePrefix.length) === toPath.slice(destPrefix.length);
+}
+
+function unchangedArchivePaths(repo, change, fromRev, toRev, entries) {
+  const ignored = new Set();
+  if (!String(change.path).startsWith('openspec/changes/archive/')) return ignored;
+  const deleted = new Set();
+  const added = [];
+  for (const entry of entries) {
+    if ((entry.status === 'R' || entry.status === 'C') && sameArchiveMove(change, entry.oldPath, entry.path)) {
+      const before = blobAt(repo, fromRev, entry.oldPath);
+      if (before && before === blobAt(repo, toRev, entry.path)) {
+        ignored.add(entry.path);
+        ignored.add(entry.oldPath);
+      }
+    } else if (entry.status === 'D') deleted.add(entry.path);
+    else if (entry.status === 'A') added.push(entry.path);
+  }
+  const sourcePrefix = `openspec/changes/${change.id}/`;
+  const destPrefix = `${String(change.path).replace(/\/+$/, '')}/`;
+  for (const path of added) {
+    if (!path.startsWith(destPrefix)) continue;
+    const source = sourcePrefix + path.slice(destPrefix.length);
+    const before = blobAt(repo, fromRev, source);
+    if (deleted.has(source) && before && before === blobAt(repo, toRev, path)) {
+      ignored.add(path);
+      ignored.add(source);
+    }
+  }
+  return ignored;
+}
+
+function revisionProblem(repo, change, run, head, isInput) {
   if (!/^[0-9a-f]{40,64}$/.test(run.revision)) return `run ${run.id} の revision が完全なコミット SHA ではありません: ${run.revision}`;
   try {
     git(repo, ['merge-base', '--is-ancestor', run.revision, head]);
@@ -51,12 +95,16 @@ function revisionProblem(repo, run, head, isInput) {
     return `run ${run.id} の revision を git で確認できません (${err.message})`;
   }
   let changed;
+  let entries;
   try {
     changed = git(repo, ['diff', '--name-only', '-z', run.revision, head, '--']).split('\0').filter(Boolean);
+    entries = parseNameStatus(git(repo, ['diff', '--name-status', '-z', '-M', run.revision, head, '--']));
   } catch (err) {
     return `run ${run.id} の revision からの差分を取得できません (${err.message})`;
   }
-  return changed.some(isInput) ? `run ${run.id} の revision が HEAD の検証対象と一致しません` : null;
+  // Identical blobs moved into archive are the same validation inputs, not edits.
+  const ignored = unchangedArchivePaths(repo, change, run.revision, head, entries);
+  return changed.some(path => !ignored.has(path) && isInput(path)) ? `run ${run.id} の revision が HEAD の検証対象と一致しません` : null;
 }
 
 export function checkEvidence(repo, change, { digest, policyText, manifest }) {
@@ -120,7 +168,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
       errors.push(err.message);
     }
     for (const run of isInput ? earlier : []) {
-      const problem = revisionProblem(repo, run, revision, isInput);
+      const problem = revisionProblem(repo, change, run, revision, isInput);
       if (problem) errors.push(problem);
     }
   }
@@ -180,9 +228,12 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   if (level === 'high') {
     if (!asString(mutation.command)) errors.push('high の Mutation コマンドが未指定です');
     if (mutation.status === 'not-run' || mutation.score == null) errors.push('high の Mutation 結果がありません');
+    else if (typeof mutation.score !== 'number' || !Number.isFinite(mutation.score)) errors.push('Mutation スコアが数値ではありません');
     const declared = Number(mutation.threshold);
     if (!Number.isFinite(declared) || declared < threshold) errors.push(`Mutation 閾値は ${threshold}% 以上である必要があります`);
-    if (Number(mutation.score) < declared || Number(mutation.score) < threshold) errors.push('Mutation スコアが閾値未満です');
+    if (typeof mutation.score === 'number' && Number.isFinite(mutation.score) && (mutation.score < declared || mutation.score < threshold)) {
+      errors.push('Mutation スコアが閾値未満です');
+    }
   }
 
   const reviews = Array.isArray(data.reviews) ? data.reviews : [];

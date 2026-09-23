@@ -87,6 +87,23 @@ rules:
   assert.equal(twice.text, null);
 });
 
+test('quoted schema keys and flow mappings are kept', () => {
+  for (const original of [
+    '"schema": spec-driven\ncontext: |\n  keep\n',
+    "'schema': spec-driven\n",
+    '{schema: spec-driven, context: hello}\n',
+    'schema: spec-driven\n"context": hello\n',
+  ]) {
+    const merged = mergeConfig(original);
+    assert.equal(merged.blocked, true, original);
+    assert.equal(merged.text, null);
+    assert.match(merged.warnings.join('\n'), /元ファイルを保持します/);
+  }
+  const plain = mergeConfig('schema: spec-driven\n');
+  assert.equal(plain.blocked, false);
+  assert.match(plain.text, /^schema: quality-driven-e2e\n/);
+});
+
 test('unsafe yaml is kept', async () => {
   const target = tempDir();
   mkdirSync(join(target, 'openspec'), { recursive: true });
