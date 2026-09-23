@@ -7,7 +7,7 @@ OpenSpec の品質ゲートと Playwright の E2E を、一つの導入コマン
 Node.js 20 以上と、OpenSpec CLI 1.13.1 以上を使います。
 
 ```bash
-npx openspec-custom-testkit install --language Japanese
+npx github:sudabon/openspec_custom_testkit install --language Japanese
 openspec init --tools claude
 ```
 
@@ -16,8 +16,8 @@ openspec init --tools claude
 同じ内容の再実行はファイル、権限、stamp の `installedAt` を変えません。`--dry-run` は未作成の target も作りません。
 
 ```bash
-npx openspec-custom-testkit update
-npx openspec-custom-testkit install --dry-run --target ../app
+npx github:sudabon/openspec_custom_testkit update
+npx github:sudabon/openspec_custom_testkit install --dry-run --target ../app
 node scripts/testkit-gate.mjs doctor
 ```
 
