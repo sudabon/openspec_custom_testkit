@@ -12,8 +12,7 @@
     "manifest": "node scripts/build-manifest.mjs",
     "lint": "node scripts/lint.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:smoke": "node test/smoke.mjs",
-    "prepack": "node scripts/bundle-yaml.mjs"
+    "test:smoke": "node test/smoke.mjs"
   },
   "files": [
     "install.mjs",
