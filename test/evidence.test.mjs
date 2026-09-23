@@ -134,3 +134,32 @@ test('final evidence rejects missing falsification, weak mutation, and unresolve
     ctx.repo.cleanup();
   }
 });
+
+test('non-object Execution Records entries are structural errors, not crashes', () => {
+  const ctx = setup('high');
+  ctx.change.e2e = 'not-applicable';
+  try {
+    writeQuality(ctx, { layer: 'Unit' });
+    const hash = sha256File(join(ctx.repo.dir, 'test-results/run.json'));
+    const cases = [
+      base => { base.reviews = [null]; },
+      base => { base.risk_results = [null]; },
+      base => { base.falsification.counterexamples = [null]; },
+      base => { base.runs = [null]; },
+      base => { base.residuals = [null]; base.oracle_changes = [null]; },
+    ];
+    for (const mutate of cases) {
+      const base = evidenceJson(ctx);
+      base.runs[0].source_sha256 = hash;
+      mutate(base);
+      writeEvidence(ctx, `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(base)}\n\`\`\`\n## Oracle Changes\n- なし\n`);
+      const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'final', tags: false });
+      assert.ok(result.failures.some(line => line.includes('不正な要素')), JSON.stringify(result.failures));
+    }
+    writeEvidence(ctx, '# Evidence\n## Execution Records\n```json\nnull\n```\n');
+    const empty = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'final', tags: false });
+    assert.ok(empty.failures.some(line => line.includes('Execution Records')), JSON.stringify(empty.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { main, transformBytes } from '../lib/cli.mjs';
 import { mergeConfig } from '../lib/config-merge.mjs';
 import { capture } from './support.mjs';
@@ -294,4 +295,49 @@ test('legacy transform option preserves non-transformable paths and remaps E2E f
     assert.equal(transformBytes('openspec/quality-policy.md', bytes, 'custom/e2e', { legacy: true }).toString(), 'tests/e2e');
     assert.equal(transformBytes('playwright.config.example.ts', bytes, 'custom/e2e', { legacy: true }).toString(), 'custom/e2e');
   }
+});
+
+test('update overwrites files the stamp recorded as unmodified and keeps user edits', async () => {
+  const target = tempDir();
+  execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+  const first = await capture(main, ['install', '--force', '--target', target]);
+  assert.equal(first.code, 0, first.text);
+  const stampPath = join(target, '.openspec-custom-testkit.json');
+  const stamp = JSON.parse(readFileSync(stampPath, 'utf8'));
+  // Simulate an older kit version: the stamp records the bytes the kit wrote back then.
+  const older = Buffer.from('#!/bin/sh\n# older kit version\n');
+  writeFileSync(join(target, 'scripts/qe-gate.mjs'), older);
+  stamp.files['scripts/qe-gate.mjs'] = createHash('sha256').update(older).digest('hex');
+  writeFileSync(join(target, 'scripts/ci-job.mjs'), '// user edit\n');
+  writeFileSync(stampPath, JSON.stringify(stamp));
+  const result = await capture(main, ['update', '--target', target]);
+  assert.equal(result.code, 0, result.text);
+  assert.equal(Buffer.compare(readFileSync(join(target, 'scripts/qe-gate.mjs')), readFileSync(new URL('./payload/scripts/qe-gate.mjs', root))), 0);
+  assert.equal(readFileSync(join(target, 'scripts/ci-job.mjs'), 'utf8'), '// user edit\n');
+  const after = JSON.parse(readFileSync(stampPath, 'utf8'));
+  assert.deepEqual(after.migration.pending, ['scripts/ci-job.mjs']);
+  rmSync(target, { recursive: true, force: true });
+});
+
+test('switching --e2e-root leaves critical scripts untouched and migration complete', async () => {
+  const target = tempDir();
+  execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+  const first = await capture(main, ['install', '--force', '--target', target]);
+  assert.equal(first.code, 0, first.text);
+  const before = JSON.parse(readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8')).migration;
+  const second = await capture(main, ['install', '--target', target, '--e2e-root', 'e2e']);
+  assert.equal(second.code, 0, second.text);
+  const stamp = JSON.parse(readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8'));
+  assert.equal(stamp.e2eRoot, 'e2e');
+  assert.deepEqual(stamp.migration, before);
+  assert.match(readFileSync(join(target, 'scripts/lib/critical.mjs'), 'utf8'), /E2E_ROOT_DEFAULT = 'tests\/e2e'/);
+  assert.doesNotMatch(second.text, /skip\(差分あり\) scripts\//);
+  rmSync(target, { recursive: true, force: true });
+});
+
+test('critical scripts are never rewritten for a custom E2E root', () => {
+  const bytes = Buffer.from("export const E2E_ROOT_DEFAULT = 'tests/e2e';");
+  assert.equal(transformBytes('scripts/lib/critical.mjs', bytes, 'custom/e2e').toString(), bytes.toString());
+  assert.equal(transformBytes('scripts/check-test-plan.sh', bytes, 'custom/e2e').toString(), bytes.toString());
+  assert.match(transformBytes('scripts/check-test-plan.sh', bytes, 'custom/e2e', { legacy: true }).toString(), /custom\/e2e/);
 });

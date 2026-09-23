@@ -20,6 +20,17 @@ export function executionBlock(markdown) {
   }
 }
 
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// Hand-written JSON may hold null or scalars in record lists; report them instead of crashing.
+function records(value, label, errors) {
+  if (!Array.isArray(value)) return [];
+  if (value.some(item => !isRecord(item))) errors.push(`${label} に不正な要素があります`);
+  return value.filter(isRecord);
+}
+
 function insideRepo(repo, rel) {
   if (!rel || typeof rel !== 'string' || rel.includes('://') || rel.startsWith('/') || rel.split('/').includes('..')) return false;
   const abs = resolve(repo, rel);
@@ -139,8 +150,13 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     return { errors, notes };
   }
   const data = parsed.data;
+  if (!isRecord(data)) {
+    errors.push('Execution Records の JSON はオブジェクトである必要があります');
+    notes.push('structure: fail', 'execution: unverified');
+    return { errors, notes };
+  }
   if (data.format_version !== 1) errors.push('format_version は 1 である必要があります');
-  const runs = Array.isArray(data.runs) ? data.runs : [];
+  const runs = records(data.runs, 'runs', errors);
   const runById = new Map(runs.map(run => [run.id, run]));
   let revision = null;
   try {
@@ -173,7 +189,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     }
   }
 
-  const results = Array.isArray(data.risk_results) ? data.risk_results : [];
+  const results = records(data.risk_results, 'risk_results', errors);
   const seen = new Set();
   for (const risk of uniqueRisks) {
     const rows = results.filter(row => row.risk === risk);
@@ -207,16 +223,18 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
   }
 
   const falsification = data.falsification;
-  if (!falsification || falsification.performed !== true || !asString(falsification.summary)) {
+  if (!isRecord(falsification) || falsification.performed !== true || !asString(falsification.summary)) {
     errors.push('独立反証の実施記録がありません');
   }
-  for (const example of falsification?.counterexamples ?? []) {
+  const residuals = records(data.residuals, 'residuals', errors);
+  const counterexamples = isRecord(falsification) ? records(falsification.counterexamples, 'counterexamples', errors) : [];
+  for (const example of counterexamples) {
     if (example.status === 'fixed') continue;
     if (example.status !== 'residual') {
       errors.push(`反例 ${example.id ?? '?'} が未解決です`);
       continue;
     }
-    const residual = (data.residuals ?? []).find(item => item.id === example.residual_id);
+    const residual = residuals.find(item => item.id === example.residual_id);
     if (!residual || !asString(residual.reason) || !asString(residual.impact) || !asString(residual.approved_by) || !validDate(residual.approved_at)) {
       errors.push(`反例 ${example.id ?? '?'} に人間承認済み Residual がありません`);
     }
@@ -236,7 +254,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     }
   }
 
-  const reviews = Array.isArray(data.reviews) ? data.reviews : [];
+  const reviews = records(data.reviews, 'reviews', errors);
   if ((level === 'medium' || level === 'high') && !reviews.some(review => asString(review.reviewer))) {
     errors.push(`${level} の Human Code Review がありません`);
   }
@@ -244,7 +262,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
     errors.push('high のレビューにドメイン担当が含まれていません');
   }
 
-  const history = Array.isArray(data.oracle_changes) ? data.oracle_changes : [];
+  const history = records(data.oracle_changes, 'oracle_changes', errors);
   if (history.length) {
     for (const entry of history) {
       if (!asString(entry.reason) || !asString(entry.approved_by) || !validDate(entry.approved_at) || !asString(entry.digest)) {
