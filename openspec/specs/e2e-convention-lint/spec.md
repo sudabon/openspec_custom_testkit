@@ -64,7 +64,7 @@ kit は、検査対象 change のタグを持つテストソースと、比較�
 
 #### Scenario: Changed file outside the change tag
 
-- **WHEN** PR が、change タグを持たない既存 E2E ファイルを編集してアサーションを削除する
+- **WHEN** E2E required の change を含む PR が、change タグを持たない既存 E2E ファイルを編集してアサーションを削除する
 - **THEN** 差分に含まれるため失敗する
 
 #### Scenario: Attempt to disable via environment
@@ -74,15 +74,16 @@ kit は、検査対象 change のタグを持つテストソースと、比較�
 
 ### Requirement: Exceptions require an approved residual
 
-kit は、例外を、規則 ID・理由・change の evidence にある Residual ID を書いた行内の抑止コメントとしてだけ SHALL 受け付ける。
+kit は、例外を、規則 ID・理由・change の evidence にある Residual ID を記載し、独立した行に置いた抑止コメントとしてだけ SHALL 受け付ける。
 
-- final では、参照先の Residual に理由・影響・人間の承認者・正しい承認日がそろっている場合だけ、抑止を通す。
-- plan では、未承認の抑止を「承認待ち」として報告し、通過扱いにしない。
-- Residual ID が無い抑止、または存在しない ID を参照する抑止は、両方の phase で MUST 失敗にする。
+- 強制範囲内の final では、参照先の Residual に理由・影響・人間の承認者・正しい承認日がそろっている場合だけ、抑止を通す。
+- 強制範囲内の plan では、未承認の抑止を「承認待ち」として報告し、通過扱いにしない。
+- 強制範囲外の未承認抑止は警告とする。
+- Residual ID が無い抑止、または存在しない ID を参照する抑止は、強制範囲や schema にかかわらず両方の phase で MUST 失敗にする。書式・規則 ID・配置が不正な抑止も同じ扱いとする。
 
 #### Scenario: Agent adds its own suppression
 
-- **WHEN** 抑止コメントが、`approved_by` が空の Residual を参照している
+- **WHEN** 強制範囲内の抑止コメントが、`approved_by` が空の Residual を参照している
 - **THEN** final gate は失敗し、該当する抑止と承認の欠落を示す
 
 #### Scenario: Approved exception
@@ -109,7 +110,7 @@ kit は、E2E 適用状態が required の change について、`testkit-gate.m
 #### Scenario: Whole-root report
 
 - **WHEN** 利用者が `testkit-gate.mjs lint` を実行する
-- **THEN** すべての E2E ソースの指摘を強制範囲と警告範囲に分けて表示し、強制範囲の失敗がある場合だけ非ゼロで終了する
+- **THEN** すべての E2E ソースの指摘を強制範囲と警告範囲に分けて表示し、強制範囲の失敗、不正な抑止、入力の読み取り失敗、検査ソース 0 件、選択・適用状態の判定失敗がある場合に非ゼロで終了する
 
 #### Scenario: Not-applicable change
 

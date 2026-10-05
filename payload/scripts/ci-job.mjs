@@ -150,7 +150,9 @@ export function runCiJob(env = process.env, deps = {}) {
     for (const change of selected.changes) {
       const evidencePath = join(repo, change.path, 'evidence.md');
       if (!existsSync(evidencePath)) continue;
-      const data = executionBlock(readFileSync(evidencePath, 'utf8')).data;
+      let data;
+      try { data = executionBlock(readFileSync(evidencePath, 'utf8')).data; }
+      catch (err) { fail(1, `${change.id}: evidence.md を読み取れません (${err.code ?? err.message})`); continue; }
       for (const evidence of Array.isArray(data?.runs) ? data.runs : []) {
         const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code);
         if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });

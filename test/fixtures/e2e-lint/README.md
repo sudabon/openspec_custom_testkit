@@ -7,7 +7,9 @@ change id は `demo` に揃えている。
 |---------------|---------|
 | Prohibited pattern in a test | `rules/fixed-wait.bad.spec.ts`, `rules/locator.bad.spec.ts`, `rules/template.bad.spec.ts` |
 | Pattern appears only in a comment or string | `rules/comments-strings.good.spec.ts`, `rules/component.good.spec.tsx` |
-| Excluded test still carries a TP tag | `rules/excluded.bad.spec.ts` |
+| Excluded test still carries a TP tag | `rules/excluded.bad.spec.ts`, `rules/aliases.bad.spec.ts` |
+| Missing change / TP tags | `rules/tags.bad.spec.ts` |
+| Locator values, TS non-null division, control regex, TSX generics | `rules/review.good.spec.tsx` |
 | Test without any assertion | `rules/assertions.bad.spec.ts`（操作だけ）, `root/checkout.spec.ts`（操作だけの Page Object） |
 | Existence-only assertions | `rules/assertions.bad.spec.ts`, `root/checkout.spec.ts`（存在確認だけの helper） |
 | Assertion through a page object helper | `root/checkout.spec.ts`, `root/pages/checkout.ts`, `root/helpers/assert.ts` |

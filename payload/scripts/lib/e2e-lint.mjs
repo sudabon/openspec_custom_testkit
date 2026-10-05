@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join, posix } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
@@ -223,8 +223,8 @@ function lex(src, { jsx = false } = {}) {
     const expressionStart = () => {
       const last = tokens.at(-1);
       if (!last) return true;
-      // Postfix ++/-- end an operand, so a following slash is division.
-      if (last.type === 'punct') return !CLOSERS.has(last.value) && last.value !== '++' && last.value !== '--';
+      // Postfix ++/-- and TS non-null assertions end an operand; control headers start a statement.
+      if (last.type === 'punct') return last.controlClose || (!CLOSERS.has(last.value) && !['++', '--'].includes(last.value) && !last.postfix);
       if (last.type === 'ident') return KEYWORDS_BEFORE_EXPRESSION.has(last.value);
       return false;
     };
@@ -252,7 +252,7 @@ function lex(src, { jsx = false } = {}) {
         tokens.push(readTemplate());
       } else if (ch === '/' && expressionStart()) {
         tokens.push(readRegex());
-      } else if (jsx && ch === '<' && expressionStart() && /[\p{ID_Start}>]/u.test(src[pos + 1] ?? '')) {
+      } else if (jsx && ch === '<' && !/^<\s*[\w$]+\s*(?:,|extends\b)[^<>]*>\s*\(/.test(src.slice(pos)) && expressionStart() && /[\p{ID_Start}>]/u.test(src[pos + 1] ?? '')) {
         tokens.push(readJsxElement());
       } else if (IDENT_START.test(ch)) {
         pos++;
@@ -271,12 +271,15 @@ function lex(src, { jsx = false } = {}) {
         else if (src.startsWith('++', pos) || src.startsWith('--', pos)) value = src.slice(pos, pos + 2);
         else if (ch === '?' && src[pos + 1] === '.' && !/[0-9]/.test(src[pos + 2] ?? '')) value = '?.';
         pos += value.length;
-        if (OPENERS[value]) stack.push({ value, start });
+        const postfix = value === '!' && !expressionStart();
+        let controlClose = false;
+        if (OPENERS[value]) stack.push({ value, start, control: value === '(' && ['if', 'while', 'for', 'with', 'switch', 'catch'].includes(tokens.at(-1)?.value) });
         else if (CLOSERS.has(value)) {
           const open = stack.pop();
           if (!open || OPENERS[open.value] !== value) throw new LexError('括弧の対応が取れません', start);
+          controlClose = value === ')' && open.control;
         }
-        tokens.push({ type: 'punct', value, start, end: pos });
+        tokens.push({ type: 'punct', value, start, end: pos, postfix, controlClose });
       }
     }
     if (stopAtBrace) throw new LexError('閉じていないテンプレート式があります', pos);
@@ -475,8 +478,8 @@ function declarationsOf(seq) {
       const init = seq.slice(k + 2, end + 1);
       if (init.some(item => isPunct(item, '=>') || item.value === 'function')) {
         decls.set(name, { kind: 'function', start: seq[i].start, end: seq[end].end });
-        if (isExport) exported.set(name, name);
       }
+      if (isExport) exported.set(name, name);
       i = end;
     }
   }
@@ -552,6 +555,71 @@ function importsOf(seq) {
   return bindings;
 }
 
+// Recognize imported test aliases and the statically declared base.extend fixture graph.
+function testBindings(seq, imports) {
+  const roots = new Set(TEST_ROOTS);
+  for (const [local, binding] of imports) if (binding.imported === 'test') roots.add(local);
+  const extensions = new Map();
+  for (let i = 0; i < seq.length; i++) {
+    if (!['const', 'let', 'var'].includes(seq[i].value) || seq[i + 1]?.type !== 'ident' || !isPunct(seq[i + 2], '=')) continue;
+    const name = seq[i + 1].value;
+    const base = seq[i + 3]?.value;
+    if (!roots.has(base) || !isDot(seq[i + 4]) || seq[i + 5]?.value !== 'extend') continue;
+    let open = i + 6;
+    if (isPunct(seq[open], '<')) {
+      let depth = 1;
+      while (++open < seq.length && depth) {
+        if (isOpener(seq[open])) open = seq.pairs[open];
+        else if (isPunct(seq[open], '<')) depth++;
+        else if (isPunct(seq[open], '>')) depth--;
+      }
+    }
+    if (!isPunct(seq[open], '(')) continue;
+    roots.add(name);
+    const fixtures = new Map();
+    const object = open + 1;
+    if (isPunct(seq[object], '{')) {
+      for (let k = object + 1; k < seq.pairs[object]; k++) {
+        if (isOpener(seq[k])) { k = seq.pairs[k]; continue; }
+        if (!isPunct(seq[k + 1], ':')) continue;
+        const key = seq[k].value;
+        fixtures.set(key, null); // An override without a known constructor must not inherit an assertion.
+        let end = k + 2;
+        while (end < seq.pairs[object] && !isPunct(seq[end], ',')) {
+          end = isOpener(seq[end]) ? seq.pairs[end] + 1 : end + 1;
+        }
+        const vars = new Map();
+        for (let m = k + 2; m < end; m++) {
+          if (isPunct(seq[m + 1], '=') && seq[m + 2]?.value === 'new') vars.set(seq[m].value, seq[m + 3]?.value);
+          if (seq[m].value !== 'use' || !isPunct(seq[m + 1], '(')) continue;
+          const type = seq[m + 2]?.value === 'new' ? seq[m + 3]?.value : vars.get(seq[m + 2]?.value);
+          if (type) fixtures.set(key, type);
+        }
+        k = end;
+      }
+    }
+    extensions.set(name, { base, fixtures });
+  }
+  return { roots, extensions };
+}
+
+function fixtureParameters(seq, body) {
+  const bindings = new Map();
+  if (!body) return bindings;
+  let k = body[0];
+  if (seq[k]?.value === 'async') k++;
+  if (!isPunct(seq[k], '(') || !isPunct(seq[k + 1], '{')) return bindings;
+  const end = seq.pairs[k + 1];
+  for (let i = k + 2; i < end; i++) {
+    if (seq[i].type !== 'ident') continue;
+    const fixture = seq[i].value;
+    let local = fixture;
+    if (isPunct(seq[i + 1], ':')) { local = seq[i + 2]?.value; i += 2; }
+    bindings.set(local, fixture);
+  }
+  return bindings;
+}
+
 function matcherLabel(item) {
   return item.negated ? `not.${item.matcher}` : item.matcher;
 }
@@ -560,7 +628,7 @@ function isWeak(item) {
   return WEAK_MATCHERS.includes(matcherLabel(item));
 }
 
-export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } = {}) {
+export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), changeIds } = {}) {
   const lineOf = lineIndex(text);
   let lexed;
   try {
@@ -586,6 +654,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
   }
   flat.sort((a, b) => a.token.start - b.token.start);
 
+  const imports = importsOf(lexed.tokens);
+  const { roots: testRoots, extensions } = testBindings(lexed.tokens, imports);
   for (const seq of sequences(lexed.tokens)) {
     for (let i = 0; i < seq.length; i++) {
       const token = seq[i];
@@ -639,7 +709,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
         raw.push({ rule: 'fixed-wait', offset: token.start, line: token.line, message: 'setTimeout による固定待機は禁止です。自動待機ロケーターと expect のリトライに任せてください' });
       }
 
-      const isTestRoot = TEST_ROOTS.has(root);
+      const isTestRoot = testRoots.has(root);
       const describeMembers = isTestRoot && members[0] === 'describe' ? members.slice(1) : root === 'describe' ? members : null;
       const literal = list.length > 0 && isTitle(seq[list[0][0]]) && list[0][0] === list[0][1];
       const last = list.at(-1);
@@ -651,6 +721,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
       const body = last && (list.length >= 2 || lastIsFunction) ? { bodyStart: seq[last[0]].start, bodyEnd: seq[last[1]].end } : { bodyStart: -1, bodyEnd: -1 };
       const block = kind => ({
         kind,
+        root,
+        fixtures: fixtureParameters(seq, last),
         title: literal ? seq[list[0][0]].value : dynamic ? text.slice(seq[list[0][0]].start, seq[list[0][1]].end) : '',
         line: token.line,
         start: token.start,
@@ -690,7 +762,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
     const scope = [...chain, item];
     const tags = [...new Set(scope.flatMap(entry => entry.ownTags))];
     const excluded = scope.some(entry => entry.modifiers.some(name => EXCLUDING.has(name)))
-      || conditional.some(call => EXCLUDING.has(call.name) && scope.includes(call.owner));
+      || conditional.some(call => EXCLUDING.has(call.name) && (!call.owner || scope.includes(call.owner)));
     return { ...item, tags, describes: chain.map(entry => entry.title), excluded };
   });
   const titleAt = offset => owner(offset)?.title ?? null;
@@ -700,7 +772,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
       raw.push({ rule: 'fixed-wait', offset: call.start, line: call.line, message: 'waitForTimeout による固定待機は禁止です。自動待機ロケーターと expect のリトライに任せてください' });
       continue;
     }
-    const xpath = SELECTOR_METHODS.has(call.name) && isTitle(call.first) && XPATH.test(call.first.value);
+    const selectorReceiver = call.receiver?.kind === 'ident' && ['page', 'frame'].includes(call.receiver.name);
+    const xpath = (CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (selectorReceiver && SELECTOR_METHODS.has(call.name))) && isTitle(call.first) && XPATH.test(call.first.value);
     if (CSS_LOCATORS.has(call.name) || xpath) {
       const what = xpath ? `XPath (${call.first.value})` : `${call.name}()`;
       raw.push({ rule: 'forbidden-locator', offset: call.start, line: call.line, message: `${what} は禁止です。getByRole / getByLabel / getByText / getByTestId を使ってください` });
@@ -718,7 +791,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
   }
   for (const item of tests) {
     const hasTp = item.tags.some(tag => /^@TP-\d{3}$/.test(tag));
-    const hasChange = item.tags.some(tag => !/^@TP-/.test(tag));
+    // Source-only callers may omit repository context; repository lint always supplies known IDs.
+    const hasChange = item.tags.some(tag => changeIds ? changeIds.includes(tag.slice(1)) : !/^@TP-/.test(tag));
     if (!hasTp || !hasChange) {
       const missing = [!hasChange && 'change タグ(@<change-id>)', !hasTp && 'TP タグ(@TP-NNN)'].filter(Boolean).join(' と ');
       raw.push({ rule: 'missing-tag', offset: item.start, line: item.line, test: item.title, message: `${missing} がありません` });
@@ -739,7 +813,10 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
       if (flat[mid].token.start < comment.end) lo = mid + 1;
       else hi = mid;
     }
-    const next = flat[lo];
+    const previous = flat[lo - 1]?.token;
+    const trailing = previous && lineOf(previous.end - 1) === entry.line;
+    if (trailing) entry.error = '抑止コメントは独立した行で対象の直前に置いてください';
+    const next = trailing ? null : flat[lo];
     if (next) {
       const end = statementEnd(next.seq, next.index);
       entry.from = next.token.start;
@@ -762,7 +839,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path) } =
     memberCalls,
     instances,
     suppressions,
-    imports: importsOf(lexed.tokens),
+    imports,
+    extensions,
     ...declarationsOf(lexed.tokens),
   };
   analysis.findings = raw.map(item => ({ ...item, test: item.test ?? titleAt(item.offset) }));
@@ -789,7 +867,7 @@ function helperEntry(analysis) {
       classes.set(name, methods);
     }
   }
-  return { functions, classes };
+  return { functions, classes, tests: new Map() };
 }
 
 function resolveModule(file, specifier, known) {
@@ -798,6 +876,25 @@ function resolveModule(file, specifier, known) {
   const stem = base.replace(/\.(?:[cm]?js|jsx)$/, '');
   const candidates = [base, ...RESOLVE_EXTENSIONS.map(ext => base + ext), ...RESOLVE_EXTENSIONS.map(ext => stem + ext), ...RESOLVE_EXTENSIONS.map(ext => `${base}/index${ext}`)];
   return candidates.find(candidate => known.has(candidate)) ?? null;
+}
+
+function fixtureTests(file, analysis, helpers) {
+  const tests = new Map();
+  const classes = new Map();
+  for (const [local, binding] of analysis.imports) {
+    const entry = helpers.get(resolveModule(file, binding.specifier, helpers));
+    if (entry?.classes.has(binding.imported)) classes.set(local, entry.classes.get(binding.imported));
+    if (entry?.tests.has(binding.imported)) tests.set(local, entry.tests.get(binding.imported));
+  }
+  for (const [name, extension] of analysis.extensions) {
+    const fixtures = new Map(tests.get(extension.base));
+    for (const [fixture, type] of extension.fixtures) {
+      fixtures.delete(fixture);
+      if (classes.has(type)) fixtures.set(fixture, classes.get(type));
+    }
+    tests.set(name, fixtures);
+  }
+  return tests;
 }
 
 function helperResolver(file, analysis, helpers) {
@@ -815,6 +912,7 @@ function helperResolver(file, analysis, helpers) {
     if (entry.functions.has(binding.imported)) functions.set(local, entry.functions.get(binding.imported));
     if (entry.classes.has(binding.imported)) classes.set(local, entry.classes.get(binding.imported));
   }
+  const tests = fixtureTests(file, analysis, helpers);
   return (range) => {
     const found = [];
     for (const call of analysis.rootCalls) {
@@ -827,9 +925,10 @@ function helperResolver(file, analysis, helpers) {
     }
     for (const call of analysis.memberCalls) {
       if (call.start < range.bodyStart || call.start >= range.bodyEnd) continue;
-      // Only calls on a page object instance count: `new C(...).m()` or a variable assigned `new C(...)`.
+      // Count only a known Page Object constructor/instance or a resolved fixture binding.
       const owner = call.receiver?.kind === 'new' ? call.receiver.name : call.receiver?.kind === 'ident' ? analysis.instances.get(call.receiver.name) : null;
-      const strength = owner ? classes.get(owner)?.get(call.name) : null;
+      const fixture = call.receiver?.kind === 'ident' ? range.fixtures.get(call.receiver.name) : null;
+      const strength = owner ? classes.get(owner)?.get(call.name) : tests.get(range.root)?.get(fixture)?.get(call.name);
       if (strength) found.push({ name: call.name, strength, start: call.start });
     }
     return found;
@@ -861,8 +960,8 @@ function assertionFindings(analysis, resolve = () => []) {
   return findings;
 }
 
-export function lintSource(text, { path = '' } = {}) {
-  const analysis = analyzeSource(text, { path });
+export function lintSource(text, { path = '', changeIds } = {}) {
+  const analysis = analyzeSource(text, { path, changeIds });
   if (analysis.error) {
     return { error: analysis.error, tests: [], findings: [{ rule: 'unparseable', line: analysis.errorLine, test: null, message: `字句解析できません: ${analysis.error}` }] };
   }
@@ -876,8 +975,9 @@ function isIntegrated(change) {
   return change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated';
 }
 
-function envValue(env, key, allowed) {
+function envValue(env, key, allowed, notes) {
   const value = asString(env?.[key]);
+  if (value && !allowed.includes(value)) notes.add(`${key} が不正です (${value})。既定値で動かします`);
   return allowed.includes(value) ? value : null;
 }
 
@@ -888,22 +988,45 @@ function modeFor(change, policy, env, notes) {
     }
     return { tagged: true, changed: policy.mode === 'enforce', all: policy.mode === 'enforce' && policy.scope === 'all' };
   }
-  const mode = envValue(env, 'QE_E2E_LINT_MODE', ['warn', 'enforce']) ?? 'warn';
-  const scope = envValue(env, 'QE_E2E_LINT_SCOPE', ['changed', 'all']) ?? policy.scope;
+  const mode = envValue(env, 'QE_E2E_LINT_MODE', ['warn', 'enforce'], notes) ?? 'warn';
+  const scope = envValue(env, 'QE_E2E_LINT_SCOPE', ['changed', 'all'], notes) ?? policy.scope;
   const on = mode === 'enforce';
   return { tagged: on, changed: on, all: on && scope === 'all' };
 }
 
-function loadState(repo, cache) {
+function knownChanges(repo) {
+  const changes = [];
+  for (const root of ['openspec/changes', 'openspec/changes/archive']) {
+    if (!existsSync(join(repo, root))) continue;
+    for (const entry of readdirSync(join(repo, root), { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name !== 'archive') changes.push({
+        id: root.endsWith('/archive') ? entry.name.replace(/^\d{4}-\d{2}-\d{2}-/, '') : entry.name,
+        path: `${root}/${entry.name}`,
+      });
+    }
+  }
+  return changes;
+}
+
+function loadState(repo, cache, changes) {
   const state = cache.e2eLint ??= { analyzed: 0, files: new Map(), diffs: new Map(), residuals: new Map() };
   if (state.listing) return state;
   try {
     state.root = installedE2eRoot(repo);
-    const listed = listFiles(repo, state.root, { optional: true });
+    const listed = listFiles(repo, state.root);
     if (listed.error) throw new Error(`E2E ルートを参照できません: ${listed.path} (${listed.code})`);
     state.listing = { files: listed.files };
   } catch (err) {
     state.listing = { error: err.message, files: [] };
+  }
+  let changeIds;
+  try {
+    state.knownChanges = knownChanges(repo);
+    changeIds = [...new Set([...state.knownChanges, ...changes].map(change => change.id))];
+  } catch (err) {
+    state.listing.error = `change 一覧を読み取れません (${err.code ?? err.message})`;
+    state.knownChanges = [];
+    changeIds = [];
   }
   for (const file of state.listing.files) {
     if (!LINT_SOURCE.test(file)) continue;
@@ -915,14 +1038,29 @@ function loadState(repo, cache) {
       continue;
     }
     state.analyzed++;
-    state.files.set(file, { text, analysis: analyzeSource(text, { path: file }) });
+    state.files.set(file, { text, analysis: analyzeSource(text, { path: file, changeIds }) });
   }
   state.helpers = new Map();
   for (const [file, entry] of state.files) {
     if (entry.analysis && !entry.analysis.error) state.helpers.set(file, helperEntry(entry.analysis));
   }
+  // Propagate fixture exports through relative imports, bounded by the module count.
+  for (let pass = 0; pass < state.helpers.size; pass++) {
+    for (const [file, entry] of state.files) {
+      if (!state.helpers.has(file)) continue;
+      const tests = fixtureTests(file, entry.analysis, state.helpers);
+      for (const [exported, local] of entry.analysis.exported) {
+        if (tests.has(local)) state.helpers.get(file).tests.set(exported, tests.get(local));
+      }
+    }
+  }
   const policyPath = join(repo, 'openspec/quality-policy.md');
-  state.policy = e2eLintPolicy(existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '');
+  try {
+    state.policy = e2eLintPolicy(existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '');
+  } catch (err) {
+    state.policy = e2eLintPolicy('');
+    state.policyError = `quality-policy.md を読み取れません (${err.code ?? err.message})`;
+  }
   return state;
 }
 
@@ -941,7 +1079,15 @@ function changedFiles(repo, state, base) {
 function residualsOf(repo, state, change) {
   if (!state.residuals.has(change.path)) {
     const path = join(repo, change.path, 'evidence.md');
-    const parsed = existsSync(path) ? executionBlock(readFileSync(path, 'utf8')) : { data: null };
+    let parsed;
+    try {
+      parsed = existsSync(path) ? executionBlock(readFileSync(path, 'utf8')) : { data: null };
+    } catch (err) {
+      state.residuals.set(change.path, []);
+      state.residualErrors ??= new Map();
+      state.residualErrors.set(change.path, `evidence.md を読み取れません (${err.code ?? err.message})`);
+      return [];
+    }
     const list = Array.isArray(parsed.data?.residuals) ? parsed.data.residuals.filter(item => item && typeof item === 'object') : [];
     state.residuals.set(change.path, list);
   }
@@ -974,14 +1120,16 @@ const STATUS_RANK = { invalid: 0, unknown: 1, pending: 2, approved: 3 };
 export function lintRepo(repo, changes, options = {}) {
   const env = options.env ?? process.env;
   const phase = options.phase === 'final' ? 'final' : 'plan';
-  const state = loadState(repo, options.cache ?? {});
+  const state = loadState(repo, options.cache ?? {}, changes);
   const notes = new Set(state.policy.invalid);
-  const result = { enforced: [], warned: [], exceptions: [], pending: [], notes: [], unsupported: [], failed: 0 };
+  const result = { enforced: [], warned: [], exceptions: [], pending: [], notes: [], unsupported: [], analyzed: state.analyzed, failed: 0 };
   const active = changes.filter(change => change.lifecycle !== 'deleted');
   const modes = active.map(change => ({ change, mode: modeFor(change, state.policy, env, notes) }));
-  const residuals = active.flatMap(change => residualsOf(repo, state, change));
+  const selectedResiduals = active.flatMap(change => residualsOf(repo, state, change));
   const diff = options.base ? changedFiles(repo, state, options.base) : null;
-  if (!options.base) notes.add('e2e-lint: --base が無いため、強制範囲はタグ範囲のみです（差分ファイルは警告に留まります）');
+  if (!options.base) notes.add(modes.some(({ mode }) => mode.all)
+    ? 'e2e-lint: --base がありませんが、scope: all により全ソースを強制します'
+    : 'e2e-lint: --base が無いため、強制範囲はタグ範囲のみです（差分ファイルは警告に留まります）');
 
   const place = (entry, scope) => {
     entry.text = format(entry);
@@ -992,8 +1140,11 @@ export function lintRepo(repo, changes, options = {}) {
 
   if (state.listing.error || diff?.error) {
     const entry = { rule: 'unreadable', file: state.root ?? '(E2E ルート)', line: 0, test: null, message: state.listing.error ?? diff.error };
-    place(entry, { enforced: active.length > 0, reason: 'root' });
+    place(entry, { enforced: true, reason: 'root' });
   }
+
+  if (state.policyError) place({ rule: 'unreadable', file: 'openspec/quality-policy.md', message: state.policyError }, { enforced: true });
+  if (options.requireSources && !state.analyzed && !state.listing.error) place({ rule: 'unreadable', file: state.root, message: '検査対象の E2E ソースが 0 件です' }, { enforced: true });
 
   for (const file of state.listing.files) {
     if (UNSUPPORTED_SOURCE.test(file)) result.unsupported.push(file);
@@ -1012,7 +1163,7 @@ export function lintRepo(repo, changes, options = {}) {
     if (!scope && entry.error && active.length) scope = { enforced: true, reason: 'unreadable' };
 
     if (entry.error) {
-      place({ rule: 'unreadable', file, line: 0, test: null, message: entry.error }, scope);
+      place({ rule: 'unreadable', file, line: 0, test: null, message: entry.error }, { enforced: true, reason: 'unreadable' });
       continue;
     }
     const analysis = entry.analysis;
@@ -1020,6 +1171,9 @@ export function lintRepo(repo, changes, options = {}) {
       place({ rule: 'unparseable', file, line: analysis.errorLine, test: null, message: `字句解析できません: ${analysis.error}` }, scope);
       continue;
     }
+    // Resolve existing exceptions against their tagged change, including archived changes.
+    const owners = analysis.suppressions.length ? state.knownChanges.filter(change => hasBoundedToken(entry.text, `@${change.id}`)) : [];
+    const residuals = owners.length ? owners.flatMap(change => residualsOf(repo, state, change)) : selectedResiduals;
     const findings = [...analysis.findings, ...assertionFindings(analysis, helperResolver(file, analysis, state.helpers))];
     const used = new Set();
     for (const finding of findings) {
@@ -1045,14 +1199,14 @@ export function lintRepo(repo, changes, options = {}) {
         else result.warned.push(base);
       } else {
         base.message = `${base.message} (抑止は無効: ${worst.detail})`;
-        place(base, scope);
+        place(base, ['invalid', 'unknown'].includes(worst.status) ? { enforced: true, reason: 'invalid-suppression' } : scope);
       }
     }
     for (const item of analysis.suppressions) {
       if (used.has(item)) continue;
       const status = item.error ? { status: 'invalid', detail: item.error } : residualStatus(item.residual, residuals);
       if (status.status === 'invalid' || status.status === 'unknown') {
-        place({ rule: 'invalid-suppression', file, line: item.line, test: item.test, message: `抑止コメントが無効です: ${status.detail}` }, scope);
+        place({ rule: 'invalid-suppression', file, line: item.line, test: item.test, message: `抑止コメントが無効です: ${status.detail}` }, { enforced: true, reason: 'invalid-suppression' });
       }
     }
   }
@@ -1074,6 +1228,7 @@ export function lintRepo(repo, changes, options = {}) {
     }
   }
 
+  for (const [path, message] of state.residualErrors ?? []) place({ rule: 'unreadable', file: `${path}/evidence.md`, message }, { enforced: true });
   result.notes = [...notes];
   result.failed = result.enforced.length;
   return result;

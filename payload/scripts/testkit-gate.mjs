@@ -9,7 +9,7 @@ import { selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: testkit-gate.mjs doctor
        testkit-gate.mjs select [--base <ref>] [<change>...] --json
-       testkit-gate.mjs check --phase plan|final [--base <ref>] [<change>...]
+       testkit-gate.mjs check [--phase plan|final] [--base <ref>] [<change>...]
        testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]`;
 
 function repoOf() {
@@ -97,7 +97,9 @@ if (selected.exitCode === 2) {
 }
 if (command === 'lint') {
   const changes = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
-  const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env: process.env });
+  const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env: process.env, requireSources: true });
+  const selectionErrors = selected.changes.flatMap(change => [...change.errors, ...(change.e2e === 'unknown' ? [`${change.id}: E2E 適用状態を判定できません (${change.reason})`] : [])]);
+  for (const error of selectionErrors) console.error(`✗ ${error}`);
   console.log(`対象 change: ${changes.map(change => change.id).join(', ') || 'なし（全ソースを警告範囲で表示）'}`);
   for (const note of result.notes) console.log(`! ${note}`);
   console.log('強制範囲:');
@@ -109,8 +111,8 @@ if (command === 'lint') {
   for (const entry of result.exceptions.filter(item => !item.scope?.enforced)) console.log(`  ✓ ${entry.text}`);
   for (const file of result.unsupported) console.log(`対象外: ${file}（.feature は手続きを持たないため lint しません）`);
   console.log('---');
-  console.log(`e2e-lint: enforced failures ${result.failed}, warnings ${result.warned.length}, pending ${result.pending.length}, exceptions ${result.exceptions.length}`);
-  process.exit(result.failed ? 1 : 0);
+  console.log(`e2e-lint: analyzed ${result.analyzed} files, enforced failures ${result.failed}, warnings ${result.warned.length}, pending ${result.pending.length}, exceptions ${result.exceptions.length}`);
+  process.exit(result.failed || selectionErrors.length || !selected.ok ? 1 : 0);
 }
 let failures = 0;
 const levels = [];

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { main } from '../lib/cli.mjs';
@@ -78,6 +78,7 @@ test('${title}', { tag: ${JSON.stringify(tags)} }, async ({ page }) => {
 function scopeRepo({ policy = shippedPolicy } = {}) {
   const repo = gitRepo();
   write(repo, 'openspec/quality-policy.md', policy);
+  write(repo, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
   write(repo, 'tests/e2e/legacy.spec.ts', `import { expect, test } from '@playwright/test';
 
 test('古いテスト', { tag: ['@old', '@TP-009'] }, async ({ page }) => {
@@ -239,6 +240,7 @@ test('Page Object の fill は数える', { tag: ['@demo', '@TP-003'] }, async (
 test('assertions through exported page objects and helpers under the E2E root count', () => {
   const repo = gitRepo();
   try {
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
     cpSync(join(fixtures, 'root'), join(repo.dir, 'tests/e2e'), { recursive: true });
     repo.commit('fixtures');
     const result = lintRepo(repo.dir, [], { phase: 'plan', env: {} });
@@ -504,6 +506,7 @@ test('install ships the lint without touching package.json or an edited policy, 
     const policy = shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, '').replace('# AI Quality Policy', '# AI Quality Policy (edited)');
     write(repo, 'package.json', pkg);
     write(repo, 'openspec/quality-policy.md', policy);
+  write(repo, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
     const installed = await capture(main, ['install', '--force', '--target', repo.dir]);
     assert.equal(installed.code, 0, installed.text);
     assert.equal(readFileSync(join(repo.dir, 'package.json'), 'utf8'), pkg);
@@ -517,4 +520,219 @@ test('install ships the lint without touching package.json or an edited policy, 
   } finally {
     repo.cleanup();
   }
+});
+
+test('review regressions: TS non-null division, control regex, TSX generics, and locator values', () => {
+  const good = lintFixture('rules/review.good.spec.tsx');
+  assert.equal(good.error, null);
+  assert.deepEqual(good.findings, []);
+  const aliases = lintFixture('rules/aliases.bad.spec.ts');
+  assert.equal(aliases.error, null);
+  assert.deepEqual(brief(aliases.findings), ['excluded-test:3:', 'missing-assertion:4:別名でも検査 @demo @TP-001']);
+  assert.equal(aliases.tests[0].excluded, true);
+  const imported = lintSource("import { test as it2 } from '@playwright/test'; it2('no assertions @demo @TP-001', () => {});");
+  assert.equal(imported.findings[0].rule, 'missing-assertion');
+  const smoke = lintSource("test('smoke @smoke @TP-001', () => expect(1).toBe(1));", { changeIds: ['demo'] });
+  assert.equal(smoke.findings[0].rule, 'missing-tag');
+});
+
+test('fixture-injected Page Objects resolve through test imports, aliases, and chained extend', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/pages/checkout.ts', `import { expect } from '@playwright/test';
+export class CheckoutPage {
+  verifyTotal() { expect(10).toBe(10); }
+  verifyVisible() { expect(true).toBeTruthy(); }
+  submit() { this.page.getByRole('button').click(); }
+}
+`);
+    write(repo, 'tests/e2e/fixtures/base.ts', `import { test as base } from '@playwright/test';
+import { CheckoutPage as PageObject } from '../pages/checkout';
+export const test = base.extend<{ checkoutPage: PageObject }>({
+  checkoutPage: async ({ page }, use) => {
+    const checkout = new PageObject(page);
+    await use(checkout);
+  },
+  directPage: async ({ page }, use) => { await use(new PageObject(page)); },
+});
+`);
+    write(repo, 'tests/e2e/injected.spec.ts', `import { test as it2 } from './fixtures/base';
+const extended = it2.extend({ value: 1 });
+it2('strong @demo @TP-001', async ({ checkoutPage }) => checkoutPage.verifyTotal());
+extended('alias @demo @TP-002', async ({ directPage: checkout }) => checkout.verifyTotal());
+it2('weak @demo @TP-003', async ({ checkoutPage }) => checkoutPage.verifyVisible());
+it2('action @demo @TP-004', async ({ checkoutPage }) => checkoutPage.submit());
+it2('unrelated @demo @TP-005', async ({ page }) => page.verifyTotal());
+const overridden = it2.extend({ checkoutPage: async ({}, use) => use({ verifyTotal() {} }) });
+overridden('override @demo @TP-006', async ({ checkoutPage }) => checkoutPage.verifyTotal());
+`);
+    const result = lintRepo(repo.dir, [change()], { env: {} });
+    assert.deepEqual(brief(result.enforced), [
+      'missing-assertion:6:action @demo @TP-004',
+      'missing-assertion:7:unrelated @demo @TP-005',
+      'missing-assertion:9:override @demo @TP-006',
+      'weak-assertion:5:weak @demo @TP-003',
+    ]);
+  } finally { repo.cleanup(); }
+});
+
+test('trailing suppressions never apply to the following statement', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/trailing.spec.ts', `test('trailing @demo @TP-001', async ({ page }) => {
+  await page.waitForTimeout(1); // e2e-lint-allow fixed-wait RES-1: trailing
+  await page.waitForTimeout(2);
+  expect(1).toBe(1);
+});
+`);
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    const result = lintRepo(repo.dir, [change()], { env: {} });
+    assert.equal(result.exceptions.length, 0);
+    assert.deepEqual(result.enforced.map(entry => entry.rule), ['fixed-wait', 'fixed-wait', 'invalid-suppression']);
+    assert.match(result.enforced[2].text, /独立した行/);
+  } finally { repo.cleanup(); }
+});
+
+test('invalid suppressions fail outside enforced scope and in legacy warn mode', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/outside.spec.ts', `test('outside @old @TP-001', async ({ page }) => {
+  // e2e-lint-allow fixed-wait RES-404: unknown
+  await page.waitForTimeout(1);
+  // e2e-lint-allow weak-assertion: missing
+  expect(true).toBeTruthy();
+  // e2e-lint-allow fixed-waait RES-1: typo
+  expect(1).toBe(1);
+});
+`);
+    for (const phase of ['plan', 'final']) {
+      for (const selected of [change(), change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e' })]) {
+        const result = lintRepo(repo.dir, [selected], { phase, env: {} });
+        assert.equal(result.failed, 3);
+        assert.match(result.enforced.map(entry => entry.text).join('\n'), /RES-404[\s\S]*Residual ID[\s\S]*未知の規則/);
+      }
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('partial weak suppressions and incomplete approval never bypass final enforcement', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/weak.spec.ts', `test('weak @demo @TP-001', () => {
+  // e2e-lint-allow weak-assertion RES-1: first only
+  expect(1).not.toBeUndefined();
+  expect(true).toBeTruthy();
+});
+`);
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    assert.equal(lintRepo(repo.dir, [change()], { phase: 'final', env: {} }).failed, 1);
+    write(repo, 'tests/e2e/weak.spec.ts', `// e2e-lint-allow weak-assertion RES-1: test
+ test('weak @demo @TP-001', () => expect(1).not.toBeUndefined());`);
+    for (const residual of [{ ...approved, impact: '' }, { ...approved, approved_at: '2026-02-30' }]) {
+      write(repo, 'openspec/changes/demo/evidence.md', evidence([residual]));
+      assert.equal(lintRepo(repo.dir, [change()], { phase: 'plan', env: {} }).pending.length, 1);
+      assert.equal(lintRepo(repo.dir, [change()], { phase: 'final', env: {} }).failed, 1);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('invalid environment and policy keys are visible, and all scope has an accurate note', () => {
+  const { repo } = scopeRepo();
+  try {
+    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\ne2e_lint_scoep: all\n');
+    const result = lintRepo(repo.dir, [change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e' })], { env: { QE_E2E_LINT_MODE: 'ENFORCE', QE_E2E_LINT_SCOPE: 'ALL' } });
+    assert.match(result.notes.join('\n'), /e2e_lint_scope が不正[\s\S]*未知のキー[\s\S]*QE_E2E_LINT_MODE が不正[\s\S]*QE_E2E_LINT_SCOPE が不正/);
+    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: all\n');
+    const all = lintRepo(repo.dir, [change()], { env: {} });
+    assert.match(all.notes.join('\n'), /全ソースを強制/);
+    assert.doesNotMatch(all.notes.join('\n'), /タグ範囲のみ/);
+  } finally { repo.cleanup(); }
+});
+
+test('lint CLI fails on missing roots, zero source files, and unknown applicability', () => {
+  const repo = gitRepo();
+  try {
+    const run = () => spawnSync(process.execPath, [gate, 'lint'], { cwd: repo.dir, encoding: 'utf8' });
+    assert.equal(run().status, 1);
+    mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
+    const empty = run();
+    assert.equal(empty.status, 1);
+    assert.match(empty.stdout, /analyzed 0 files/);
+    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    assert.equal(run().status, 0); // zero changes is valid when source inspection succeeded
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
+    const unknown = run();
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /E2E 適用状態を判定できません/);
+  } finally { repo.cleanup(); }
+});
+
+test('unreadable policy/evidence and failed diffs are reported as failures', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
+    repo.commit('base');
+    const diff = lintRepo(repo.dir, [change()], { base: 'missing-ref', env: {} });
+    assert.match(diff.enforced[0].text, /差分を取得できません/);
+    mkdirSync(join(repo.dir, 'openspec/quality-policy.md'), { recursive: true });
+    mkdirSync(join(repo.dir, 'openspec/changes/demo/evidence.md'), { recursive: true });
+    const result = lintRepo(repo.dir, [change()], { env: {} });
+    assert.equal(result.failed, 2);
+    assert.match(result.enforced.map(entry => entry.text).join('\n'), /quality-policy.md を読み取れません[\s\S]*evidence.md を読み取れません/);
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
+    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
+    repo.commit('inputs');
+    const ci = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', TEST_COMMAND: 'echo ok' }, { cwd: repo.dir, execFile: () => '' });
+    assert.notEqual(ci.code, 0);
+    assert.match(readFileSync(join(ci.summaryDir, 'summary.txt'), 'utf8'), /evidence.md を読み取れません/);
+  } finally { repo.cleanup(); }
+});
+
+test('CLI final reports pending/approved exceptions and check returns a failure', () => {
+  const { repo } = gateRepo();
+  try {
+    write(repo, 'tests/e2e/banner.spec.ts', fixture('suppress/banner.spec.ts'));
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved, unapproved]));
+    const run = (command, phase) => spawnSync(process.execPath, [gate, command, '--phase', phase, 'demo'], { cwd: repo.dir, encoding: 'utf8' });
+    assert.match(run('lint', 'plan').stdout, /承認待ち RES-2/);
+    const final = run('lint', 'final');
+    assert.equal(final.status, 1);
+    assert.match(final.stdout, /承認済みの例外 RES-1/);
+    assert.match(final.stdout, /抑止は無効.*approved_by/);
+    write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
+    const check = run('check', 'plan');
+    assert.equal(check.status, 1);
+    assert.match(check.stdout, /✗ e2e-lint/);
+  } finally { repo.cleanup(); }
+});
+
+
+test('approved archived exceptions remain valid when linting a different change', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    write(repo, 'tests/e2e/old.spec.ts', `test('old @old @TP-001', async ({ page }) => {
+  // e2e-lint-allow fixed-wait RES-1: approved previously
+  await page.waitForTimeout(1);
+  expect(1).toBe(1);
+});
+`);
+    const result = lintRepo(repo.dir, [change()], { phase: 'final', env: {} });
+    assert.equal(result.failed, 0);
+    assert.equal(result.exceptions.length, 1);
+    assert.equal(result.exceptions[0].scope, null);
+  } finally { repo.cleanup(); }
+});
+
+test('an unreadable E2E source fails instead of producing a clean root report', () => {
+  const repo = gitRepo();
+  try {
+    mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
+    symlinkSync('missing-target.ts', join(repo.dir, 'tests/e2e/broken.spec.ts'));
+    const result = lintRepo(repo.dir, [], { env: {} });
+    assert.equal(result.failed, 1);
+    assert.match(result.enforced[0].text, /unreadable.*broken.spec.ts/);
+  } finally { repo.cleanup(); }
 });

@@ -26,23 +26,23 @@ E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体�
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。
 
-強制範囲は「検査対象 change のタグを持つテストソース」と「比較元から HEAD までの差分で変更された E2E ソース」の和である。前者は新しい TP の弱さを、後者はタグの無い既存ファイルからアサーションを消す後退を止める。手を付けていない既存ファイルの指摘は警告に留め、導入先が一斉に失敗しないようにする。差分は `selectChanges` が解決した merge-base から取る。`--base` が無いローカル実行では強制範囲はタグ範囲だけになり、その旨を表示する。CI では reusable workflow の `base-ref` を必ず渡す。
+E2E required の change が検査対象にある場合、強制範囲は「検査対象 change のタグを持つテストソース」と「比較元から HEAD までの差分で変更された E2E ソース」の和である。前者は新しい TP の弱さを、後者はタグの無い既存ファイルからアサーションを消す後退を止める。手を付けていない既存ファイルの指摘は警告に留め、導入先が一斉に失敗しないようにする。差分は `selectChanges` が解決した merge-base から取る。`--base` が無いローカル実行では差分による強制は行わない。`scope: all` なら全ソースを、それ以外はタグ範囲だけを強制し、その旨を表示する。未コミットの変更は HEAD との差分に含めない。CI では reusable workflow の `base-ref` を必ず渡す。E2E required の change が無い PR では `check` / CI の lint は起動しない。既存 E2E の後退をゲートで止める場合も、対応する required change を含める。
 
 強制範囲内で読めない、または字句解析できないソースは失敗にする。指摘なしとしては扱わない。
 
-フレークの隔離は lint の例外ではない。隔離を理由にした `test.skip` / `test.fixme` も lint は除外の指摘として残す。fixture と mock の登録検査はこの lint では扱わない。
+フレークの隔離は lint の例外ではない。隔離を理由にした `test.skip` / `test.fixme` も lint は除外の指摘として残す。fixture と mock の登録検査はこの lint では扱わない。`fixed-wait` は別名に代入した `setTimeout` を追跡しない。`missing-tag` は active / archive の change ID と照合し、`@smoke` などの一般タグだけでは通さない。
 
-`node scripts/testkit-gate.mjs lint [--base <ref>]` は E2E ルート全体の指摘を強制範囲と警告範囲に分けて表示する。終了コードは強制範囲に失敗があれば 1、引数の誤りは 2、それ以外は 0 である。`check` の終了コードの意味は変わらない。
+`node scripts/testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]` は E2E ルート全体の指摘を強制範囲と警告範囲に分けて表示する。`--phase` の既定値は `plan`。検査ファイル数も表示する。終了コードは強制範囲の失敗、不正な抑止、入力の読み取り失敗、検査ソース 0 件、change 選択・適用状態の判定失敗があれば 1、引数の誤りは 2、それ以外は 0 である。対象 change が 0 件でもソースを検査できれば警告一覧を表示する。`check` の終了コードの意味は変わらない。
 
 ### 例外の承認
 
-規則の例外は、理由と evidence の Residual ID を書いた抑止コメント `// e2e-lint-allow <rule-id> <residual-id>: <理由>` でだけ書ける。効力は直後の 1 文、またはテスト宣言の直前に置いた場合はそのテスト全体に限る。参照先は change の `evidence.md` の Execution Records にある `residuals[]` で、反例の Residual と同じく `reason`、`impact`、`approved_by`、`approved_at` を検査する。
+規則の例外は、理由と evidence の Residual ID を書いた抑止コメント `// e2e-lint-allow <rule-id> <residual-id>: <理由>` でだけ書ける。抑止コメントは独立した行に置く。文の行末への配置と describe 全体の抑止は無効とする。効力は直後の 1 文、またはテスト宣言の直前に置いた場合はそのテスト全体に限る。参照先は change の `evidence.md` の Execution Records にある `residuals[]` で、反例の Residual と同じく `reason`、`impact`、`approved_by`、`approved_at` を検査する。
 
 - 承認済みの Residual を参照する抑止は「承認済みの例外」として通る。
-- 未承認の Residual を参照する抑止は、plan では「承認待ち」の警告にして作業を止めない。final では失敗する。
-- Residual ID の無い抑止と、存在しない ID を参照する抑止は、plan と final の両方で失敗する。
+- 未承認の Residual を参照する抑止は、plan では「承認待ち」の警告にして作業を止めない。final では強制範囲内で失敗する（範囲外は警告）。
+- Residual ID の無い抑止と、存在しない ID を参照する抑止は、強制範囲や旧 schema の warn モードにかかわらず、plan と final の両方で失敗する。書式・規則 ID・配置が不正な場合も同じ扱いとする。
 
-Agent は `approved_by` を記入しないので、Agent が自分で抑止を書いても final は通らない。quality.md の Residual Risk 節は承認者と日付をエントリ単位で検査できないため、参照先にしない。抑止コメントは E2E ルート配下にあるので、Residual の承認後に抑止を増やすと evidence の revision 検査で再実行が必要になる。
+Agent は `approved_by` を記入しないので、Agent が自分で抑止を書いても、強制範囲内の final は通らない。quality.md の Residual Risk 節は承認者と日付をエントリ単位で検査できないため、参照先にしない。抑止コメントは E2E ルート配下にあるので、Residual の承認後に抑止を増やすと evidence の revision 検査で再実行が必要になる。
 
 ### E2E 層の Mutation を対象外にする理由
 

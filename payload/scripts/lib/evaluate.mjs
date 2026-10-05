@@ -31,6 +31,15 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
+  try {
+    return evaluateReadableChange(repo, change, options);
+  } catch (err) {
+    if (!err.code) throw err;
+    return { failures: [`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`], warnings: [], oks: [], level: 'none', phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
+  }
+}
+
+function evaluateReadableChange(repo, change, options = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
