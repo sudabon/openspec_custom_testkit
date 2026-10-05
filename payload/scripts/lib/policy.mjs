@@ -41,3 +41,19 @@ export function policyIssues(policyText) {
   if (issues.length) issues.push(SAMPLE);
   return issues;
 }
+
+export const E2E_LINT_DEFAULTS = { mode: 'enforce', scope: 'changed' };
+
+// Human-edited lint settings. Missing or unreadable values fall back to the defaults,
+// so a broken line can never weaken the integrated schema below tag-scope enforcement.
+export function e2eLintPolicy(policyText) {
+  const text = String(policyText ?? '');
+  const result = { ...E2E_LINT_DEFAULTS, missing: [], invalid: [] };
+  for (const [key, field, allowed] of [['e2e_lint_mode', 'mode', ['warn', 'enforce']], ['e2e_lint_scope', 'scope', ['changed', 'all']]]) {
+    const match = text.match(new RegExp(`^${key}:[ \\t]*([^\\s#]*)`, 'm'));
+    if (!match) result.missing.push(key);
+    else if (allowed.includes(match[1])) result[field] = match[1];
+    else result.invalid.push(`quality-policy.md の ${key} が不正です (${match[1] || '空'})。既定値 ${E2E_LINT_DEFAULTS[field]} で動かします`);
+  }
+  return result;
+}

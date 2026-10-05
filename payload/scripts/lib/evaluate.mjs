@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { digestForSchema } from './digest.mjs';
+import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 import { qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
@@ -119,6 +120,12 @@ export function evaluateChange(repo, change, options = {}) {
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');
+      if (options.lint !== false) {
+        const lint = lintChange(repo, change, { phase, base: options.base, env, cache: options.cache, tpIds: plan.requiredTags });
+        failures.push(...lint.failures);
+        warnings.push(...lint.warnings);
+        oks.push(...lint.oks);
+      }
     }
   }
   return { failures: [...new Set(failures)], warnings, oks, level, phase };

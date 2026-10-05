@@ -38,8 +38,20 @@
 
 integrated_minimum:
 mutation_threshold_high: 70
+e2e_lint_mode: enforce
+e2e_lint_scope: changed
 
 統合 schema `quality-driven-e2e` では low を含む全 Risk で、人間の承認、Oracle seal、独立反証が必須です。`QE_SEAL_REQUIRED_LEVELS` と `QE_SCHEMA` ではこの条件を外せません。上の表で low が「任意」のままの旧 policy は、統合 schema の doctor を通しません。
+
+### E2E 規約 lint
+
+`e2e_lint_mode` は `warn` か `enforce`、`e2e_lint_scope` は `changed` か `all` を人間が設定する。欠落・不正値は既定値（`enforce` / `changed`）に戻る。
+
+- 検査対象 change のタグ（`@<change-id>`）を持つテストソースは、統合 schema では値にかかわらず常に強制する。
+- `enforce` では、比較元から HEAD までの差分で変更された E2E ソースも強制する。`all` にすると E2E ルート全体を強制する。
+- `warn` では、差分と全体範囲の指摘を警告だけにする。
+- 導入時は `changed` で始め、`node scripts/testkit-gate.mjs lint` の警告が 0 件になってから `all` に上げる。
+- 環境変数 `QE_E2E_LINT_MODE` / `QE_E2E_LINT_SCOPE` は旧 `spec-driven-e2e` の change にだけ効く（既定は `warn`）。統合 schema では無視する。
 
 ## 4. Agent が変更してはいけないもの
 

@@ -165,7 +165,7 @@ export function runCiJob(env = process.env, deps = {}) {
   }
   const cache = {};
   for (const change of selected.changes) {
-    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache });
+    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);

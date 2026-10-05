@@ -21,3 +21,29 @@ E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体�
 全タスク完了、または archive へ移した change は、CI の `gate-phase` が plan でも final として検査する。
 
 統合 schema の seal 検査は、番号 2 以降のタスクの完了を実装開始とみなす。番号のないタスクは、それを含む見出しのうち最も近い番号付き見出し（`## N.` など）の番号で扱う。番号付きの見出しの下にないものは実装タスクとして扱う。旧 `quality-driven` は、番号 2 以降の完了だけを見る旧来の判定を維持する。
+
+## E2E 規約 lint
+
+e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。
+
+強制範囲は「検査対象 change のタグを持つテストソース」と「比較元から HEAD までの差分で変更された E2E ソース」の和である。前者は新しい TP の弱さを、後者はタグの無い既存ファイルからアサーションを消す後退を止める。手を付けていない既存ファイルの指摘は警告に留め、導入先が一斉に失敗しないようにする。差分は `selectChanges` が解決した merge-base から取る。`--base` が無いローカル実行では強制範囲はタグ範囲だけになり、その旨を表示する。CI では reusable workflow の `base-ref` を必ず渡す。
+
+強制範囲内で読めない、または字句解析できないソースは失敗にする。指摘なしとしては扱わない。
+
+フレークの隔離は lint の例外ではない。隔離を理由にした `test.skip` / `test.fixme` も lint は除外の指摘として残す。fixture と mock の登録検査はこの lint では扱わない。
+
+`node scripts/testkit-gate.mjs lint [--base <ref>]` は E2E ルート全体の指摘を強制範囲と警告範囲に分けて表示する。終了コードは強制範囲に失敗があれば 1、引数の誤りは 2、それ以外は 0 である。`check` の終了コードの意味は変わらない。
+
+### 例外の承認
+
+規則の例外は、理由と evidence の Residual ID を書いた抑止コメント `// e2e-lint-allow <rule-id> <residual-id>: <理由>` でだけ書ける。効力は直後の 1 文、またはテスト宣言の直前に置いた場合はそのテスト全体に限る。参照先は change の `evidence.md` の Execution Records にある `residuals[]` で、反例の Residual と同じく `reason`、`impact`、`approved_by`、`approved_at` を検査する。
+
+- 承認済みの Residual を参照する抑止は「承認済みの例外」として通る。
+- 未承認の Residual を参照する抑止は、plan では「承認待ち」の警告にして作業を止めない。final では失敗する。
+- Residual ID の無い抑止と、存在しない ID を参照する抑止は、plan と final の両方で失敗する。
+
+Agent は `approved_by` を記入しないので、Agent が自分で抑止を書いても final は通らない。quality.md の Residual Risk 節は承認者と日付をエントリ単位で検査できないため、参照先にしない。抑止コメントは E2E ルート配下にあるので、Residual の承認後に抑止を増やすと evidence の revision 検査で再実行が必要になる。
+
+### E2E 層の Mutation を対象外にする理由
+
+E2E の 1 回の実行は数分単位で、変異体ごとにアプリ全体の再ビルドとブラウザ実行が要る。CI の時間と費用が Mutation から得る情報量に見合わない。さらに E2E の結果は環境とフレークの影響を受けるので、生き残った変異体が「Oracle が弱い」のか「実行が不安定」なのかを区別できず、判定が決定的にならない。E2E Oracle の強さは、この lint の静的な弱アサーション検査と、Unit / Integration 層の Mutation で補う。型解決を伴う検査（変数経由のロケーター文字列の追跡など）と自動修正（`--fix`）も提供しない。
