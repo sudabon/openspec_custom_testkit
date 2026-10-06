@@ -26,6 +26,7 @@
 
 ## 禁止
 
+- qa-handoff.md の QA 実施結果欄(実施者・実施日・判定・所見)の記入
 - `approved_by`、`approved_at`、`oracle_digest` の記入
 - `scripts/qe-gate.sh seal` の実行
 - アサーションの緩和、skip、only、xfail

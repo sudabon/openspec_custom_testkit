@@ -7,6 +7,7 @@
 1. `quality.md` の `approved_by` と `approved_at`（YYYY-MM-DD）を記入する。
 2. Oracle を読んで `scripts/qe-gate.sh seal <change>` を実行する。
 3. 反証の Residual を承認する。medium 以上は Human Code Review、high はドメイン担当を含める。
+4. QA handoff が必要な change では、QA が手動確認範囲と探索チャーターを実施し、`qa-handoff.md` の QA 実施結果を記入する。
 
 Agent は承認欄、`oracle_digest`、seal を埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。誰が実行したかの保証は CODEOWNERS とブランチ保護に依存する。
 
@@ -21,6 +22,37 @@ E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体�
 全タスク完了、または archive へ移した change は、CI の `gate-phase` が plan でも final として検査する。
 
 統合 schema の seal 検査は、番号 2 以降のタスクの完了を実装開始とみなす。番号のないタスクは、それを含む見出しのうち最も近い番号付き見出し（`## N.` など）の番号で扱う。番号付きの見出しの下にないものは実装タスクとして扱う。旧 `quality-driven` は、番号 2 以降の完了だけを見る旧来の判定を維持する。
+
+## Manual 層と QA handoff
+
+統合 schema の quality.md の Test Layer Mapping は `Static` / `Unit` / `Integration` / `E2E` / `Monitoring` に加えて `Manual` を受け付ける。`Manual` は人が手で確認する層で、探索テストを含む。`Manual` を選んだ行には選定理由の欄に自動化しない理由を書く。空なら計画ゲートがその Failure Mode の ID を示して失敗する。`Manual` は E2E 層ではない。層が `Unit` と `Manual` だけなら test-plan を `e2e: not-applicable` にしてよく、`Manual` を理由に `e2e: required` にはしない。
+
+quality.md の Residual Risk の各項目には `- RR1: <保証しないこと>` の形式で ID を付ける。無ければ `- なし` と書く。空の箇条書きと `なし` / `該当なし` / `None` は Residual なしとみなす。
+
+次のどれかに当てはまる統合 change では、tasks の `## 6. QA Handoff` で `qa-handoff.md` をテンプレート（`openspec/schemas/quality-driven-e2e/templates/qa-handoff.md`）から作る。
+
+- Test Layer Mapping に `Manual` の行がある
+- quality.md の Residual Risk に空でない項目がある
+- evidence の `residuals` が空でない
+
+`qa-handoff.md` は evidence と同じく apply の必須 artifact ではない。中身は次の4つの表である。
+
+| 節 | 内容 |
+|----|------|
+| 自動化済み範囲 | evidence の `risk_results` のうち `result` が `pass` の Risk をすべて。`pass` でない Risk は載せない。QA はここを確認し直さない |
+| 手動確認範囲 | Manual 層のすべての F-ID、quality.md の `RR*`、evidence の `residuals[].id` |
+| 探索チャーター | Charter-ID・目的・対象・時間の目安 |
+| QA 実施結果 | 実施者・実施日・判定（`pass` / `fail`）・所見。人間だけが記入する |
+
+final gate は、必要な change で次の場合に失敗する。`qa-handoff.md` が無い、節が無い、Manual 層の F-ID または Residual の ID が手動確認範囲に無い、quality.md の Residual に ID が無い、自動化済み範囲が `pass` の risk_results と一致しない、探索チャーターや表の必須欄が空、`<!-- example -->` の付いた記入例の行が残っている。どの条件にも当てはまらない change では handoff を要求しない。
+
+QA 実施結果欄は人間だけが記入する。Agent は記入しない（schema の instruction、tasks、role 定義で禁止している）。PR の final 検査（全タスク完了時の CI を含む）では、この欄が空でも警告に留める。QA を待つために PR を止めたり、Agent に空欄を埋めさせたりしないためである。archive された change では、実施者、`YYYY-MM-DD` 形式の実施日、`pass` または `fail` の判定が揃っていなければ失敗する。判定が `fail` のときも失敗するので、所見を修正するか、Residual として人間が承認し直してから archive する。
+
+kit は QA 実施結果の記入者の本人確認をしない。誰が記入したかの保証は CODEOWNERS とブランチ保護に依存する。
+
+Residual を書くと handoff が必要になる。小さな change で QA に渡すものが無いなら、Residual を書かない（`- なし`）のが正しい運用である。
+
+旧 `quality-driven` と `spec-driven-e2e` の change には、Manual 層の理由も qa-handoff.md も要求しない。
 
 ## E2E 規約 lint
 

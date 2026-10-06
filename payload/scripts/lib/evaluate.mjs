@@ -6,6 +6,7 @@ import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 import { qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
+import { checkHandoff } from './qa-handoff.mjs';
 import { parseTasks, taskState } from './tasks.mjs';
 
 function sealRequired(change, level, env) {
@@ -87,6 +88,9 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           oks.push(`risk_level: ${declared}`);
           level = declared;
         }
+        if (change.schema === SCHEMA_INTEGRATED) {
+          for (const id of model.manualWithoutReason) failures.push(`Manual 層の ${id} に自動化しない理由（選定理由）がありません`);
+        }
         const approved = approvalOf(change, frontmatter.data);
         if (approved === 'invalid') failures.push('統合版の承認には空でない approved_by と YYYY-MM-DD の approved_at が必要です');
         else if (approved === 'ok') oks.push(`承認済み: ${asString(frontmatter.data.approved_by)}`);
@@ -119,6 +123,11 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           const evidence = checkEvidence(repo, change, { digest: digest.digest, policyText, manifest: options.manifest });
           failures.push(...evidence.errors);
           warnings.push(...evidence.notes);
+          if (change.schema === SCHEMA_INTEGRATED) {
+            const handoff = checkHandoff(repo, change, { qualityText: text });
+            failures.push(...handoff.errors);
+            warnings.push(...handoff.warnings);
+          }
         }
       }
     }
