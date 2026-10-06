@@ -19,6 +19,7 @@ const MAX_OUTPUT_MIB = 64;
 export function runCiJob(env = process.env, deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
   const execFile = deps.execFile ?? execFileSync;
+  const evaluate = deps.evaluateChange ?? evaluateChange;
   const lines = [];
   let code = 0;
   const fail = (status, message) => {
@@ -172,7 +173,13 @@ export function runCiJob(env = process.env, deps = {}) {
   }
   const cache = {};
   for (const change of selected.changes) {
-    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
+    let result;
+    try {
+      result = evaluate(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
+    } catch (err) {
+      fail(1, `${change.id}: gate 評価中にエラーが発生しました (${err.code ?? err.name}: ${err.message})`);
+      continue;
+    }
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);

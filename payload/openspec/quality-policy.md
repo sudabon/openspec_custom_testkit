@@ -45,7 +45,7 @@ e2e_lint_scope: changed
 
 ### E2E 規約 lint
 
-`e2e_lint_mode` は `warn` か `enforce`、`e2e_lint_scope` は `changed` か `all` を人間が設定する。欠落・不正値は既定値（`enforce` / `changed`）に戻る。
+`e2e_lint_mode` は `warn` か `enforce`、`e2e_lint_scope` は `changed` か `all` を人間が設定する。欠落時は既定値（`enforce` / `changed`）で動き、doctor は note を表示する。不正値・未知の `e2e_lint_*` キーは lint と doctor の両方で失敗する。
 
 - 検査対象 change のタグ（`@<change-id>`）を持つテストソースは、統合 schema では値にかかわらず常に強制する。
 - `enforce` では、比較元から HEAD までの差分で変更された E2E ソースも強制する。`all` にすると E2E ルート全体を強制する。

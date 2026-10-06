@@ -573,10 +573,10 @@ function testBindings(seq, imports, testNames = []) {
   for (const [local, binding] of imports) if (binding.imported === '*' && binding.specifier === '@playwright/test') roots.add(`${local}.test`);
   const extensions = new Map();
   for (let i = 0; i < seq.length; i++) {
-    if (!['const', 'let', 'var'].includes(seq[i].value) || seq[i + 1]?.type !== 'ident' || !isPunct(seq[i + 2], '=')) continue;
-    const name = seq[i + 1].value;
-    let base = seq[i + 3]?.value;
-    let next = i + 4;
+    if (seq[i].type !== 'ident' || isDot(seq[i - 1]) || !isPunct(seq[i + 1], '=')) continue;
+    const name = seq[i].value;
+    let base = seq[i + 2]?.value;
+    let next = i + 3;
     if (isDot(seq[next]) && seq[next + 1]?.value === 'test' && roots.has(`${base}.test`)) { base += '.test'; next += 2; }
     if (!roots.has(base)) continue;
     if (!isDot(seq[next])) {
@@ -683,6 +683,14 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
 
   const imports = importsOf(lexed.tokens);
   const locatorVariables = new Set();
+  // Overloaded actions take values on Locators and selectors on Pages/Frames.
+  // Unknown receivers must not turn file paths or input text into XPath findings.
+  const pageExpression = (seq, end) => {
+    if (seq[end]?.type === 'ident') return /^(?:page\d*|p\d+|frame\d*|popup\d*)$|(?:Page|Frame)$/.test(seq[end].value);
+    if (!isPunct(seq[end], ')')) return false;
+    const open = seq.openers[end];
+    return isDot(seq[open - 2]) && /^(?:frame|\w*Frame)$/.test(seq[open - 1]?.value ?? '');
+  };
   const locatorExpression = (seq, end) => {
     if (seq[end]?.type === 'ident') return locatorVariables.has(seq[end].value);
     if (!isPunct(seq[end], ')')) return false;
@@ -712,7 +720,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
           const open = seq.openers[i - 1];
           if (seq[open - 1]?.type === 'ident' && seq[open - 2]?.value === 'new') receiver = { kind: 'new', name: seq[open - 1].value };
         }
-        memberCalls.push({ name: seq[i + 1].value, start: seq[i + 1].start, line: seq[i + 1].line, first, receiver, locator: locatorExpression(seq, i - 1) });
+        memberCalls.push({ name: seq[i + 1].value, start: seq[i + 1].start, line: seq[i + 1].line, first, receiver, locator: locatorExpression(seq, i - 1), page: pageExpression(seq, i - 1) });
       }
       if (token.type === 'ident' && isPunct(seq[i + 1], '=')) {
         let k = i + 2;
@@ -816,7 +824,9 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
       raw.push({ rule: 'fixed-wait', offset: call.start, line: call.line, message: 'waitForTimeout による固定待機は禁止です。自動待機ロケーターと expect のリトライに任せてください' });
       continue;
     }
-    const xpath = (CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (!call.locator && SELECTOR_METHODS.has(call.name))) && isTitle(call.first) && XPATH.test(call.first.value);
+    const selector = CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (call.page && !call.locator && SELECTOR_METHODS.has(call.name));
+    const filePath = call.name === 'setInputFiles' && /^\s*\.\.?\//.test(call.first?.value ?? '');
+    const xpath = selector && !filePath && isTitle(call.first) && XPATH.test(call.first.value);
     if (CSS_LOCATORS.has(call.name) || xpath) {
       const what = xpath ? `XPath (${call.first.value})` : `${call.name}()`;
       raw.push({ rule: 'forbidden-locator', offset: call.start, line: call.line, message: `${what} は禁止です。getByRole / getByLabel / getByText / getByTestId を使ってください` });
@@ -1137,12 +1147,12 @@ function residualsOf(repo, state, change) {
     } catch (err) {
       state.residuals.set(change.path, []);
       state.residualErrors ??= new Map();
-      state.residualErrors.set(change.path, `evidence.md を読み取れません (${err.code ?? err.message})`);
+      state.residualErrors.set(change.path, { message: `evidence.md を読み取れません (${err.code ?? err.message})` });
       return [];
     }
     if (parsed.error) {
       state.residualErrors ??= new Map();
-      state.residualErrors.set(change.path, parsed.error);
+      state.residualErrors.set(change.path, { message: parsed.error, missingBlock: parsed.missing });
     }
     const list = Array.isArray(parsed.data?.residuals) ? parsed.data.residuals.filter(item => item && typeof item === 'object') : [];
     state.residuals.set(change.path, list);
@@ -1184,6 +1194,7 @@ export function lintRepo(repo, changes, options = {}) {
   const active = changes.filter(change => change.lifecycle !== 'deleted');
   const configErrors = new Set(state.policy.errors);
   const modes = active.map(change => ({ change, mode: modeFor(change, state.policy, env, notes, configErrors) }));
+  if (!active.length) modeFor({}, state.policy, env, notes, configErrors);
   const consulted = new Set();
   const readResiduals = change => {
     consulted.add(change.path);
@@ -1236,17 +1247,26 @@ export function lintRepo(repo, changes, options = {}) {
       place({ rule: 'unparseable', file, line: analysis.errorLine, test: null, message: `字句解析できません: ${analysis.error}` }, scope);
       continue;
     }
-    // Only parsed test tags establish ownership; comments and unrelated strings cannot grant approval.
+    // Parsed test/describe tags establish ownership; file tags apply only outside tests.
     // Selected evidence wins over historical records with the same ID. Untagged helpers retain
     // historical exceptions, but ambiguous historical IDs require a unique ID.
     const selectedIds = new Set(selectedResiduals.map(item => item.id));
     const statusOf = item => {
       if (item.error) return { status: 'invalid', detail: item.error };
       const targets = analysis.tests.filter(test => (test.start <= item.from && item.from < test.end) || (item.from <= test.start && test.start < item.to));
-      const tags = new Set(targets.flatMap(test => test.tags));
+      const describes = analysis.blocks.filter(block => block.kind === 'describe' && block.bodyStart <= item.from && item.from < block.bodyEnd);
+      let ownerTags = targets.flatMap(test => test.tags);
+      if (!targets.length) {
+        ownerTags = describes.flatMap(block => block.ownTags);
+        if (!ownerTags.some(tag => [...active, ...state.knownChanges].some(change => tag === `@${change.id}`))) {
+          ownerTags = analysis.blocks.flatMap(block => block.ownTags);
+        }
+      }
+      const tags = new Set(ownerTags);
       const tagged = [...active, ...state.knownChanges].some(change => tags.has(`@${change.id}`));
+      const helperOnly = analysis.blocks.length === 0;
       const owners = state.knownChanges.filter(change =>
-        !active.some(selected => selected.path === change.path) && (!tagged || tags.has(`@${change.id}`)));
+        !active.some(selected => selected.path === change.path) && ((!tagged && helperOnly) || tags.has(`@${change.id}`)));
       const residuals = [...selectedResiduals, ...owners.flatMap(readResiduals).filter(record => !selectedIds.has(record.id))];
       return residualStatus(item.residual, residuals);
     };
@@ -1304,7 +1324,10 @@ export function lintRepo(repo, changes, options = {}) {
     }
   }
 
-  for (const [path, message] of state.residualErrors ?? []) if (consulted.has(path)) place({ rule: 'unreadable', file: `${path}/evidence.md`, message }, { enforced: true });
+  for (const [path, error] of state.residualErrors ?? []) {
+    if (!consulted.has(path) || (error.missingBlock && !active.some(change => change.path === path))) continue;
+    place({ rule: 'unreadable', file: `${path}/evidence.md`, message: error.message }, { enforced: true });
+  }
   result.notes = [...notes];
   result.failed = result.enforced.length;
   return result;

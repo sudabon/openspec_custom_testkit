@@ -40,7 +40,7 @@ export function doctor(repo, options = {}) {
     if (lint.missing.length) {
       notes.push(`quality-policy.md に ${lint.missing.join(' / ')} がありません。既定値（e2e_lint_mode: enforce / e2e_lint_scope: changed）で動かします。設定する場合は人間が追記してください`);
     }
-    notes.push(...lint.invalid);
+    failures.push(...lint.errors);
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);

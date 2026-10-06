@@ -10,7 +10,7 @@ import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs
 
 export function executionBlock(markdown) {
   const body = section(markdown, '## Execution Records');
-  if (body == null) return { error: '## Execution Records がありません' };
+  if (body == null) return { error: '## Execution Records がありません', missing: true };
   const match = body.match(/```json\s*([\s\S]*?)```/);
   if (!match) return { error: 'Execution Records の JSON がありません' };
   try {

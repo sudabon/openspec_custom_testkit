@@ -34,13 +34,21 @@ E2E required の change が検査対象にある場合、強制範囲は「検�
 
 `node scripts/testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]` は E2E ルート全体の指摘を強制範囲と警告範囲に分けて表示する。`--phase` の既定値は `plan`。検査ファイル数も表示する。終了コードは強制範囲の失敗、不正な抑止・設定、入力の読み取り失敗、検査ソース 0 件、change 選択・適用状態の判定失敗があれば 1、引数の誤りは 2、それ以外は 0 である。test-plan 未作成の計画途中の change は、適用状態の判定失敗に含めない。対象 change が 0 件でもソースを検査できれば警告一覧を表示する。`check` の終了コードの意味は変わらない。
 
-欄が無い場合は既定値（`enforce` / `changed`）で動く。doctor は欄が無いことを note として表示するが、失敗にはしない。policy の不正値・未知の `e2e_lint_*` キーと、旧 schema に適用する環境変数の不正値は `invalid-config` として失敗する。統合 schema では環境変数を引き続き無視する。
+欄が無い場合は既定値（`enforce` / `changed`）で動く。doctor は欄が無いことを note として表示するが、失敗にはしない。policy の不正値・未知の `e2e_lint_*` キーと、旧 schema に適用する環境変数の不正値は `invalid-config` として失敗する。統合 schema では環境変数を引き続き無視する。対象 change が無い lint でも、不正な環境変数は診断して失敗する。
 
 ### 例外の承認
 
+XPath の引数検査では、`page` / `p2` / `popup` / `frame`、末尾が `Page` / `Frame` の名前、`frame()` / `*Frame()` の戻り値を Page / Frame の受け手として扱う。型解析は行わないため、それ以外の名前では `fill()` 等の値引数を XPath と判定しない。`setInputFiles()` の `./` / `../` はファイルパスとして扱う。`locator()` 等の禁止メソッドの検出は受け手によらない。
+
 規則の例外は、理由と evidence の Residual ID を書いた抑止コメント `// e2e-lint-allow <rule-id> <residual-id>: <理由>` でだけ書ける。抑止コメントは独立した行に置く。文の行末への配置、ブロックコメントと同じ行へのコード配置、describe 全体の抑止は無効とする。効力は直後の 1 文、またはテスト宣言の直前に置いた場合はそのテスト全体に限る。参照先は change の `evidence.md` の Execution Records にある `residuals[]` で、反例の Residual と同じく `reason`、`impact`、`approved_by`、`approved_at` を検査する。
 
-参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。コメント・一般文字列・同じファイルの別テストのタグは参照先を増やさない。change タグのない共有 helper 等では、archive を含む既知の全 change を候補とし、過去の承認の再利用を認める。同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。
+参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。
+
+テスト内の抑止では、そのテストと囲んでいる describe のタグを使い、別テストのタグは参照先を増やさない。フック等のテスト外の抑止では、囲んでいる describe の change タグを使い、それが無い場合は同じファイル内のテスト・describe のタグを使う。コメント・一般文字列は参照先を増やさない。全履歴を候補にするのはテスト・describe の宣言が無い helper 専用ファイルに限り、archive の過去の承認の再利用を認める。選択されていない change の evidence に Execution Records が無い場合は Residual なしと扱うが、JSON の破損や読み取り失敗はエラーとする。
+
+同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。
+
+Residual ID は候補となる change 間で衝突しないよう、`RES-demo-001` のように change 名を含めて採番することを推奨する。`RES-1` のような ID を再利用すると、選択中の同名記録が過去の抑止にも優先され、承認を取り消したり意図せず承認したりする。archive 間の同名 ID も helper の参照を曖昧にするため、既存 ID を変更するときは evidence と抑止コメントを一緒に更新する。`old/RES-1` のような名前空間を解釈する機能は無い。
 
 - 承認済みの Residual を参照する抑止は「承認済みの例外」として通る。
 - 未承認の Residual を参照する抑止は、plan では「承認待ち」の警告にして作業を止めない。final では強制範囲内で失敗する（範囲外は警告）。

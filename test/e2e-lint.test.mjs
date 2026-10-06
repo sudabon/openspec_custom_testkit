@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { main } from '../lib/cli.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { lintChange, lintRepo, lintSource } from '../payload/scripts/lib/e2e-lint.mjs';
-import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
+import { evaluateChange, maxLevel } from '../payload/scripts/lib/evaluate.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
 import { capture, gitRepo } from './support.mjs';
 
@@ -517,6 +517,7 @@ test('install ships the lint without touching package.json or an edited policy, 
     assert.ok(stamp.files['scripts/lib/e2e-lint.mjs']);
     const result = doctor(repo.dir);
     assert.match(result.notes.join('\n'), /e2e_lint_mode \/ e2e_lint_scope がありません/);
+    assert.equal(result.notes.filter(line => line.includes('e2e_lint_mode')).length, 1);
     assert.equal(result.failures.some(line => line.includes('e2e_lint')), false);
   } finally {
     repo.cleanup();
@@ -739,14 +740,14 @@ test('an unreadable E2E source fails instead of producing a clean root report', 
 });
 
 test('method names resembling control keywords allow division and newline ! starts a regex expression', () => {
-  for (const expression of ['promise.catch(e) / 2', 'Symbol.for(k) / 2', 'obj?.if(k) / 2', 'a\n!/re/.test(s)', 'a\r\n!/re/.test(s)']) {
+  for (const expression of ['promise.catch(e) / 2', 'Symbol.for(k) / 2', 'obj?.if(k) / 2', 'a\n!/[)]/.test(s)', 'a\r\n!/[)]/.test(s)']) {
     const result = lintSource(`test('@demo @TP-001', () => { ${expression}; expect(1).toBe(1); });`);
     assert.equal(result.error, null, expression);
     assert.deepEqual(result.findings, [], expression);
   }
 });
 
-test('XPath detection follows arbitrary Page names and Frame calls while Locator values remain values', () => {
+test('XPath detection follows recognized Page names and Frame calls while Locator values remain values', () => {
   for (const source of ["popup.click('//a')", "p2.fill('//input', 'value')", "page.mainFrame().click('//a')", "frame.waitForSelector('//a')"]) {
     assert.equal(lintSource(source).findings[0]?.rule, 'forbidden-locator', source);
   }
@@ -759,6 +760,7 @@ test('CommonJS, namespace, direct aliases and exported extensions retain test ru
   const sources = [
     "const { test: it3 } = require('@playwright/test'); it3",
     "const t4 = test; t4",
+    "let t; t = test; t",
     "import * as pw from '@playwright/test'; pw.test",
     "const pw = require('@playwright/test'); pw.test",
     "import { test as base } from '@playwright/test'; export const myTest = base.extend({}); myTest",
@@ -805,6 +807,11 @@ test('residual lookup ignores comment tags and includes selected approvals for h
     let result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.exceptions.length, 0);
     assert.match(result.enforced[0].text, /人間の承認がありません/);
+    write(repo, 'tests/e2e/test.spec.ts', source('@old'));
+    result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+    assert.equal(result.exceptions.length, 0);
+    assert.match(result.warned[0].text, /人間の承認がありません/);
+    write(repo, 'tests/e2e/test.spec.ts', source('@demo'));
     // A comment cannot borrow an archived ID even when selected evidence lacks that ID.
     write(repo, 'openspec/changes/demo/evidence.md', evidence([{ ...approved, id: 'RES-NEW' }]));
     result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
@@ -916,9 +923,176 @@ test('gate preserves known risk on filesystem failures and rethrows internal typ
     mkdirSync(join(repo.dir, 'openspec/changes/demo/evidence.md'));
     const result = evaluateChange(repo.dir, change(), { phase: 'final', plan: false });
     assert.equal(result.level, 'high');
-    assert.match(result.failures[0], /gate 入力を読み取れません/);
+    assert.match(result.failures.join('\n'), /Risk Register[\s\S]*gate 入力を読み取れません/);
     assert.throws(() => evaluateChange(repo.dir, change({ path: {} })), { code: 'ERR_INVALID_ARG_TYPE' });
     const duplicate = evaluateChange(repo.dir, change({ errors: ['same', 'same'] }), { quality: false, plan: false });
     assert.deepEqual(duplicate.failures, ['same', 'same']);
+  } finally { repo.cleanup(); }
+});
+
+test('describe hooks and file-level functions cannot borrow unrelated archived approvals', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    const wait = `// e2e-lint-allow fixed-wait RES-1: exception
+await page.waitForTimeout(500);`;
+    const sources = [
+      `test.describe('@demo', () => { test.beforeEach(async ({ page }) => {
+${wait}
+}); test('@TP-001', () => expect(1).toBe(1)); });`,
+      `test.describe('@demo', () => { test.describe('nested', () => { test.beforeAll(async () => {
+${wait}
+}); }); });`,
+      `async function setup(page) {
+${wait}
+}
+${strongSpec('tagged', ['@demo', '@TP-001'])}`,
+      `async function setup(page) {
+${wait}
+}
+test('untagged spec', () => expect(1).toBe(1));`,
+    ];
+    for (const source of sources) {
+      write(repo, 'tests/e2e/test.spec.ts', source);
+      const result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+      assert.equal(result.exceptions.length, 0, source);
+      assert.match(result.enforced.map(item => item.text).join('\n'), /RES-1 が evidence の residuals にありません/, source);
+    }
+    // An unrelated test must not widen a tagged describe's ownership either.
+    write(repo, 'tests/e2e/test.spec.ts', sources[0] + strongSpec('old', ['@old', '@TP-002']));
+    assert.equal(lintRepo(repo.dir, [change()], { env: {} }).exceptions.length, 0);
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    assert.equal(lintRepo(repo.dir, [change()], { env: {}, phase: 'final' }).exceptions.length, 1);
+  } finally { repo.cleanup(); }
+});
+
+test('value-taking receivers do not interpret paths or input text as XPath', () => {
+  for (const source of [
+    "fileChooser.setInputFiles('./fixtures/a.pdf')",
+    "fileChooser.setInputFiles('../fixtures/a.pdf')",
+    "async function upload(input: Locator) { await input.setInputFiles('./c.pdf'); }",
+    "page.keyboard.type('// comment')",
+    "page.mouse.click('// value')",
+    "page.touchscreen.tap('// value')",
+    "po.input.fill('//x')",
+    "page.setInputFiles('./file')",
+  ]) assert.deepEqual(lintSource(source).findings, [], source);
+  for (const source of ["page.setInputFiles('//input', './file')", "popup.fill('//input', '//x')", "page.mainFrame().click('../a')"]) {
+    assert.equal(lintSource(source).findings[0]?.rule, 'forbidden-locator', source);
+  }
+});
+
+test('historical evidence without Execution Records is empty, but selected or malformed evidence fails', () => {
+  const repo = gitRepo();
+  try {
+    const legacy = change({ id: 'legacy', path: 'openspec/changes/archive/2026-01-01-legacy' });
+    write(repo, `${legacy.path}/evidence.md`, '# Evidence\n## Test Results\nLegacy evidence\n');
+    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    write(repo, 'tests/e2e/helper.ts', `export async function wait(page) {
+// e2e-lint-allow fixed-wait RES-1: inherited
+await page.waitForTimeout(500);
+}`);
+    for (const order of [[[], [legacy]], [[legacy], []]]) {
+      const cache = {};
+      for (const changes of order) {
+        const result = lintRepo(repo.dir, changes, { env: {}, cache });
+        assert.equal(result.exceptions.length, 1);
+        assert.equal(result.failed, changes.length);
+        if (changes.length) assert.match(result.enforced[0].text, /Execution Records がありません/);
+      }
+    }
+    write(repo, `${legacy.path}/evidence.md`, '## Execution Records\n```json\n{ broken\n```\n');
+    const malformed = lintRepo(repo.dir, [], { env: {} });
+    assert.equal(malformed.failed, 1);
+    assert.match(malformed.enforced[0].text, /JSON が不正/);
+  } finally { repo.cleanup(); }
+});
+
+test('doctor rejects invalid lint policy values and unknown keys', () => {
+  const repo = gitRepo();
+  try {
+    for (const setting of ['e2e_lint_mode: ENFORCE', 'e2e_lint_scope: ALL', 'e2e_lint_scop: all']) {
+      write(repo, 'openspec/quality-policy.md', shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, '') + `\n${setting}\n`);
+      const result = doctor(repo.dir);
+      assert.equal(result.ok, false);
+      assert.match(result.failures.join('\n'), /e2e_lint_.*(?:不正|未知)|未知.*e2e_lint_/);
+      assert.doesNotMatch(result.notes.join('\n'), /不正|未知/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('invalid environment settings are diagnosed even when no changes are selected', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    for (const env of [{ QE_E2E_LINT_MODE: 'ENFORCE' }, { QE_E2E_LINT_SCOPE: 'ALL' }]) {
+      const result = lintRepo(repo.dir, [], { env });
+      assert.equal(result.failed, 1);
+      assert.equal(result.enforced[0].rule, 'invalid-config');
+      assert.match(result.notes.join('\n'), /QE_E2E_LINT_.*不正/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('gate keeps unknown risk when quality cannot be read before any risk is known', () => {
+  const repo = gitRepo();
+  try {
+    mkdirSync(join(repo.dir, 'openspec/changes/demo/quality.md'), { recursive: true });
+    const result = evaluateChange(repo.dir, change({ errors: ['selection failure'] }));
+    assert.equal(result.level, 'unknown');
+    assert.equal(result.failures[0], 'selection failure');
+    assert.match(result.failures[1], /gate 入力を読み取れません/);
+  } finally { repo.cleanup(); }
+});
+
+test('CI catches internal evaluator errors, evaluates remaining changes, and writes summary/output', () => {
+  const repo = gitRepo();
+  try {
+    for (const id of ['a', 'b']) {
+      write(repo, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
+      write(repo, `openspec/changes/${id}/quality.md`, '---\nrisk_level: low\n---\n');
+    }
+    repo.commit('changes');
+    const evaluated = [];
+    const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') }, {
+      cwd: repo.dir,
+      evaluateChange(_repo, selected) {
+        evaluated.push(selected.id);
+        if (selected.id === 'a') throw new TypeError('unexpected evaluator failure');
+        return { phase: 'plan', warnings: [], failures: [] };
+      },
+    });
+    assert.equal(result.code, 1);
+    assert.deepEqual(evaluated, ['a', 'b']);
+    assert.match(readFileSync(join(result.summaryDir, 'summary.txt'), 'utf8'), /a: gate 評価中.*TypeError: unexpected evaluator failure/);
+    assert.match(readFileSync(join(repo.dir, 'output'), 'utf8'), /risk_level=low/);
+  } finally { repo.cleanup(); }
+});
+
+test('known high risk survives unknown changes and still requires and runs mutation', () => {
+  assert.equal(maxLevel(['unknown', 'high']), 'high');
+  assert.equal(maxLevel(['high', 'unknown']), 'high');
+  assert.equal(maxLevel(['low', 'unknown']), 'unknown');
+  const repo = gitRepo();
+  try {
+    for (const id of ['a', 'b']) write(repo, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
+    write(repo, 'openspec/changes/a/quality.md', '---\nrisk_level: high\n---\n');
+    // A committed file keeps b selected while its working-tree input becomes unreadable.
+    write(repo, 'openspec/changes/b/tasks.md', '- [ ] 1.1 plan\n');
+    repo.commit('changes');
+    mkdirSync(join(repo.dir, 'openspec/changes/b/quality.md'));
+    const env = { BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') };
+    const missing = runCiJob(env, { cwd: repo.dir });
+    assert.equal(missing.code, 1);
+    assert.equal(missing.riskLevel, 'high');
+    assert.match(missing.lines.join('\n'), /mutation-command が必要/);
+    const commands = [];
+    const result = runCiJob({ ...env, MUTATION_COMMAND: 'run-mutation' }, {
+      cwd: repo.dir, execFile(file, args) { commands.push([file, ...args]); return 'mutation ok'; },
+    });
+    assert.equal(result.riskLevel, 'high');
+    assert.equal(result.code, 1);
+    assert.deepEqual(commands, [['bash', '-c', 'run-mutation']]);
+    assert.match(readFileSync(join(repo.dir, 'output'), 'utf8'), /risk_level=high/);
   } finally { repo.cleanup(); }
 });

@@ -77,7 +77,8 @@ await expect(page.getByRole('banner')).toBeVisible();
 
 - 書式は `e2e-lint-allow <rule-id> <residual-id>: <理由>`。独立した行に置き、効力は直後の 1 文だけ。行末の抑止、ブロックコメントと同じ行へのコード配置、describe 直前の抑止は無効。テスト宣言の直前に置いた場合はそのテスト全体に効く。ファイル全体を抑止する書式は無い
 - 抑止は人間承認済み Residual が必要。`<residual-id>` は change の `evidence.md` の Execution Records にある `residuals[]` の `id` で、`reason` / `impact` / `approved_by` / `approved_at` がそろっている必要がある
-- 参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。コメント・一般文字列・同じファイルの別テストのタグは参照先を増やさない。change タグのない共有 helper 等では、archive を含む既知の全 change を候補とし、過去の承認の再利用を認める。同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。
+- 参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。テスト内の抑止では、そのテストと囲んでいる describe のタグを使い、別テストのタグは参照先を増やさない。フック等のテスト外の抑止では、囲んでいる describe の change タグを使い、それが無い場合は同じファイル内のテスト・describe のタグを使う。コメント・一般文字列は参照先を増やさない。全履歴を候補にするのはテスト・describe の宣言が無い helper 専用ファイルに限り、archive の過去の承認の再利用を認める。選択されていない change の evidence に Execution Records が無い場合は Residual なしと扱うが、JSON の破損や読み取り失敗はエラーとする。同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。
+- Residual ID は `RES-demo-001` のように change 名を含め、候補 change 間で一意にすることを推奨する。同名 ID があると選択中の記録が過去の抑止にも優先され、承認状態が変わる。archive 間の重複も helper の参照を曖昧にする。ID 変更時は evidence と抑止コメントを一緒に更新する。`old/RES-1` のような名前空間の解釈は行わない
 - Agent は `approved_by` を記入しない。Agent が抑止を書いても plan では「承認待ち」の警告になり、強制範囲内の final は通らない（範囲外は警告）
 - Residual ID の無い抑止と、存在しない ID を参照する抑止は強制範囲や旧 schema の warn モードにかかわらず plan と final の両方で失敗する。書式・規則 ID・配置が不正な場合も同じ
 - `toBeVisible` だけで済ませたい場合も、まず状態の変化を観測する Oracle に書き直せないか検討する。抑止は人間へエスカレーションしてから書く

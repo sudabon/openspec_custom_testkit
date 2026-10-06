@@ -31,12 +31,13 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
-  const progress = { level: 'unknown' };
+  const progress = { level: 'unknown', failures: [], warnings: [], oks: [] };
   try {
     return evaluateReadableChange(repo, change, options, progress);
   } catch (err) {
     if (typeof err.syscall !== 'string' || typeof err.code !== 'string' || !/^E[A-Z]+$/.test(err.code)) throw err;
-    return { failures: [`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`], warnings: [], oks: [], level: progress.level, phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
+    progress.failures.push(`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`);
+    return { ...progress, phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
   }
 }
 
@@ -44,9 +45,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
-  const failures = [];
-  const warnings = [];
-  const oks = [];
+  const { failures, warnings, oks } = progress;
   let level = 'none';
 
   const selectedCustomQe = change.qe === true && change.scope === 'out-of-scope' && change.lifecycle !== 'deleted';
@@ -143,6 +142,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
 }
 
 export function maxLevel(levels) {
+  if (levels.includes('high')) return 'high';
   if (levels.includes('unknown')) return 'unknown';
   const rank = { none: 0, low: 1, medium: 2, high: 3 };
   return levels.reduce((best, level) => (rank[level] ?? 0) > (rank[best] ?? 0) ? level : best, 'none');
