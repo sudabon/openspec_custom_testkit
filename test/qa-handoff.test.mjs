@@ -6,7 +6,7 @@ import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
 import { sha256File } from '../payload/scripts/lib/hash.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
-import { handoffNeed } from '../payload/scripts/lib/qa-handoff.mjs';
+import { handoffNeed, residualHeadingErrors } from '../payload/scripts/lib/qa-handoff.mjs';
 import { gitRepo } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
@@ -351,6 +351,187 @@ test('QA handoff tasks alone count as an implementation start before seal', () =
     writeFileSync(quality, readFileSync(quality, 'utf8').replace(`oracle_digest: "${ctx.digest}"`, 'oracle_digest: ""'));
     const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
     assert.ok(has(result, 'seal'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('the shipped tasks template, fully checked, reaches the final handoff check before QA', () => {
+  const template = readFileSync(new URL('payload/openspec/schemas/quality-driven-e2e/templates/tasks.md', root), 'utf8');
+  const ctx = setup({ tasks: template.replaceAll('- [ ]', '- [x]') });
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff());
+    const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan', tags: false });
+    assert.equal(result.phase, 'final');
+    assert.deepEqual(result.failures, []);
+    assert.ok(result.warnings.some(line => line.includes('QA 実施結果が未記入')), JSON.stringify(result.warnings));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('apply does not wait for the handoff', () => {
+  const schema = readFileSync(new URL('payload/openspec/schemas/quality-driven-e2e/schema.yaml', root), 'utf8');
+  assert.match(schema, /^apply:\n {2}requires: \[ tasks \]$/m);
+  assert.doesNotMatch(schema, /^\s+- id: qa-handoff$/m);
+});
+
+test('the last filled QA result row is the current verdict', () => {
+  const ctx = setup({ lifecycle: 'archived' });
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({ result: '| QA-担当 | 2026-10-05 | pass | なし |\n| QA-担当 | 2026-10-06 | fail | 印刷崩れ |' }));
+    assert.ok(has(run(ctx), 'QA 判定が fail'));
+    writeHandoff(ctx, handoff({ result: '| QA-担当 | 2026-10-05 | fail | 印刷崩れ |\n| QA-担当 | 2026-10-06 | pass | 再実施で解消 |' }));
+    assert.deepEqual(run(ctx).failures, []);
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('an invalid QA result names the bad field', () => {
+  const ctx = setup({ lifecycle: 'archived' });
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({ result: '| QA-担当 | 2026/10/06 | 合格 | なし |' }));
+    const result = run(ctx);
+    assert.ok(has(result, '2026/10/06', 'YYYY-MM-DD'), JSON.stringify(result.failures));
+    assert.ok(has(result, '合格', 'pass / fail'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+  const active = setup();
+  try {
+    manualCase(active);
+    writeHandoff(active, handoff({ result: '| QA-担当 | 2026-10-06 | 合格 | なし |' }));
+    const result = run(active);
+    assert.deepEqual(result.failures, []);
+    assert.ok(result.warnings.some(line => line.includes('不正') && line.includes('合格')), JSON.stringify(result.warnings));
+  } finally {
+    active.repo.cleanup();
+  }
+});
+
+test('residual items are read from numbered and indented lists but not from bold notes', () => {
+  const quality = body => `## Test Layer Mapping\n${LAYER_HEADER}\n| F1 | Unit | 理由 |\n## Residual Risk\n${body}\n`;
+  const ids = body => handoffNeed({ qualityText: quality(body), evidence: null }).quality.map(item => item.id);
+  assert.deepEqual(ids('1. RR1: 時刻\n2) RR2: 端末'), ['RR1', 'RR2']);
+  assert.deepEqual(ids('  - RR1: 時刻\n+ RR2: 端末'), ['RR1', 'RR2']);
+  assert.deepEqual(ids('**注:** 下記以外は保証する\n- なし'), []);
+  assert.deepEqual(residualHeadingErrors(quality('- なし')), []);
+});
+
+test('a Residual Risk heading in another form fails the plan gate', () => {
+  for (const heading of ['### Residual Risk', '## Residual Risks']) {
+    const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
+    try {
+      writeQuality(ctx);
+      const path = join(ctx.repo.dir, ctx.change.path, 'quality.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace('## Residual Risk', heading));
+      const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
+      assert.ok(has(result, heading, '## Residual Risk'), JSON.stringify(result.failures));
+    } finally {
+      ctx.repo.cleanup();
+    }
+  }
+});
+
+test('unknown layer values and Manual rows without a failure mode fail the plan gate', () => {
+  const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
+  try {
+    writeQuality(ctx, { layers: [['F1', 'Unit / e2e', '理由'], ['F2', '手動', '理由'], ['F3', 'Manaul', '理由'], ['', 'Manual', '実機が必要']] });
+    const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
+    assert.ok(has(result, 'F2', '手動', 'Layer'), JSON.stringify(result.failures));
+    assert.ok(has(result, 'F3', 'Manaul', 'Layer'), JSON.stringify(result.failures));
+    assert.equal(result.failures.some(line => line.includes('F1')), false, JSON.stringify(result.failures));
+    assert.ok(has(result, 'Manual 層の行に Failure Mode の ID がありません'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('each missing handoff section is reported', () => {
+  for (const heading of ['自動化済み範囲', '手動確認範囲', '探索チャーター', 'QA 実施結果']) {
+    const ctx = setup();
+    try {
+      manualCase(ctx);
+      writeHandoff(ctx, handoff().replace(`## ${heading}`, `## ${heading}（旧）`));
+      const result = run(ctx);
+      assert.ok(has(result, `## ${heading} がありません`), JSON.stringify(result.failures));
+    } finally {
+      ctx.repo.cleanup();
+    }
+  }
+});
+
+test('empty required cells in the automated and manual scopes are reported', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({ automated: ['| R1 | F1 |  | Unit | |  |'], manual: ['| F2 | Manual |  | 実機プリンタが必要 |'] }));
+    const result = run(ctx);
+    assert.ok(has(result, '自動化済み範囲', 'R1', 'Oracle', '空'), JSON.stringify(result.failures));
+    assert.ok(has(result, '自動化済み範囲', 'R1', 'Run-ID', '空'), JSON.stringify(result.failures));
+    assert.ok(has(result, '手動確認範囲', 'F2', '確認観点', '空'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('a manual id does not match a longer id with the same prefix', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({ manual: ['| F20 | Manual | 別物 | 理由 |'] }));
+    const result = run(ctx);
+    assert.ok(has(result, '手動確認範囲に F2 がありません'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('automated oracle and run ids must come from the evidence of that risk', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({ automated: ['| R1 | F1 | O9 | Unit | | run-9 |'] }));
+    const result = run(ctx);
+    assert.ok(has(result, 'R1', 'O9', 'oracles'), JSON.stringify(result.failures));
+    assert.ok(has(result, 'R1', 'run-9', 'run_ids'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('unreadable evidence gives one warning instead of an error per automated row', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    writeFileSync(join(ctx.repo.dir, ctx.change.path, 'evidence.md'), '# Evidence\n## Execution Records\n```json\n{broken\n```\n');
+    writeHandoff(ctx, handoff());
+    const result = run(ctx);
+    assert.equal(result.failures.some(line => line.includes('qa-handoff.md の自動化済み範囲')), false, JSON.stringify(result.failures));
+    assert.equal(result.warnings.filter(line => line.includes('照合していません')).length, 1, JSON.stringify(result.warnings));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('manual kinds, charter count, and duplicate ids are checked', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    writeHandoff(ctx, handoff({
+      automated: ['| R1 | F1 | O1 | Unit | | run-1 |', '| R1 | F1 | O1 | Unit | | run-1 |'],
+      manual: ['| F2 | 手動 | 印刷 | 実機が必要 |', '| F2 | Manual | 印刷 | 実機が必要 |'],
+      charters: [],
+    }));
+    const result = run(ctx);
+    assert.ok(has(result, '種別', '手動'), JSON.stringify(result.failures));
+    assert.ok(has(result, '探索チャーターが 0 件'), JSON.stringify(result.failures));
+    assert.ok(has(result, '自動化済み範囲で R1 が重複'), JSON.stringify(result.failures));
+    assert.ok(has(result, '手動確認範囲で F2 が重複'), JSON.stringify(result.failures));
   } finally {
     ctx.repo.cleanup();
   }

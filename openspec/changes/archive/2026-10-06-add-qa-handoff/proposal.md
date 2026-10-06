@@ -28,7 +28,7 @@
 
 ## Impact
 
-- 変更対象: `payload/openspec/schemas/quality-driven-e2e/schema.yaml`（quality と tasks の instruction）、`templates/quality.md`、新規 `templates/qa-handoff.md`、`payload/openspec/quality-policy.md`、`payload/scripts/lib/`（plan-check の層解析、evidence 検査、evaluate の final/archive 判定）、`test/`、`docs/workflow.md`。
+- 変更対象: `payload/openspec/schemas/quality-driven-e2e/schema.yaml`（quality と tasks の instruction）、`templates/quality.md`、新規 `templates/qa-handoff.md`、`payload/openspec/quality-policy.md`、`payload/scripts/lib/`（plan-check の層解析、新規 qa-handoff の検査、evaluate の final/archive 判定）、`test/`、`docs/workflow.md`。
 - 関連する change:
   - `add-qa-role-and-effort-metrics`: QA の役割と工数指標。実施結果欄の記入者をその change の QA 役割に揃える。どちらかが先に archive されたら、後のほうの文言を合わせる。
   - `add-nonfunctional-test-viewpoints`: 層を増やさない方針。本 change の `Manual` 層とは独立している。非機能観点を自動化しないと判断したときの受け皿が `Manual` になる。

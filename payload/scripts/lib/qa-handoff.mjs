@@ -8,20 +8,37 @@ import { layerAssignments } from './plan-check.mjs';
 export const HANDOFF_FILE = 'qa-handoff.md';
 const EXAMPLE_MARK = '<!-- example -->';
 const NONE = /^(?:なし|該当なし|none|n\/a)[。.]?$/i;
+const RESIDUAL_HEADING = '## Residual Risk';
+const BULLET = /^\s*(?:[-*+]|\d+[.)])(?:\s+(.*))?$/;
+const MANUAL_KINDS = ['Manual', 'Residual'];
+const VERDICTS = ['pass', 'fail'];
 
-// Residual Risk items are `- RR1: text`. An empty bullet or a bare "なし" means no residual.
+// Residual Risk items are list items such as `- RR1: text` or `1. RR1: text`, at any indent.
+// An empty item or a bare "なし" means no residual.
 export function qualityResiduals(qualityText) {
-  const body = section(qualityText ?? '', '## Residual Risk') ?? '';
+  const body = section(qualityText ?? '', RESIDUAL_HEADING) ?? '';
   const items = [];
   for (const line of body.split('\n')) {
-    const bullet = line.match(/^[-*]\s*(.*)$/);
+    const bullet = line.match(BULLET);
     if (!bullet) continue;
-    const text = bullet[1].trim();
+    const text = (bullet[1] ?? '').trim();
     if (!text || NONE.test(text)) continue;
     const id = text.match(/^(RR\d+)\s*[:：]/);
     items.push({ id: id ? id[1] : null, text });
   }
   return items;
+}
+
+// A Residual Risk heading in another level or plural would be read as no residual at all.
+export function residualHeadingErrors(qualityText) {
+  const errors = [];
+  for (const line of String(qualityText ?? '').split('\n')) {
+    const heading = line.trim();
+    if (heading !== RESIDUAL_HEADING && /^#{1,6}\s*Residual\s*Risks?\s*$/i.test(heading)) {
+      errors.push(`quality.md の見出し「${heading}」は読み取れません。\`${RESIDUAL_HEADING}\` にしてください`);
+    }
+  }
+  return errors;
 }
 
 function evidenceResiduals(evidence) {
@@ -40,12 +57,12 @@ export function handoffNeed({ qualityText, evidence }) {
   return { required: reasons.length > 0, reasons, manual, quality, residuals };
 }
 
+// A missing or broken evidence file is reported by checkEvidence; here it only disables the comparison.
 function readEvidence(repo, change) {
   const path = join(repo, change.path, 'evidence.md');
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) return { data: null, readable: false };
   const parsed = executionBlock(readFileSync(path, 'utf8'));
-  // A broken evidence file is reported by checkEvidence; here it only means no recorded residuals.
-  return parsed.error ? null : parsed.data;
+  return parsed.error ? { data: null, readable: false } : { data: parsed.data, readable: true };
 }
 
 function cell(row, key) {
@@ -60,17 +77,72 @@ function splitIds(value) {
   return value.split(/[,、\s]+/).map(item => item.trim()).filter(Boolean);
 }
 
+function duplicates(values) {
+  const seen = new Set();
+  const repeated = new Set();
+  for (const value of values.filter(Boolean)) {
+    if (seen.has(value)) repeated.add(value);
+    seen.add(value);
+  }
+  return [...repeated];
+}
+
+// The last filled row is the current verdict, so a re-run of QA can be appended below an earlier result.
 function qaResult(text) {
   const rows = parseTable(section(text, '## QA 実施結果')).rows;
-  const row = rows.find(candidate => Object.values(candidate).some(value => asString(value))) ?? {};
+  const row = rows.findLast(candidate => Object.keys(candidate).some(key => cell(candidate, key))) ?? {};
   return { by: cell(row, '実施者'), at: cell(row, '実施日'), verdict: cell(row, '判定') };
+}
+
+function qaResultProblems(qa) {
+  const problems = [];
+  if (!qa.by) problems.push('実施者が空');
+  if (!qa.at) problems.push('実施日が空');
+  else if (!validDate(qa.at)) problems.push(`実施日 '${qa.at}' が YYYY-MM-DD ではない`);
+  if (!qa.verdict) problems.push('判定が空');
+  else if (!VERDICTS.includes(qa.verdict)) problems.push(`判定 '${qa.verdict}' が pass / fail ではない`);
+  return problems;
+}
+
+function checkAutomated(rows, evidence, errors, warnings) {
+  for (const row of rows) {
+    for (const key of ['Risk', 'Failure Mode', 'Oracle', 'Layer', 'Run-ID']) {
+      if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の自動化済み範囲 ${rowLabel(row, 'Risk')} の ${key} が空です`);
+    }
+  }
+  for (const risk of duplicates(rows.map(row => cell(row, 'Risk')))) errors.push(`${HANDOFF_FILE} の自動化済み範囲で ${risk} が重複しています`);
+  if (!evidence.readable) {
+    warnings.push(`evidence.md の Execution Records を読めないため、${HANDOFF_FILE} の自動化済み範囲を evidence と照合していません`);
+    return;
+  }
+  const results = Array.isArray(evidence.data?.risk_results) ? evidence.data.risk_results.filter(row => row && typeof row === 'object') : [];
+  const passing = new Map(results.filter(row => row.result === 'pass' && asString(row.risk)).map(row => [row.risk, row]));
+  for (const row of rows) {
+    const risk = cell(row, 'Risk');
+    if (!risk) continue;
+    const result = passing.get(risk);
+    if (!result) {
+      errors.push(`${HANDOFF_FILE} の自動化済み範囲に evidence で pass でない ${risk} があります`);
+      continue;
+    }
+    for (const [key, field] of Object.entries({ 'Failure Mode': 'failure_modes', Oracle: 'oracles', 'Run-ID': 'run_ids' })) {
+      const values = Array.isArray(result[field]) ? result[field] : [];
+      for (const id of splitIds(cell(row, key))) {
+        if (!values.includes(id)) errors.push(`${HANDOFF_FILE} の自動化済み範囲 ${risk} の ${id} は evidence の ${field} にありません`);
+      }
+    }
+  }
+  const listed = new Set(rows.map(row => cell(row, 'Risk')));
+  for (const risk of passing.keys()) {
+    if (!listed.has(risk)) errors.push(`${HANDOFF_FILE} の自動化済み範囲に pass の ${risk} がありません`);
+  }
 }
 
 export function checkHandoff(repo, change, { qualityText }) {
   const errors = [];
   const warnings = [];
   const evidence = readEvidence(repo, change);
-  const need = handoffNeed({ qualityText, evidence });
+  const need = handoffNeed({ qualityText, evidence: evidence.data });
   if (!need.required) return { errors, warnings };
 
   for (const item of need.quality) {
@@ -95,36 +167,17 @@ export function checkHandoff(repo, change, { qualityText }) {
   const examples = text.split('\n').filter(line => /^\s*\|/.test(line) && line.includes(EXAMPLE_MARK));
   if (examples.length) errors.push(`${HANDOFF_FILE} にテンプレートの記入例が残っています（${EXAMPLE_MARK} の行が ${examples.length} 件）`);
 
-  const automated = parseTable(sections['自動化済み範囲']).rows;
-  const results = Array.isArray(evidence?.risk_results) ? evidence.risk_results.filter(row => row && typeof row === 'object') : [];
-  const passing = new Map(results.filter(row => row.result === 'pass' && asString(row.risk)).map(row => [row.risk, row]));
-  for (const row of automated) {
-    const risk = cell(row, 'Risk');
-    for (const key of ['Risk', 'Failure Mode', 'Oracle', 'Layer', 'Run-ID']) {
-      if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の自動化済み範囲 ${rowLabel(row, 'Risk')} の ${key} が空です`);
-    }
-    if (!risk) continue;
-    const result = passing.get(risk);
-    if (!result) {
-      errors.push(`${HANDOFF_FILE} の自動化済み範囲に evidence で pass でない ${risk} があります`);
-      continue;
-    }
-    const modes = Array.isArray(result.failure_modes) ? result.failure_modes : [];
-    for (const mode of splitIds(cell(row, 'Failure Mode'))) {
-      if (!modes.includes(mode)) errors.push(`${HANDOFF_FILE} の自動化済み範囲 ${risk} の ${mode} は evidence の failure_modes にありません`);
-    }
-  }
-  const listed = new Set(automated.map(row => cell(row, 'Risk')));
-  for (const risk of passing.keys()) {
-    if (!listed.has(risk)) errors.push(`${HANDOFF_FILE} の自動化済み範囲に pass の ${risk} がありません`);
-  }
+  checkAutomated(parseTable(sections['自動化済み範囲']).rows, evidence, errors, warnings);
 
   const manualRows = parseTable(sections['手動確認範囲']).rows;
   for (const row of manualRows) {
     for (const key of ['ID', '種別', '確認観点', '理由']) {
       if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の手動確認範囲 ${rowLabel(row, 'ID')} の ${key} が空です`);
     }
+    const kind = cell(row, '種別');
+    if (kind && !MANUAL_KINDS.includes(kind)) errors.push(`${HANDOFF_FILE} の手動確認範囲 ${rowLabel(row, 'ID')} の種別 '${kind}' は ${MANUAL_KINDS.join(' / ')} ではありません`);
   }
+  for (const id of duplicates(manualRows.map(row => cell(row, 'ID')))) errors.push(`${HANDOFF_FILE} の手動確認範囲で ${id} が重複しています`);
   const expected = [
     ...need.manual.map(row => row.id).filter(Boolean),
     ...need.quality.map(item => item.id).filter(Boolean),
@@ -134,19 +187,26 @@ export function checkHandoff(repo, change, { qualityText }) {
     if (!manualRows.some(row => hasBoundedToken(cell(row, 'ID'), id))) errors.push(`${HANDOFF_FILE} の手動確認範囲に ${id} がありません`);
   }
 
-  for (const row of parseTable(sections['探索チャーター']).rows) {
+  const charters = parseTable(sections['探索チャーター']).rows;
+  if (sections['探索チャーター'] != null && charters.length === 0) errors.push(`${HANDOFF_FILE} の探索チャーターが 0 件です`);
+  for (const row of charters) {
     for (const key of ['Charter-ID', '目的', '対象', '時間の目安']) {
       if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の探索チャーター ${rowLabel(row, 'Charter-ID')} の ${key} が空です`);
     }
   }
+  for (const id of duplicates(charters.map(row => cell(row, 'Charter-ID')))) errors.push(`${HANDOFF_FILE} の探索チャーターで ${id} が重複しています`);
 
   const qa = qaResult(text);
-  const complete = qa.by && validDate(qa.at) && (qa.verdict === 'pass' || qa.verdict === 'fail');
+  const filled = qa.by || qa.at || qa.verdict;
+  const problems = qaResultProblems(qa);
+  const detail = problems.join('、');
   if (change.lifecycle === 'archived') {
-    if (!complete) errors.push(`archive には ${HANDOFF_FILE} の QA 実施結果（実施者・YYYY-MM-DD の実施日・pass または fail の判定）が必要です`);
+    if (problems.length) errors.push(`archive には ${HANDOFF_FILE} の QA 実施結果（実施者・YYYY-MM-DD の実施日・pass または fail の判定）が必要です（${detail}）`);
     else if (qa.verdict === 'fail') errors.push('QA 判定が fail です。所見を修正するか、Residual として人間が承認し直してから archive してください');
-  } else if (!complete) {
+  } else if (!filled) {
     warnings.push(`${HANDOFF_FILE} の QA 実施結果が未記入です（archive の前に人間が記入します）`);
+  } else if (problems.length) {
+    warnings.push(`${HANDOFF_FILE} の QA 実施結果が不正です（${detail}）`);
   } else if (qa.verdict === 'fail') {
     warnings.push('QA 判定が fail です。archive の前に修正するか、Residual として人間が承認し直してください');
   }

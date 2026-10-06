@@ -313,10 +313,11 @@ artifacts:
         完了条件は、全 Risk の構造化結果、反証、必要な review と Mutation、実行記録の区別があること。
         テンプレートの空欄のまま完了にしない。
       - `## 6. QA Handoff`: Evidence のあとに置く。quality.md に Manual 層があるか、quality.md または evidence に
-        Residual がある change では、次の 2 タスクを置く。
+        Residual がある change では、次の 1 タスクと 1 つの注記を置く。
         (a) qa-handoff.md をテンプレートから、evidence の pass の risk_results と quality.md の Manual 層・Residual で作るタスク。
             完了条件は、記入例の行が残らず、Manual 層の F-ID と Residual の ID がすべて手動確認範囲にあること。
-        (b) QA が手動確認範囲と探索チャーターを実施し、QA 実施結果を記入するタスク。「人間が実施。Agent は記入しない」と書く。
+        (b) QA が手動確認範囲と探索チャーターを実施し、QA 実施結果を記入することの注記。「人間が実施。Agent は記入しない」と書く。
+            チェックボックスにしない。全タスク完了で final 検査が走るので、QA の実施は qa-handoff.md の QA 実施結果欄だけで管理する。
         Manual 層も Residual も無い change では、不要な理由（Manual 層なし・Residual なし）を書いたタスク 1 件だけにする。
         番号 2 以降のタスクの完了は実装開始とみなされるので、seal 前に 6 のタスクを完了にしない。
 
@@ -350,7 +351,8 @@ artifacts:
       ## 6. QA Handoff
 
       - [ ] 6.1 qa-handoff.md を evidence と quality.md から作り、Manual 層の F-ID と Residual の ID がすべて手動確認範囲にあることを確認
-      - [ ] 6.2 QA が手動確認範囲と探索チャーターを実施し、QA 実施結果を記入する。人間が実施。Agent は記入しない
+
+      QA が手動確認範囲と探索チャーターを実施し、qa-handoff.md の QA 実施結果を記入する。人間が実施。Agent は記入しない。
       ```
 
       handoff が不要な change の `## 6. QA Handoff` の例:

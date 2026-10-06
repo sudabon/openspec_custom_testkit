@@ -2,7 +2,7 @@
 
 ## Context
 
-動機は proposal.md の Why を参照する。現状、QA に渡せる情報は evidence.md（機械照合用の JSON が中心）と quality.md の Residual Risk だけである。final gate の検査は `payload/scripts/lib/evaluate.mjs` の `effectivePhase`（archive・削除・全タスク完了で final）と、`evidence-check.mjs` の `checkEvidence` で行う。`change.lifecycle` は archived / active / deleted を区別できるので、archive 時だけの必須項目を追加できる。
+動機は proposal.md の Why を参照する。現状、QA に渡せる情報は evidence.md（機械照合用の JSON が中心）と quality.md の Residual Risk だけである。final gate の検査は `payload/scripts/lib/evaluate.mjs` の `effectivePhase`（archive・削除・全タスク完了で final）と、`evidence-check.mjs` の `checkEvidence` で行う。handoff の検査はこれとは別に新しい `qa-handoff.mjs` の `checkHandoff` に置き、`evaluate.mjs` の final 判定から呼ぶ。`change.lifecycle` は archived / active / deleted を区別できるので、archive 時だけの必須項目を追加できる。
 
 ## Goals / Non-Goals
 
@@ -45,7 +45,7 @@ Manual 層だけを条件にすると、反証で見つかった反例を Residu
 
 ### 4. QA 実施結果は archive で必須、final では警告
 
-final は全タスク完了の時点で走り、CI 上では QA の実施前であることが多い。final で必須にすると「QA を待つために PR を止める」か「Agent に空欄を埋めさせる」誘因になり、後者は人間専用欄の原則に反する。archive は change を閉じる操作なので、ここで実施者・日付・判定を必須にする。判定 `fail` での archive は失敗にする。修正するか、Residual として人間が承認し直すまで閉じさせない。
+final は全タスク完了の時点で走り、CI 上では QA の実施前であることが多い。final で必須にすると「QA を待つために PR を止める」か「Agent に空欄を埋めさせる」誘因になり、後者は人間専用欄の原則に反する。archive は change を閉じる操作なので、ここで実施者・日付・判定を必須にする。判定 `fail` での archive は失敗にする。修正するか、Residual として人間が承認し直すまで閉じさせない。QA の実施は tasks.md のチェックボックスにしない。全タスク完了で final になるので、人間の QA をタスクにすると、QA が終わるまで PR の CI で handoff の検査が走らないためである。
 
 ### 5. 記入例の残りを検出する
 
