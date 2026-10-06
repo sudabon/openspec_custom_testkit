@@ -172,7 +172,7 @@ export function runCiJob(env = process.env, deps = {}) {
       lines.push(...regression.lines);
       regressionCode = regression.code;
     }
-    const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true, env });
+    const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true, env }, deps.coverage);
     // Preserve the command's failure code while still saving the map and final summary.
     lines.push(...[coverage.stdout.trimEnd(), coverage.stderr.trimEnd()].filter(Boolean));
     if (regressionCode) code = code || regressionCode;
@@ -183,7 +183,7 @@ export function runCiJob(env = process.env, deps = {}) {
     }
     if (coverage.model) {
       let json;
-      try { json = renderJson(coverage.model, coverage.summary); }
+      try { json = (deps.coverage?.renderJson ?? renderJson)(coverage.model, coverage.summary); }
       catch (err) { fail(3, `シナリオ対応表の内部エラー:\n${err.stack ?? err}`); }
       if (json !== undefined) try { writeFileSync(join(runDir, 'coverage.json'), json); }
       catch (err) { fail(2, `シナリオ対応表を保存できません: ${err.code ?? err.name}: ${err.message}`); }

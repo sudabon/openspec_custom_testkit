@@ -107,3 +107,20 @@ OpenSpec CLI はローカルの 1.13.1 で、三 schema の validate、`quality-
 全体テストと smoke の初回は sandbox による npm キャッシュ書き込み・Chromium 起動の制限で失敗した。上の成功結果は、許可された sandbox 外で再実行した結果である。
 
 小見出し・コード例を含む test-plan の表、対象外のヘッダ行だけの表・箇条書き混在、ハッシュタグとインデントしたコードの誤検出、参照先のない YAML エイリアスの config / archive / WIP 別の扱いを検証した。結果照合・集計・Markdown / JSON 出力に例外を注入し、終了コード 3 と CI の summary / risk 出力を確認した。2 件目の空白なし Requirement 見出し、specs / archive がファイルの場合と openspec 不在の終了コード 2、小文字の独立 TP 参照の除外、main に無い過去 capability の名前を WIP の照合に持ち越さないことも固定した。
+
+## PR #6 再レビュー修正（c481b50 への指摘）
+
+記録日: 2026-10-06 JST。Critical・Important と不足テストを対応。
+
+| コマンド | 結果 |
+|---|---|
+| `node --test test/coverage.test.mjs` | 86 pass / 0 fail |
+| `npm test` | 224 pass / 0 fail / 0 skipped |
+| `npm run lint` | 成功。250 files scanned |
+| `npm run test:smoke` | 成功（exit 0） |
+| `node payload/scripts/testkit-gate.mjs coverage --format json` | exit 0。118 シナリオ、対応不明・旧形式対応不明・警告は各 0 件 |
+| `git diff --check` | 成功 |
+
+全体テストの初回は、配布テスト内の npm pack が sandbox の npm キャッシュ書き込み制限（EPERM）で失敗した。224 件の成功は、許可された sandbox 外で再実行した結果である。
+
+全角コロン・括弧の不正な見出し、インラインコードとフェンスの区別、未閉鎖フェンスの main / archive / WIP 別の診断、フェンス終了の記号・長さ・info 文字列、1〜3 空白付きの見出しを検証した。複数表の列順、説明用メモと箇条書き宣言の区別、インデントしたパイプ表の互換性、コード例内 TP-ID の除外も固定した。不正な config.yaml / config.yml はパス付きの終了コード 2 とし、CI が coverage.md・summary.txt・risk_level を保持することを確認した。内部エラーの各処理段階のテストは、グローバル関数の置換とスタック文字列による発火条件を、処理ごとの依存注入に置き換えた。

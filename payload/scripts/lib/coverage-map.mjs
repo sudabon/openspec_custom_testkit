@@ -68,16 +68,8 @@ export function parseSpec(text, { delta = false } = {}) {
   const renames = [];
   let op = null;
   let current = null;
-  let fence = null;
   let rename = null;
-  for (const line of String(text).split(/\r?\n/)) {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (marker) {
-      if (!fence) fence = marker[1];
-      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
-      continue;
-    }
-    if (fence) continue;
+  for (const line of markdownProse(text).split('\n')) {
     const requirement = line.match(/^### Requirement:\s*(.+?)\s*$/);
     if (requirement) {
       if (delta && !op) throw new InvalidCoverageInputError(`delta の操作見出しがありません: ${requirement[1]}`);
@@ -87,13 +79,13 @@ export function parseSpec(text, { delta = false } = {}) {
     }
     // Reserve explicit overview titles for prose; declarations are checked at every level.
     const overview = /^#{1,2} (?:Requirement|Scenario) overview\s*$/i.test(line);
-    if (!overview && /^ {0,3}#{1,6}[ \t]*requirement(?=\s|:|$)/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
+    if (!overview && /^#{1,6}[ \t]*requirement(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
     const scenario = line.match(/^#### Scenario:\s*(.+?)\s*$/);
     if (scenario && current) {
       current.scenarios.push(scenario[1]);
       continue;
     }
-    if (!overview && /^ {0,3}#{1,6}[ \t]*(?:scenario|scenaro)(?=\s|:|$)/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
+    if (!overview && /^#{1,6}[ \t]*(?:scenario|scenaro)(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
     const heading = line.match(/^## (.+?)\s*$/);
     if (heading) {
       if (rename) throw new InvalidCoverageInputError('RENAMED の FROM に対応する TO がありません');
@@ -119,7 +111,6 @@ export function parseSpec(text, { delta = false } = {}) {
       }
     }
   }
-  if (fence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
   if (rename) throw new InvalidCoverageInputError('RENAMED の FROM に対応する TO がありません');
   return { requirements, renames };
 }
@@ -159,18 +150,40 @@ function hasFrontmatter(text) {
   return /^---\r?\n/.test(text);
 }
 
-// Code examples cannot introduce sections or declarations into a test plan.
-function planProse(text) {
+// Fenced code and indented prose cannot introduce declarations or TP references.
+// Plans retain indented pipe tables for compatibility with existing test plans.
+function markdownProse(text, { tables = false } = {}) {
   let fence = null;
-  return text.split(/\r?\n/).map(line => {
+  const lines = String(text).split(/\r?\n/).map(line => {
     const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (marker) {
-      if (!fence) fence = marker[1];
-      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
       return '';
     }
-    return fence || /^(?: {4}|\t)/.test(line) ? '' : line;
-  }).join('\n');
+    // Backticks in the info string make this inline code, not a fence opener.
+    if (marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) {
+      fence = marker[1];
+      return '';
+    }
+    if (/^(?: {4}|\t)/.test(line) && !(tables && /^\s*\|/.test(line))) return '';
+    return line.replace(/^ {0,3}(?=#)/, '');
+  });
+  if (fence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
+  return lines.join('\n');
+}
+
+function planTables(body) {
+  return [...String(body ?? '').matchAll(/^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*/gm)]
+    .map(match => parseTable(match[0]));
+}
+
+function delegatedList(line) {
+  const bullet = line.match(/^\s*(?:[-*+]\s|\d+[.)]\s)(.*)$/)?.[1];
+  if (!bullet) return false;
+  if (/^(?:補足|メモ|注|Notes?)\s*[:：]/i.test(bullet)) return false;
+  // Only recognizable declarations are errors; notes and other prose are allowed.
+  return /\b(?:Scenario|Requirement|Oracle|Layer|Method)\s*[:：]|対応シナリオ\s*[:：]/i.test(bullet)
+    || /[:：]\s*(?:Unit|Integration|Contract|Manual|E2E|単体|結合|手動)(?![A-Za-z])/i.test(bullet);
 }
 
 function delegatedHeading(heading) {
@@ -179,7 +192,7 @@ function delegatedHeading(heading) {
 
 // Rows of a test plan in a form shared by the integrated and legacy layouts.
 export function planRows(text, { legacy }) {
-  const prose = planProse(text);
+  const prose = markdownProse(text, { tables: true });
   // Keep ordinary subheadings inside their parent section, as section() does.
   // Recognizable misspellings of delegated headings also delimit sections so
   // their tables cannot leak into the E2E table before being diagnosed.
@@ -189,7 +202,8 @@ export function planRows(text, { legacy }) {
     heading: match[0].trim(),
     body: prose.slice(match.index + match[0].length, headings[index + 1]?.index ?? prose.length),
   }));
-  const table = parseTable(sections.find(item => item.heading === '## E2E観点一覧')?.body).rows;
+  const table = sections.filter(item => item.heading === '## E2E観点一覧')
+    .flatMap(item => planTables(item.body).flatMap(table => table.rows));
   const tp = [];
   for (const row of table) {
     const id = norm(row['TP-ID'] ?? row['TP ID']);
@@ -204,23 +218,28 @@ export function planRows(text, { legacy }) {
   let delegatedSections = 0;
   if (!legacy) for (const { heading, body } of sections) {
     if (!delegatedHeading(heading)) continue;
-    const parsed = parseTable(body);
+    const tables = planTables(body);
+    const rows = tables.flatMap(table => table.rows);
     let reason = null;
     if (heading !== '## 対象外シナリオ') reason = `対象外の表の見出しを解析できません: ${heading}（## 対象外シナリオ が必要です）`;
     else if (delegatedSections++) reason = '対象外の表の見出しが重複しています: ## 対象外シナリオ';
-    else if (!parsed.headers.length && /^\s*\|/m.test(body)) reason = '対象外シナリオを表として解析できません（ヘッダ行だけでなく区切り行と宣言行が必要です）';
     if (reason) {
-      for (const row of parsed.rows.length ? parsed.rows : [{}]) delegated.push({
+      for (const row of rows.length ? rows : [{}]) delegated.push({
         kind: 'delegated', id: '対象外', requirement: requirementName(row.Requirement),
         scenario: norm(row.Scenario ?? row['対応シナリオ']), parsable: false, reason,
       });
       continue;
     }
-    for (const line of body.split('\n').filter(line => /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line))) {
+    for (const { headers } of tables) {
+      if (headers.length) continue;
+      delegated.push({ kind: 'delegated', id: '対象外', requirement: '', scenario: '', parsable: false,
+        reason: '対象外シナリオを表として解析できません（ヘッダ行だけでなく区切り行が必要です）' });
+    }
+    for (const line of body.split('\n').filter(delegatedList)) {
       delegated.push({ kind: 'delegated', id: '対象外', requirement: '', scenario: '', parsable: false,
         reason: `対象外シナリオを表として解析できません（箇条書きではなく表が必要です）: ${line.trim()}` });
     }
-    delegated.push(...parsed.rows.map(row => ({
+    delegated.push(...rows.map(row => ({
       kind: 'delegated',
       id: '対象外',
       requirement: requirementName(row.Requirement),
@@ -234,7 +253,7 @@ export function planRows(text, { legacy }) {
   }
   const tableIds = new Set(tp.map(row => row.id));
   // Only uppercase standalone IDs are references; paths and filename stems are not.
-  const textOnly = [...new Set([...text.matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))]
+  const textOnly = [...new Set([...prose.matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))]
     .filter(id => !tableIds.has(id));
   return { rows: [...tp, ...delegated], textOnly };
 }
@@ -286,7 +305,12 @@ function readChange(repo, dir, id, order, { defaultSchema, configPath, qeSchema 
   const text = readText(repo, planRel);
   const legacy = schema === SCHEMA_E2E || !hasFrontmatter(text);
   change.legacy = legacy;
-  const parsed = planRows(text, { legacy });
+  let parsed;
+  try { parsed = planRows(text, { legacy }); }
+  catch (err) {
+    if (err instanceof InvalidCoverageInputError) throw new InvalidCoverageInputError(`${planRel}: ${err.message}`);
+    throw err;
+  }
   change.textOnly = parsed.textOnly;
   if (!parsed.rows.length && !parsed.textOnly.length && !section(text, '## E2E観点一覧') && !section(text, '## 対象外シナリオ')) {
     change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: 'test-plan の対応表を解析できません（## E2E観点一覧 / ## 対象外シナリオ）' });
@@ -341,9 +365,15 @@ export function buildCoverage(repo, { env = process.env } = {}) {
   const mainNames = new Map();
   const main = listMainScenarios(repo, mainNames);
   const config = readInput('openspec/config.yaml または config.yml', () => readConfigDocument(repo));
+  const configPath = relative(repo, config.located.path);
+  if (config.parsed && (config.parsed.errors.length || config.parsed.tagged
+    || (config.parsed.data != null && (typeof config.parsed.data !== 'object' || Array.isArray(config.parsed.data)))
+    || (config.parsed.data?.schema != null && typeof config.parsed.data.schema !== 'string'))) {
+    throw new InvalidCoverageInputError(`${configPath} が不正です: ${config.parsed.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);
+  }
   const schemas = {
-    defaultSchema: config.parsed?.errors?.length ? null : asString(config.parsed?.data?.schema) || null,
-    configPath: relative(repo, config.located.path), qeSchema: env.QE_SCHEMA ?? SCHEMA_QE,
+    defaultSchema: asString(config.parsed?.data?.schema) || null,
+    configPath, qeSchema: env.QE_SCHEMA ?? SCHEMA_QE,
   };
   const archives = listArchives(repo).map((entry, order) => ({ ...readChange(repo, entry.dir, entry.id, order, schemas), folder: entry.folder }));
   // Archive names must only be compared with names observed up to that point.
@@ -685,15 +715,15 @@ export function parseCoverageArgs(argv) {
 }
 
 // exit code: 0=出力のみ / 1=--strict で要対応あり / 2=入力不正 / 3=内部エラー
-export function runCoverage(options) {
-  try { return coverageOutput(options); }
+export function runCoverage(options, deps = {}) {
+  try { return coverageOutput(options, deps); }
   catch (err) {
     if (err instanceof InvalidCoverageInputError) return { exitCode: 2, stdout: '', stderr: `${err.message}\n` };
     return { exitCode: 3, stdout: '', stderr: `シナリオ対応表の内部エラー:\n${err.stack ?? err}\n` };
   }
 }
 
-function coverageOutput({ repo, resultsPath = null, maxAge = null, strict = false, format = 'markdown', now = Date.now(), readResults, env = process.env }) {
+function coverageOutput({ repo, resultsPath = null, maxAge = null, strict = false, format = 'markdown', now = Date.now(), readResults, env = process.env }, deps) {
   let results = null;
   if (resultsPath) {
     let raw;
@@ -712,9 +742,9 @@ function coverageOutput({ repo, resultsPath = null, maxAge = null, strict = fals
     const freshness = resultsFreshness(results, maxAge, now);
     if (freshness.error) return { exitCode: 2, stdout: '', stderr: freshness.error };
   }
-  const model = buildCoverage(repo, { env });
-  if (results) attachResults(model, results);
-  const summary = summarize(model);
-  const stdout = format === 'json' ? renderJson(model, summary) : renderMarkdown(model, summary);
+  const model = (deps.buildCoverage ?? buildCoverage)(repo, { env });
+  if (results) (deps.attachResults ?? attachResults)(model, results);
+  const summary = (deps.summarize ?? summarize)(model);
+  const stdout = format === 'json' ? (deps.renderJson ?? renderJson)(model, summary) : (deps.renderMarkdown ?? renderMarkdown)(model, summary);
   return { exitCode: strict && summary.needsAction ? 1 : 0, stdout, stderr: model.warnings.map(warning => `警告: ${warning}\n`).join(''), summary, model };
 }

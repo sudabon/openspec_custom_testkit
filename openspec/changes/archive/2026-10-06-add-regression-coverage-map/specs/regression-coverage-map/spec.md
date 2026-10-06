@@ -102,8 +102,8 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 
 #### Scenario: Overview headings are not declarations
 - **WHEN** spec が `# Requirement overview` など説明用の見出しを持つ
-- **THEN** 説明用の `#` / `## Requirement overview` と `#` / `## Scenario overview` は許容する。それ以外の Requirement / Scenario（Scenaro の誤記を含む）で始まる見出しは、階層・空白・コロンの有無にかかわらず検査し、不正な宣言を入力エラーにする
-- **AND** コードフェンス・4 空白またはタブでインデントしたコード・`#requirement-tag` のようなハッシュタグは宣言として扱わない
+- **THEN** 説明用の `#` / `## Requirement overview` と `#` / `## Scenario overview` は許容する。それ以外の Requirement / Scenario（Scenaro の誤記を含む）で始まる見出しは、階層・空白・コロンの有無にかかわらず検査し、全角コロンや括弧を含む不正な宣言も入力エラーにする。先頭の 1〜3 空白は許容する
+- **AND** コードフェンス・4 空白またはタブでインデントしたコード・`#requirement-tag` のように名前に英数字・ハイフン・アンダースコアが続く語は宣言として扱わない。単独の `#Requirement` は不正な宣言として診断する
 
 #### Scenario: Main specs are empty
 - **WHEN** `openspec/specs` にシナリオが 1 件もない
@@ -116,8 +116,8 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** archive 済み change に test-plan.md が無い
 - **THEN** `quality-driven-e2e` と `spec-driven-e2e` の場合だけ対応不明として報告する
 - **AND** `spec-driven` などの delta は引き続き要再確認・孤立の判定に使う
-- **AND** change の schema が未指定なら `openspec/config.yaml`（無ければ `config.yml`）の schema を既定値に使い、空・コメントのみ・解析エラーの config は schema 未指定として扱う。YAML アンカーは select と同じ読み込み規則で扱い、change と config の両方に指定が無ければ欠落を診断しない
-- **AND** 参照先のない YAML エイリアスも解析エラーとして扱う。config では schema 未指定、archive の metadata では終了コード 2、進行中 change の metadata では警告とその change の注記除外にする
+- **AND** change の schema が未指定なら `openspec/config.yaml`（無ければ `config.yml`）の schema を既定値に使い、空・コメントのみの config は schema 未指定として扱う。不正な YAML・mapping 以外の値・文字列でない schema は設定ファイル名と理由を表示して終了コード 2 とする。解決できる YAML アンカーは許容し、change と config の両方に指定が無ければ欠落を診断しない
+- **AND** 参照先のない YAML エイリアスも解析エラーとして扱う。config と archive の metadata では終了コード 2、進行中 change の metadata では警告とその change の注記除外にする
 
 #### Scenario: Malformed mapping rows are diagnosed
 - **WHEN** TP-ID が `TP-NNN` 形式でない、列名・表の見出しが不正、または対象外行のシナリオ名が空である
@@ -125,8 +125,15 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **AND** 対象外行のシナリオ列は `Scenario` または `対応シナリオ` を受け付ける
 - **AND** 正常な TP 表があっても、対象外表の見出しの誤記・重複・階層や空白の不備、表の代わりの箇条書きを理由付きで診断し、該当する宣言を保護に数えない
 - **AND** ヘッダ行だけの表と、表に混在する箇条書きの宣言も理由付きで診断する。混在する正常な表の行は引き続き対応に使う
-- **AND** 正常な節の小見出し（`### 正常系` や `### 補足`）の下の表も同じ節の対応として読む。コード例の見出しや表は無視し、`###### 対象外 メモ` のような説明用の小見出しは誤記として扱わない
+- **AND** 正常な節の小見出し（`### 正常系` や `### 補足`）の下の表も同じ節の対応として読む。各表はそれぞれのヘッダで読み、列順が異なっても対応を維持する。フェンス内の見出し・表・TP-ID とインデントした説明文は無視し、既存 plan との互換性のためフェンス外のインデントしたパイプ表は読む。`###### 対象外 メモ` のような説明用の小見出しは誤記として扱わない
+- **AND** `- 補足: …` や小見出しの下の説明用メモは診断しない。箇条書きの診断は `Scenario:` / `Layer:` などの欄名、または `S: Unit` のようにコロンの後にテスト層（Unit / Integration / Contract / Manual / E2E / 単体 / 結合 / 手動）を書く宣言を対象にする
 - **AND** シナリオ列の欠落とシナリオ名の空欄を異なる理由として表示する
+
+#### Scenario: Code fences cannot hide coverage inputs silently
+- **WHEN** spec または test-plan にインラインコードの行やコードフェンスがある
+- **THEN** バッククォートの info 文字列にバッククォートが含まれる行はフェンスの開始にしない
+- **AND** フェンスは同じ記号、開始以上の長さ、info 文字列なしの行でのみ閉じる。異なる記号・短い記号列・info 文字列付きの行では閉じない
+- **AND** 閉じていないフェンスはパス付きで診断する。main spec と archive では終了コード 2、進行中 change では警告とその change の注記除外にする
 
 #### Scenario: Unknown schema is not treated as integrated
 - **WHEN** change の `.openspec.yaml` または既定の config が未対応の schema 名を持つ

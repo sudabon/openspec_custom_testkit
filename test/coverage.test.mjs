@@ -916,10 +916,10 @@ test('a case-changing rename with its new definition is valid in archived and ac
   assert.equal(out.exitCode, 0, out.stderr);
 });
 
-test('coverage config follows selection for empty, invalid, anchored and yml documents', t => {
+test('coverage accepts empty, anchored and yml config documents', t => {
   const dir = protectedRepo(t);
   write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('R', ['S'], 'MODIFIED'));
-  for (const config of ['', '# comment only\n', 'schema: [\n', 'default: &schema quality-driven-e2e\nschema: *schema\n']) {
+  for (const config of ['', '# comment only\n', 'default: &schema quality-driven-e2e\nschema: *schema\n']) {
     write(dir, 'openspec/config.yaml', config);
     const out = runCoverage({ repo: dir });
     assert.equal(out.exitCode, 0, out.stderr);
@@ -1088,7 +1088,7 @@ test('unresolved YAML aliases follow config, archive and WIP input contracts inc
   t.after(() => repo.cleanup());
   for (const name of ['config.yaml', 'config.yml']) {
     write(repo.dir, `openspec/${name}`, yaml);
-    assert.equal(runCoverage({ repo: repo.dir }).exitCode, 0);
+    assert.equal(runCoverage({ repo: repo.dir }).exitCode, 2);
     assert.notEqual(selectChanges({ repo: repo.dir, base: 'HEAD', env: {} }).exitCode, 2);
     rmSync(join(repo.dir, `openspec/${name}`));
   }
@@ -1139,35 +1139,198 @@ test('active names discard archived capabilities absent from current main specs'
 });
 
 test('all coverage processing stages return internal exit code 3 and CI retains summary and risk', async t => {
-  for (const [stage, object, method] of [
-    ['attachResults', Array.prototype, 'map'],
-    ['summarize', Array.prototype, 'filter'],
-    ['renderMarkdown', String.prototype, 'replace'],
-    ['renderJson', JSON, 'stringify'],
-  ]) await t.test(stage, t => {
+  for (const stage of ['buildCoverage', 'attachResults', 'summarize', 'renderMarkdown', 'renderJson']) await t.test(stage, t => {
     const repo = ciRepo();
     t.after(() => repo.cleanup());
-    const original = object[method];
     let triggered = 0;
-    const descriptor = Object.getOwnPropertyDescriptor(object, method);
-    t.after(() => Object.defineProperty(object, method, descriptor));
-    object[method] = function (...args) {
-      if (new Error().stack.includes(`at ${stage} (`)) {
-        triggered++;
-        throw new TypeError(`${stage} failure`);
-      }
-      return original.apply(this, args);
-    };
-    const out = runCoverage({ repo: repo.dir, resultsPath: RESULTS, format: stage === 'renderJson' ? 'json' : 'markdown' });
+    const coverage = { [stage]() {
+      triggered++;
+      throw new TypeError(`${stage} failure`);
+    } };
+    const out = runCoverage({ repo: repo.dir, resultsPath: RESULTS, format: stage === 'renderJson' ? 'json' : 'markdown' }, coverage);
     assert.equal(out.exitCode, 3, out.stderr);
     assert.match(out.stderr, new RegExp(`内部エラー:\\nTypeError: ${stage} failure\\n\\s+at `));
     const output = join(repo.dir, 'github-output');
     const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
-      cwd: repo.dir, execFile: regressionExec([]),
+      cwd: repo.dir, execFile: regressionExec([]), coverage,
     });
     assert.equal(ran.code, 3, ran.lines.join('\n'));
     assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), new RegExp(`${stage} failure`));
     assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
-    assert.ok(triggered >= 2);
+    assert.equal(triggered, 2);
   });
+});
+
+test('full-width punctuation in later spec declarations is rejected rather than omitted', t => {
+  const dir = protectedRepo(t);
+  for (const heading of ['#### Scenario：U', '### Requirement（X）', '### Requirement：X', '#### Scenario（U）']) {
+    for (const path of ['openspec/specs/cap/spec.md', 'openspec/changes/archive/2026-01-01-a/specs/cap/spec.md']) {
+      write(dir, path, SPEC('R', ['S']) + `\n${heading}\n`);
+      const out = runCoverage({ repo: dir, strict: true });
+      assert.equal(out.exitCode, 2, `${path}: ${heading}`);
+      assert.ok(out.stderr.includes(path));
+      assert.match(out.stderr, /見出し/);
+      write(dir, path, SPEC('R', ['S']));
+    }
+  }
+});
+
+test('inline backtick runs do not hide spec scenarios or plan tables', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const archive = 'openspec/changes/archive/2026-01-01-a';
+  const spec = SPEC('R', ['S']) + '\n```npm test```\n\n### Requirement: Hidden\n#### Scenario: T\n\n```sh\n# run\n```\n';
+  for (const path of ['openspec/specs/cap/spec.md', `${archive}/specs/cap/spec.md`]) write(dir, path, spec);
+  write(dir, `${archive}/test-plan.md`, '---\ne2e: required\n---\n```npm test```\n'
+    + PLAN([['TP-001', 'R', 'S']])
+    + '\n## 対象外シナリオ\n| Requirement | Scenario | Oracle | Layer | Method |\n|---|---|---|---|---|\n| Hidden | T | O1 | Unit | test |\n');
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.summary.scenarios, 2);
+  assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.declared]);
+  assert.deepEqual(out.model.orphans, []);
+  assert.deepEqual(out.model.unresolved, []);
+});
+
+test('fences only close with matching symbols, sufficient length and no info string', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-01-01-a';
+  for (const [open, falseClose, close] of [
+    ['```sh', '```info', '```'],
+    ['~~~sh', '~~~info', '~~~'],
+    ['```sh', '~~~', '```'],
+    ['~~~sh', '```', '~~~'],
+    ['````sh', '```', '````'],
+    ['~~~~sh', '~~~', '~~~~~'],
+    ['   ```sh', '   ```info', '   ````  '],
+  ]) {
+    const example = `${open}\n${falseClose}\n### Requirement：Example\n#### Scenario：Example\n## E2E観点一覧\n| TP-ID | Scenario |\n|---|---|\n| TP-999 | Example |\n${close}\n`;
+    for (const path of ['openspec/specs/cap/spec.md', `${archive}/specs/cap/spec.md`]) write(dir, path, example + SPEC('R', ['S']));
+    write(dir, `${archive}/test-plan.md`, `---\ne2e: required\n---\n${example}` + PLAN([['TP-001', 'R', 'S']]));
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, `${open} / ${falseClose}: ${out.stderr}`);
+    assert.equal(out.summary.scenarios, 1);
+    assert.equal(out.model.scenarios[0].classification, CLASS.e2e);
+    assert.deepEqual(out.model.unresolved, []);
+    assert.deepEqual(out.model.legacyUnresolved, []);
+  }
+});
+
+test('unclosed spec and plan fences fail archives but warn and exclude only the affected WIP', t => {
+  const dir = protectedRepo(t);
+  for (const fence of ['```sh', '~~~sh']) {
+    for (const file of ['specs/cap/spec.md', 'test-plan.md']) {
+      const content = file.endsWith('test-plan.md') ? PLAN([['TP-001', 'R', 'S']]) : SPEC('R', ['S']);
+      const archive = `openspec/changes/archive/2026-01-01-a/${file}`;
+      write(dir, archive, content + `\n${fence}\nunfinished\n`);
+      const invalid = runCoverage({ repo: dir });
+      assert.equal(invalid.exitCode, 2);
+      assert.ok(invalid.stderr.includes(archive));
+      assert.match(invalid.stderr, /コードフェンスが閉じられていません/);
+      write(dir, archive, content);
+      const wip = `openspec/changes/wip/${file}`;
+      write(dir, wip, content + `\n${fence}\nunfinished\n`);
+      const warning = runCoverage({ repo: dir, strict: true });
+      assert.equal(warning.exitCode, 0, warning.stderr);
+      assert.match(warning.stderr, /wip.*注記から除外.*コードフェンス/);
+      assert.equal(warning.model.scenarios[0].classification, CLASS.e2e);
+      rmSync(join(dir, 'openspec/changes/wip'), { recursive: true });
+    }
+    write(dir, 'openspec/specs/cap/spec.md', SPEC('R', ['S']) + `\n${fence}\nunfinished\n`);
+    const main = runCoverage({ repo: dir });
+    assert.equal(main.exitCode, 2);
+    assert.match(main.stderr, /openspec\/specs\/cap\/spec.md.*コードフェンス/);
+    write(dir, 'openspec/specs/cap/spec.md', SPEC('R', ['S']));
+  }
+});
+
+test('one to three spaces before spec and plan headings preserve mappings and delta operations', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const archive = 'openspec/changes/archive/2026-01-01-a';
+  for (const count of [1, 2, 3]) {
+    const indent = text => text.replace(/^#/gm, ' '.repeat(count) + '#');
+    for (const path of ['openspec/specs/cap/spec.md', `${archive}/specs/cap/spec.md`]) write(dir, path, indent(SPEC('R', ['S', 'T'])));
+    write(dir, `${archive}/test-plan.md`, indent(PLAN([['TP-001', 'R', 'S']])
+      + '\n## 対象外シナリオ\n### 補足\n| Scenario | Layer |\n|---|---|\n| T | Unit |\n'));
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.equal(out.summary.scenarios, 2);
+    assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.declared]);
+    assert.deepEqual(out.model.unresolved, []);
+    write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', indent(SPEC('R', ['S', 'T'], 'MODIFIED')));
+    const changed = runCoverage({ repo: dir, strict: true });
+    assert.equal(changed.exitCode, 1);
+    assert.ok(changed.model.scenarios.every(row => row.classification === CLASS.stale));
+    rmSync(join(dir, 'openspec/changes/archive/2026-02-01-b'), { recursive: true });
+  }
+});
+
+test('each plan table uses its own headers across subheadings and column orders', t => {
+  const dir = protectedRepo(t, ['S', 'T', 'U', 'V']);
+  const plan = PLAN([['TP-001', 'R', 'S']]).replace('## E2E観点一覧\n', '## E2E観点一覧\n### 正常系\n')
+    + '\n### 異常系\n| Scenario | TP-ID | Requirement |\n|---|---|---|\n| T | TP-002 | R |\n'
+    + '\n## 対象外シナリオ\n### 単体\n| Requirement | Scenario | Layer | Oracle | Method |\n|---|---|---|---|---|\n| R | U | Unit | O1 | unit |\n'
+    + '\n### 結合\n| Layer | Method | Scenario | Oracle | Requirement |\n|---|---|---|---|---|\n| Integration | integration | V | O2 | R |\n';
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', plan);
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.e2e, CLASS.declared, CLASS.declared]);
+  assert.deepEqual(out.model.unresolved, []);
+  assert.deepEqual(out.model.orphans, []);
+  assert.deepEqual(out.model.scenarios[3].source.declared, [{ oracle: 'O2', layer: 'Integration', method: 'integration' }]);
+});
+
+test('delegated prose notes are allowed while recognizable list declarations are diagnosed', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  const plan = PLAN([['TP-001', 'R', 'S']])
+    + '\n## 対象外シナリオ\n- 補足: CI の時間を短縮する\n- 補足: Unit tests を別ジョブで実行\n### 補足\n- メモ: Layer: Unit を使う理由\n* Review this table later.\n'
+    + '| Scenario | Layer |\n|---|---|\n| T | Unit |\n';
+  write(dir, path, plan);
+  assert.deepEqual(buildCoverage(dir).unresolved, []);
+  for (const declaration of ['- T: Unit', '- Scenario: T; Layer: Unit', '- 対応シナリオ：T、Layer：Unit']) {
+    write(dir, path, plan + declaration + '\n');
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.declared]);
+    assert.equal(out.model.unresolved.length, 1);
+    assert.match(out.model.unresolved[0].reason, /箇条書きではなく表/);
+  }
+});
+
+test('indented pipe tables remain mappings, but code examples cannot create TP references', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  for (const indent of ['    ', '\t']) {
+    const plan = (PLAN([['TP-001', 'R', 'S']])
+      + '\n## 対象外シナリオ\n| Scenario | Layer |\n|---|---|\n| T | Unit |\n').replace(/^\|/gm, indent + '|');
+    write(dir, path, plan + '\n```sh\nTP-998\n## 対象外シナリオ\n| Scenario |\n|---|\n| Example |\n```\n    TP-999\n');
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.declared]);
+    assert.deepEqual(out.model.unresolved, []);
+    assert.deepEqual(out.model.legacyUnresolved, []);
+  }
+});
+
+test('invalid config is an input error with its actual path and CI retains diagnostics', t => {
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  const output = join(repo.dir, 'github-output');
+  for (const name of ['config.yaml', 'config.yml']) {
+    for (const value of ['schema: [\n', 'schema: *missing\n', 'schema: [quality-driven-e2e]\n', '- quality-driven-e2e\n', 'invalid-scalar\n']) {
+      write(repo.dir, `openspec/${name}`, value);
+      const out = runCoverage({ repo: repo.dir });
+      assert.equal(out.exitCode, 2, value);
+      assert.ok(out.stderr.includes(`openspec/${name} が不正です:`));
+      const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
+        cwd: repo.dir, execFile: regressionExec([]),
+      });
+      assert.equal(ran.code, 2, ran.lines.join('\n'));
+      for (const path of [join(ran.runDir, 'coverage.md'), join(ran.summaryDir, 'summary.txt')]) {
+        assert.ok(readFileSync(path, 'utf8').includes(`openspec/${name} が不正です:`));
+      }
+      assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+    }
+    rmSync(join(repo.dir, `openspec/${name}`));
+  }
 });
