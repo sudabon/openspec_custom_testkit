@@ -103,6 +103,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 #### Scenario: Overview headings are not declarations
 - **WHEN** spec が `# Requirement overview` など説明用の見出しを持つ
 - **THEN** 説明用の `#` / `## Requirement overview` と `#` / `## Scenario overview` は許容する。それ以外の Requirement / Scenario（Scenaro の誤記を含む）で始まる見出しは、階層・空白・コロンの有無にかかわらず検査し、不正な宣言を入力エラーにする
+- **AND** コードフェンス・4 空白またはタブでインデントしたコード・`#requirement-tag` のようなハッシュタグは宣言として扱わない
 
 #### Scenario: Main specs are empty
 - **WHEN** `openspec/specs` にシナリオが 1 件もない
@@ -116,12 +117,15 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **THEN** `quality-driven-e2e` と `spec-driven-e2e` の場合だけ対応不明として報告する
 - **AND** `spec-driven` などの delta は引き続き要再確認・孤立の判定に使う
 - **AND** change の schema が未指定なら `openspec/config.yaml`（無ければ `config.yml`）の schema を既定値に使い、空・コメントのみ・解析エラーの config は schema 未指定として扱う。YAML アンカーは select と同じ読み込み規則で扱い、change と config の両方に指定が無ければ欠落を診断しない
+- **AND** 参照先のない YAML エイリアスも解析エラーとして扱う。config では schema 未指定、archive の metadata では終了コード 2、進行中 change の metadata では警告とその change の注記除外にする
 
 #### Scenario: Malformed mapping rows are diagnosed
 - **WHEN** TP-ID が `TP-NNN` 形式でない、列名・表の見出しが不正、または対象外行のシナリオ名が空である
 - **THEN** その行を理由付きで対応不明に表示し、保護に数えない
 - **AND** 対象外行のシナリオ列は `Scenario` または `対応シナリオ` を受け付ける
 - **AND** 正常な TP 表があっても、対象外表の見出しの誤記・重複・階層や空白の不備、表の代わりの箇条書きを理由付きで診断し、該当する宣言を保護に数えない
+- **AND** ヘッダ行だけの表と、表に混在する箇条書きの宣言も理由付きで診断する。混在する正常な表の行は引き続き対応に使う
+- **AND** 正常な節の小見出し（`### 正常系` や `### 補足`）の下の表も同じ節の対応として読む。コード例の見出しや表は無視し、`###### 対象外 メモ` のような説明用の小見出しは誤記として扱わない
 - **AND** シナリオ列の欠落とシナリオ名の空欄を異なる理由として表示する
 
 #### Scenario: Unknown schema is not treated as integrated

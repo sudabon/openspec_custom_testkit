@@ -12,6 +12,7 @@ import { parseYamlText } from '../payload/scripts/lib/frontmatter.mjs';
 import { REQUIRED_MODULES, STAMP_FILE } from '../payload/scripts/lib/critical.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
+import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { main } from '../lib/cli.mjs';
 import { gitRepo } from './support.mjs';
 
@@ -610,6 +611,7 @@ test('malformed spec headings and case-only MODIFIED names fail with paths inste
     SPEC('R', ['S']) + '\n#### Requirement R2\n#### Scenario: S2\n',
     SPEC('R', ['S']) + '\n##### Scenario S3\n',
     SPEC('R', ['S']).replace('### Requirement:', '###Requirement:'),
+    SPEC('R', ['S']) + '\n###Requirement: R2\n#### Scenario: S2\n',
     SPEC('R', ['S']).replace('#### Scenario:', '## Scenario:'),
     SPEC('R', ['S']).replace('#### Scenario:', '#### Scenaro:'),
   ]) {
@@ -1032,4 +1034,140 @@ test('later requirements invalidate delegated declarations until a new declarati
   assert.equal(renewed.exitCode, 0, renewed.stderr);
   assert.equal(renewed.model.scenarios[0].classification, CLASS.declared);
   assert.equal(renewed.model.scenarios[0].source.change, 'b');
+});
+
+test('plan subheadings and code examples preserve parent tables and ignore fake declarations', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  const delegated = '## 対象外シナリオ\n| Scenario | Oracle | Layer | Method |\n|---|---|---|---|\n| T | O1 | Unit | unit test |\n';
+  for (const extra of [
+    '### 正常系\n',
+    '```sh\n# run\n## 対象外シナリオ\n```\n',
+    '~~~sh\n# run\n### 対象外シナリオ\n~~~\n',
+    '    ## 対象外シナリオ\n',
+  ]) {
+    write(dir, path, PLAN([['TP-001', 'R', 'S']]).replace('## E2E観点一覧\n', `## E2E観点一覧\n${extra}`)
+      + delegated.replace('## 対象外シナリオ\n', '## 対象外シナリオ\n### 補足\n###### 対象外 メモ\n'));
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.declared]);
+    assert.deepEqual(out.model.unresolved, []);
+  }
+});
+
+test('hashtags and indented code are not spec declarations', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/specs/cap/spec.md', SPEC('R', ['S'])
+    + '\n#requirement-tag は参考\n#scenario-tag は参考\n    ### Requirement: Example\n    #### Scenario: Example\n\t###Requirement: Example\n');
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.summary.scenarios, 1);
+});
+
+test('header-only and mixed list declarations are diagnosed without hiding valid table rows', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  write(dir, path, PLAN([]) + '## 対象外シナリオ\n| Scenario | Oracle | Layer | Method |\n');
+  const header = buildCoverage(dir);
+  assert.equal(header.unresolved.length, 1);
+  assert.match(header.unresolved[0].reason, /ヘッダ行/);
+  write(dir, path, PLAN([]) + '## 対象外シナリオ\n| Scenario | Oracle | Layer | Method |\n|---|---|---|---|\n| S | O1 | Unit | test |\n- T: Unit\n');
+  const mixed = buildCoverage(dir);
+  assert.deepEqual(mixed.scenarios.map(row => row.classification), [CLASS.declared, CLASS.none]);
+  assert.equal(mixed.unresolved.length, 1);
+  assert.match(mixed.unresolved[0].reason, /箇条書きではなく表.*T: Unit/);
+});
+
+test('unresolved YAML aliases follow config, archive and WIP input contracts including selection and CI', t => {
+  const yaml = 'schema: *missing\n';
+  const parsed = parseYamlText(yaml);
+  assert.equal(parsed.data, null);
+  assert.equal(parsed.alias, true);
+  assert.match(parsed.errors.join('\n'), /alias/i);
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  for (const name of ['config.yaml', 'config.yml']) {
+    write(repo.dir, `openspec/${name}`, yaml);
+    assert.equal(runCoverage({ repo: repo.dir }).exitCode, 0);
+    assert.notEqual(selectChanges({ repo: repo.dir, base: 'HEAD', env: {} }).exitCode, 2);
+    rmSync(join(repo.dir, `openspec/${name}`));
+  }
+  write(repo.dir, 'openspec/changes/wip/.openspec.yaml', yaml);
+  const wip = runCoverage({ repo: repo.dir });
+  assert.equal(wip.exitCode, 0);
+  assert.match(wip.stderr, /wip.*注記から除外.*alias/i);
+  const output = join(repo.dir, 'github-output');
+  const ci = () => runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
+    cwd: repo.dir, execFile: regressionExec([]),
+  });
+  assert.equal(ci().code, 0);
+  write(repo.dir, 'openspec/changes/archive/2026-01-01-add-cart/.openspec.yaml', yaml);
+  assert.equal(runCoverage({ repo: repo.dir }).exitCode, 2);
+  const ran = ci();
+  assert.equal(ran.code, 2);
+  assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /alias/i);
+  assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+});
+
+test('missing OpenSpec and file-valued spec or archive directories return input exit code 2', async t => {
+  for (const path of ['openspec', 'openspec/specs', 'openspec/changes/archive']) await t.test(path, t => {
+    const dir = protectedRepo(t);
+    rmSync(join(dir, path), { recursive: true });
+    if (path !== 'openspec') write(dir, path, 'not a directory');
+    const out = gate(dir, []);
+    assert.equal(out.status, 2, out.stderr);
+    assert.match(out.stderr, path === 'openspec' ? /openspec\/ がありません/ : /ENOTDIR/);
+  });
+});
+
+test('lowercase standalone TP references do not become unresolved mappings', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN([['TP-001', 'R', 'S']]) + '\nSee tp-002 and @tp-003.\n');
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0);
+  assert.deepEqual(out.model.unresolved, []);
+  assert.deepEqual(out.model.legacyUnresolved, []);
+});
+
+test('active names discard archived capabilities absent from current main specs', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/specs/retired/spec.md', SPEC('Old', ['Historical']));
+  write(dir, 'openspec/changes/wip/specs/retired/spec.md', SPEC('old', ['Historical'], 'MODIFIED'));
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 0);
+  assert.deepEqual(out.model.warnings, []);
+});
+
+test('all coverage processing stages return internal exit code 3 and CI retains summary and risk', async t => {
+  for (const [stage, object, method] of [
+    ['attachResults', Array.prototype, 'map'],
+    ['summarize', Array.prototype, 'filter'],
+    ['renderMarkdown', String.prototype, 'replace'],
+    ['renderJson', JSON, 'stringify'],
+  ]) await t.test(stage, t => {
+    const repo = ciRepo();
+    t.after(() => repo.cleanup());
+    const original = object[method];
+    let triggered = 0;
+    const descriptor = Object.getOwnPropertyDescriptor(object, method);
+    t.after(() => Object.defineProperty(object, method, descriptor));
+    object[method] = function (...args) {
+      if (new Error().stack.includes(`at ${stage} (`)) {
+        triggered++;
+        throw new TypeError(`${stage} failure`);
+      }
+      return original.apply(this, args);
+    };
+    const out = runCoverage({ repo: repo.dir, resultsPath: RESULTS, format: stage === 'renderJson' ? 'json' : 'markdown' });
+    assert.equal(out.exitCode, 3, out.stderr);
+    assert.match(out.stderr, new RegExp(`内部エラー:\\nTypeError: ${stage} failure\\n\\s+at `));
+    const output = join(repo.dir, 'github-output');
+    const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
+      cwd: repo.dir, execFile: regressionExec([]),
+    });
+    assert.equal(ran.code, 3, ran.lines.join('\n'));
+    assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), new RegExp(`${stage} failure`));
+    assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+    assert.ok(triggered >= 2);
+  });
 });

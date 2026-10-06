@@ -54,6 +54,7 @@ function readText(repo, rel) {
 function specFiles(repo, root) {
   const listed = listFiles(repo, root, { optional: true });
   if (listed.error) throw new CoverageReadError(`ファイルを参照できません: ${listed.path} (${listed.code})`);
+  if (listed.files.includes(root)) throw new CoverageReadError(`ディレクトリを参照できません: ${root} (ENOTDIR)`);
   const prefix = `${root}/`;
   return listed.files
     .filter(path => path.startsWith(prefix) && (path === `${prefix}spec.md` || path.endsWith('/spec.md')))
@@ -86,13 +87,13 @@ export function parseSpec(text, { delta = false } = {}) {
     }
     // Reserve explicit overview titles for prose; declarations are checked at every level.
     const overview = /^#{1,2} (?:Requirement|Scenario) overview\s*$/i.test(line);
-    if (!overview && /^\s*#{1,6}\s*requirement\b/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
+    if (!overview && /^ {0,3}#{1,6}[ \t]*requirement(?=\s|:|$)/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
     const scenario = line.match(/^#### Scenario:\s*(.+?)\s*$/);
     if (scenario && current) {
       current.scenarios.push(scenario[1]);
       continue;
     }
-    if (!overview && /^\s*#{1,6}\s*(?:scenario|scenaro)\b/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
+    if (!overview && /^ {0,3}#{1,6}[ \t]*(?:scenario|scenaro)(?=\s|:|$)/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
     const heading = line.match(/^## (.+?)\s*$/);
     if (heading) {
       if (rename) throw new InvalidCoverageInputError('RENAMED の FROM に対応する TO がありません');
@@ -158,14 +159,35 @@ function hasFrontmatter(text) {
   return /^---\r?\n/.test(text);
 }
 
+// Code examples cannot introduce sections or declarations into a test plan.
+function planProse(text) {
+  let fence = null;
+  return text.split(/\r?\n/).map(line => {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return '';
+    }
+    return fence || /^(?: {4}|\t)/.test(line) ? '' : line;
+  }).join('\n');
+}
+
+function delegatedHeading(heading) {
+  return /^#{1,6}[ \t]*(?:E2E\s*)?対象外(?:\s*(?:の)?シナリオ.*)?$/.test(heading);
+}
+
 // Rows of a test plan in a form shared by the integrated and legacy layouts.
 export function planRows(text, { legacy }) {
-  // Split at all heading levels (including missing spaces), so malformed sections
-  // cannot leak their tables into the preceding E2E section.
-  const headings = [...text.matchAll(/^[\t ]*#{1,6}[^\S\r\n]*[^\r\n]+/gm)];
+  const prose = planProse(text);
+  // Keep ordinary subheadings inside their parent section, as section() does.
+  // Recognizable misspellings of delegated headings also delimit sections so
+  // their tables cannot leak into the E2E table before being diagnosed.
+  const headings = [...prose.matchAll(/^ {0,3}#{1,6}[^\S\r\n]*[^\r\n]+/gm)]
+    .filter(match => /^## /.test(match[0]) || delegatedHeading(match[0].trim()));
   const sections = headings.map((match, index) => ({
     heading: match[0].trim(),
-    body: text.slice(match.index + match[0].length, headings[index + 1]?.index ?? text.length),
+    body: prose.slice(match.index + match[0].length, headings[index + 1]?.index ?? prose.length),
   }));
   const table = parseTable(sections.find(item => item.heading === '## E2E観点一覧')?.body).rows;
   const tp = [];
@@ -181,18 +203,22 @@ export function planRows(text, { legacy }) {
   const delegated = [];
   let delegatedSections = 0;
   if (!legacy) for (const { heading, body } of sections) {
-    if (!/^#{1,6}\s*(?:E2E\s*)?対象外/.test(heading)) continue;
+    if (!delegatedHeading(heading)) continue;
     const parsed = parseTable(body);
     let reason = null;
     if (heading !== '## 対象外シナリオ') reason = `対象外の表の見出しを解析できません: ${heading}（## 対象外シナリオ が必要です）`;
     else if (delegatedSections++) reason = '対象外の表の見出しが重複しています: ## 対象外シナリオ';
-    else if (!parsed.headers.length && /^\s*(?:[-*+]\s|\d+[.)]\s)/m.test(body)) reason = '対象外シナリオを表として解析できません（箇条書きではなく表が必要です）';
+    else if (!parsed.headers.length && /^\s*\|/m.test(body)) reason = '対象外シナリオを表として解析できません（ヘッダ行だけでなく区切り行と宣言行が必要です）';
     if (reason) {
       for (const row of parsed.rows.length ? parsed.rows : [{}]) delegated.push({
         kind: 'delegated', id: '対象外', requirement: requirementName(row.Requirement),
         scenario: norm(row.Scenario ?? row['対応シナリオ']), parsable: false, reason,
       });
       continue;
+    }
+    for (const line of body.split('\n').filter(line => /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line))) {
+      delegated.push({ kind: 'delegated', id: '対象外', requirement: '', scenario: '', parsable: false,
+        reason: `対象外シナリオを表として解析できません（箇条書きではなく表が必要です）: ${line.trim()}` });
     }
     delegated.push(...parsed.rows.map(row => ({
       kind: 'delegated',
@@ -659,7 +685,15 @@ export function parseCoverageArgs(argv) {
 }
 
 // exit code: 0=出力のみ / 1=--strict で要対応あり / 2=入力不正 / 3=内部エラー
-export function runCoverage({ repo, resultsPath = null, maxAge = null, strict = false, format = 'markdown', now = Date.now(), readResults, env = process.env }) {
+export function runCoverage(options) {
+  try { return coverageOutput(options); }
+  catch (err) {
+    if (err instanceof InvalidCoverageInputError) return { exitCode: 2, stdout: '', stderr: `${err.message}\n` };
+    return { exitCode: 3, stdout: '', stderr: `シナリオ対応表の内部エラー:\n${err.stack ?? err}\n` };
+  }
+}
+
+function coverageOutput({ repo, resultsPath = null, maxAge = null, strict = false, format = 'markdown', now = Date.now(), readResults, env = process.env }) {
   let results = null;
   if (resultsPath) {
     let raw;
@@ -678,13 +712,7 @@ export function runCoverage({ repo, resultsPath = null, maxAge = null, strict = 
     const freshness = resultsFreshness(results, maxAge, now);
     if (freshness.error) return { exitCode: 2, stdout: '', stderr: freshness.error };
   }
-  let model;
-  try {
-    model = buildCoverage(repo, { env });
-  } catch (err) {
-    if (err instanceof InvalidCoverageInputError) return { exitCode: 2, stdout: '', stderr: `${err.message}\n` };
-    return { exitCode: 3, stdout: '', stderr: `シナリオ対応表の内部エラー:\n${err.stack ?? err}\n` };
-  }
+  const model = buildCoverage(repo, { env });
   if (results) attachResults(model, results);
   const summary = summarize(model);
   const stdout = format === 'json' ? renderJson(model, summary) : renderMarkdown(model, summary);
