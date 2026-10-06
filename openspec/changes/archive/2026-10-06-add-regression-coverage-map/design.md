@@ -44,11 +44,11 @@ test-plan の行には capability がない。同じ change の `specs/<capabili
 
 archive フォルダは `YYYY-MM-DD-<id>` で、OpenSpec はこの順に main spec へ反映する。同じ日付の場合は名前の辞書順にする。git の履歴は使わない。shallow clone や rebase で変わるためである。
 
-各 Requirement について、最後に ADDED または MODIFIED した change を「最新定義の change」とする。シナリオに対応する TP の change がそれより古ければ要再確認とする。最新定義の change 自身が TP または対象外行を持てば、その行を採用する。
+各 Requirement について、最後に ADDED・MODIFIED・RENAMED（TO）で定義した change を「最新定義の change」とする。シナリオに対応する TP の change がそれより古ければ要再確認とする。最新定義の change 自身が TP または対象外行を持てば、その行を採用する。
 
 ### 4. 結果の照合は report.mjs の分類を共通化する
 
-`report.mjs` の `flatten` と `STATUS_LABEL` を共通モジュールへ移し、reporter と coverage の両方から使う。flaky は reporter と同じく pass 扱いで、フレークの印を付ける。`add-flaky-management` で隔離の規則が入った場合は、同じ共通モジュールで揃える。
+`report.mjs` の `flatten` と `STATUS_LABEL` を共通モジュールへ移し、reporter と coverage の両方から使う。flaky は reporter と同じく pass 扱いで、フレークの印を付ける。expected-fail は coverage の集計では fail、reporter では fail 件数に含めず TP のカバレッジ欠落とする。不正 JSON（suites 欠落・トップレベル errors を含む）は両方で終了コード 2 に統一する。`add-flaky-management` で隔離の規則が入った場合は、同じ共通モジュールで揃える。
 
 ### 5. 出力と終了コード
 
@@ -72,3 +72,7 @@ archive フォルダは `YYYY-MM-DD-<id>` で、OpenSpec はこの順に main sp
 ## Open Questions
 
 - 「保護率」の分母に他層の宣言を含めるか。表示上は分けて両方出すため、実装と仕様には影響しない。
+
+## 再レビューによる入力診断の補足
+
+main spec・archive の不正な見出し、YAML、MODIFIED 名の大小文字違いは入力エラーにする。進行中 change は注記専用なので、change ごとに不備を警告として除外する。test-plan 欠落を診断するのは E2E schema のみである。未知の schema は警告して test-plan を除外し、delta は判定に使う。警告は Markdown・stderr と JSON の任意フィールド `warnings` に保存する。

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_E2E, SCHEMA_QE } from './critical.mjs';
+import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { byteCompare } from './hash.mjs';
@@ -84,13 +84,15 @@ export function parseSpec(text, { delta = false } = {}) {
       requirements.push(current);
       continue;
     }
-    if (/^### /.test(line)) {
-      current = null;
-      continue;
-    }
+    if (/^\s*#{1,6}\s+requirement\b/i.test(line)) throw new Error(`Requirement 見出しが不正です: ${line.trim()}`);
     const scenario = line.match(/^#### Scenario:\s*(.+?)\s*$/);
     if (scenario && current) {
       current.scenarios.push(scenario[1]);
+      continue;
+    }
+    if (/^\s*#{1,6}\s+scenario\b/i.test(line)) throw new Error(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
+    if (/^### /.test(line)) {
+      current = null;
       continue;
     }
     if (op === 'RENAMED') {
@@ -114,7 +116,10 @@ export function parseSpec(text, { delta = false } = {}) {
 export function listMainScenarios(repo) {
   const scenarios = [];
   for (const { path, capability } of specFiles(repo, 'openspec/specs')) {
-    for (const requirement of parseSpec(readText(repo, path)).requirements) {
+    let parsed;
+    try { parsed = parseSpec(readText(repo, path)); }
+    catch (err) { throw new Error(`${path}: ${err.message}`); }
+    for (const requirement of parsed.requirements) {
       for (const scenario of requirement.scenarios) {
         scenarios.push({ capability, requirement: requirement.name, scenario });
       }
@@ -143,25 +148,26 @@ export function planRows(text, { legacy }) {
   const table = parseTable(section(text, '## E2E観点一覧')).rows;
   const tp = [];
   for (const row of table) {
-    const id = norm(row['TP-ID']);
-    if (!TP_ID.test(id)) continue;
+    const id = norm(row['TP-ID'] ?? row['TP ID']);
     const scenario = norm(row.Scenario ?? row['対応シナリオ']);
-    tp.push({ kind: 'tp', id, requirement: requirementName(row.Requirement), scenario, parsable: !placeholder(scenario) });
+    const reason = !('TP-ID' in row) ? 'TP-ID 列を解析できません（列名は TP-ID）'
+      : !TP_ID.test(id) ? `TP-ID が不正です: ${id || '(空)'}（TP-NNN が必要です）`
+      : placeholder(scenario) ? 'シナリオ名がありません' : null;
+    tp.push({ kind: 'tp', id, requirement: requirementName(row.Requirement), scenario, parsable: !reason, reason });
   }
   const delegated = legacy ? [] : parseTable(section(text, '## 対象外シナリオ')).rows
-    .filter(row => norm(row.Scenario))
     .map(row => ({
       kind: 'delegated',
       id: '対象外',
       requirement: requirementName(row.Requirement),
-      scenario: norm(row.Scenario),
+      scenario: norm(row.Scenario ?? row['対応シナリオ']),
       oracle: norm(row.Oracle),
       layer: norm(row.Layer),
       method: norm(row.Method),
-      parsable: true,
+      parsable: !placeholder(norm(row.Scenario ?? row['対応シナリオ'])),
     }));
   const tableIds = new Set(tp.map(row => row.id));
-  const textOnly = [...new Set([...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]))].filter(id => !tableIds.has(id));
+  const textOnly = [...new Set([...text.matchAll(/\bTP-\d+\b/gi)].map(match => match[0]))].filter(id => !tableIds.has(id));
   return { rows: [...tp, ...delegated], textOnly };
 }
 
@@ -193,14 +199,18 @@ export function resolveCapability(delta, row) {
 
 function readChange(repo, dir, id, order) {
   const schema = schemaOf(repo, dir);
-  const change = { id, dir, order, schema, rows: [], textOnly: [], unresolved: [], skipped: schema === SCHEMA_QE };
+  const change = { id, dir, order, schema, rows: [], textOnly: [], unresolved: [], warnings: [], skipped: schema === SCHEMA_QE };
   const delta = deltaIndex(repo, dir);
   change.delta = delta;
+  if (schema && ![SCHEMA_INTEGRATED, SCHEMA_E2E, SCHEMA_QE, 'spec-driven'].includes(schema)) {
+    change.warnings.push(`${dir}/.openspec.yaml: 未対応の schema ${schema} の test-plan は対応に使いません（delta は判定に使います）`);
+    return change;
+  }
   if (change.skipped) return change;
   const planRel = `${dir}/test-plan.md`;
   if (!existsSync(join(repo, planRel))) {
     change.legacy = schema === SCHEMA_E2E;
-    change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: `${planRel} がありません` });
+    if ([SCHEMA_INTEGRATED, SCHEMA_E2E].includes(schema)) change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: `${planRel} がありません` });
     return change;
   }
   const text = readText(repo, planRel);
@@ -213,7 +223,7 @@ function readChange(repo, dir, id, order) {
   }
   for (const row of parsed.rows) {
     if (!row.parsable) {
-      change.unresolved.push({ ...row, reason: 'シナリオ名がありません' });
+      change.unresolved.push({ ...row, reason: row.reason || 'シナリオ名がありません' });
       continue;
     }
     const target = resolveCapability(delta, row);
@@ -260,7 +270,43 @@ export function buildCoverage(repo) {
   if (!existsSync(join(repo, 'openspec'))) throw new Error(`openspec/ がありません: ${repo}`);
   const main = listMainScenarios(repo);
   const archives = listArchives(repo).map((entry, order) => ({ ...readChange(repo, entry.dir, entry.id, order), folder: entry.folder }));
-  const active = listActive(repo).map(entry => readChange(repo, entry.dir, entry.id, Infinity));
+  // Names stay case-sensitive. Diagnose a case-only MODIFIED typo instead of silently
+  // missing invalidation; an explicit RENAMED operation is needed to change a name.
+  const names = new Map();
+  const remember = (capability, name) => {
+    if (!names.has(capability)) names.set(capability, new Set());
+    names.get(capability).add(name);
+  };
+  for (const row of main) remember(row.capability, row.requirement);
+  for (const change of archives) for (const file of change.delta) {
+    for (const req of file.requirements) if (req.op === 'ADDED') remember(file.capability, req.name);
+    for (const rename of file.renames) {
+      remember(file.capability, rename.from);
+      remember(file.capability, rename.to);
+    }
+  }
+  const checkNames = change => {
+    for (const file of change.delta) for (const req of file.requirements) {
+      const known = names.get(file.capability) ?? new Set();
+      if (req.op === 'MODIFIED' && !known.has(req.name)) {
+        const match = [...known].find(name => name.toLowerCase() === req.name.toLowerCase());
+        if (match) throw new Error(`${change.dir}/specs/${file.capability}/spec.md: MODIFIED の Requirement 名の大小文字が一致しません: ${req.name} / ${match}`);
+      }
+    }
+  };
+  for (const change of archives) checkNames(change);
+  const warnings = archives.flatMap(change => change.warnings);
+  const active = [];
+  for (const entry of listActive(repo)) {
+    try {
+      const change = readChange(repo, entry.dir, entry.id, Infinity);
+      checkNames(change);
+      active.push(change);
+      warnings.push(...change.warnings);
+    } catch (err) {
+      warnings.push(`進行中の change ${entry.id} を注記から除外しました: ${err.message}`);
+    }
+  }
 
   // Latest change that defined each requirement, and what later removed or renamed it.
   const latestDef = new Map();
@@ -359,7 +405,7 @@ export function buildCoverage(repo) {
       (change.legacy ? legacyUnresolved : unresolved).push({ change: change.id, archive: change.folder, id, requirement: '', scenario: '', reason: 'TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）' });
     }
   }
-  return { scenarios, orphans, unresolved, legacyUnresolved, archives: archives.length };
+  return { scenarios, orphans, unresolved, legacyUnresolved, archives: archives.length, warnings };
 }
 
 const RANK = { fail: 3, [NOT_RUN]: 2, pass: 1 };
@@ -488,6 +534,7 @@ export function renderMarkdown(model, summary = summarize(model)) {
       lines.push(`| ${cell(row.change)} | ${cell(row.id)} | ${cell(row.requirement)} | ${cell(row.scenario)} | ${cell(row.reason)} |`);
     }
   }
+  if (model.warnings?.length) lines.push('', '## 警告', '', ...model.warnings.map(warning => `- ${cell(warning)}`));
   lines.push('', '## 集計', '');
   lines.push(`- シナリオ: ${summary.scenarios} 件（archive 済み change ${model.archives} 件から集計）`);
   for (const label of [CLASS.e2e, CLASS.declared, CLASS.none, CLASS.stale]) lines.push(`- ${label}: ${summary[label]}`);
@@ -517,6 +564,7 @@ export function renderJson(model, summary = summarize(model)) {
     orphans: model.orphans,
     unresolved: model.unresolved,
     legacyUnresolved: model.legacyUnresolved,
+    ...(model.warnings?.length ? { warnings: model.warnings } : {}),
     summary,
   }, null, 2)}\n`;
 }
@@ -527,8 +575,10 @@ export function parseCoverageArgs(argv) {
     const arg = argv[i];
     const [flag, inline] = arg.startsWith('--') && arg.includes('=') ? [arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1)] : [arg, undefined];
     const value = () => inline ?? argv[++i];
-    if (flag === '--strict') opts.strict = true;
-    else if (flag === '--results') {
+    if (flag === '--strict') {
+      if (inline !== undefined && inline !== 'true' && inline !== 'false') return { error: '--strict は true または false です' };
+      opts.strict = inline !== 'false';
+    } else if (flag === '--results') {
       opts.resultsPath = value();
       if (!opts.resultsPath) return { error: '--results には JSON のパスが必要です' };
     } else if (flag === '--max-age') {
@@ -573,5 +623,5 @@ export function runCoverage({ repo, resultsPath = null, maxAge = null, strict = 
   if (results) attachResults(model, results);
   const summary = summarize(model);
   const stdout = format === 'json' ? renderJson(model, summary) : renderMarkdown(model, summary);
-  return { exitCode: strict && summary.needsAction ? 1 : 0, stdout, stderr: '', summary, model };
+  return { exitCode: strict && summary.needsAction ? 1 : 0, stdout, stderr: model.warnings.map(warning => `警告: ${warning}\n`).join(''), summary, model };
 }

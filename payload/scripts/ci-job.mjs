@@ -150,7 +150,7 @@ export function runCiJob(env = process.env, deps = {}) {
         maxAge,
       });
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
-      lines.push(report.stdout.trimEnd());
+      lines.push(...[report.stdout.trimEnd(), report.stderr.trimEnd()].filter(Boolean));
       if (report.exitCode) code = code || report.exitCode;
     }
   }
@@ -173,12 +173,16 @@ export function runCiJob(env = process.env, deps = {}) {
       regressionCode = regression.code;
     }
     const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true });
-    // Save the map before deciding the job result so a failed regression still leaves it behind.
-    writeFileSync(join(runDir, 'coverage.md'), `${coverage.stdout}${coverage.stderr}`);
-    if (coverage.model) writeFileSync(join(runDir, 'coverage.json'), renderJson(coverage.model, coverage.summary));
-    lines.push(coverage.stdout.trimEnd() || coverage.stderr.trimEnd());
+    // Preserve the command's failure code while still saving the map and final summary.
+    lines.push(...[coverage.stdout.trimEnd(), coverage.stderr.trimEnd()].filter(Boolean));
     if (regressionCode) code = code || regressionCode;
-    if (coverage.exitCode === 2) fail(2, 'シナリオ対応表を作れません。回帰結果 JSON を確認してください');
+    try {
+      writeFileSync(join(runDir, 'coverage.md'), `${coverage.stdout}${coverage.stderr}`);
+      if (coverage.model) writeFileSync(join(runDir, 'coverage.json'), renderJson(coverage.model, coverage.summary));
+    } catch (err) {
+      fail(2, `シナリオ対応表を保存できません: ${err.code ?? err.name}: ${err.message}`);
+    }
+    if (coverage.exitCode === 2) fail(2, 'シナリオ対応表を作れません。入力エラー（詳細は上記）');
     else if (coverage.exitCode === 1 && coverageStrict) fail(1, 'coverage-strict: 対応表に要対応があります');
   }
   let manifest;

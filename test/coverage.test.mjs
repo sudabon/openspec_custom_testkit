@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachResults, buildCoverage, CLASS, listMainScenarios, runCoverage, summarize } from '../payload/scripts/lib/coverage-map.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
+import { validateResults } from '../payload/scripts/lib/results.mjs';
 import { parseYamlText } from '../payload/scripts/lib/frontmatter.mjs';
 import { REQUIRED_MODULES, STAMP_FILE } from '../payload/scripts/lib/critical.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
@@ -513,4 +514,195 @@ test('the documented coverage example is what the fixture actually prints', () =
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('only E2E schemas require a plan; all schema deltas still invalidate old mappings', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-02-01-b';
+  write(dir, `${archive}/specs/cap/spec.md`, SPEC('R', ['S'], 'MODIFIED'));
+  for (const schema of ['spec-driven', 'quality-driven', 'quality-driven-e2e', 'spec-driven-e2e']) {
+    write(dir, `${archive}/.openspec.yaml`, `schema: ${schema}\n`);
+    const model = buildCoverage(dir);
+    assert.equal(model.scenarios[0].classification, CLASS.stale, schema);
+    assert.equal(model.unresolved.length + model.legacyUnresolved.length, schema.endsWith('-e2e') ? 1 : 0, schema);
+  }
+  rmSync(join(dir, archive, '.openspec.yaml'));
+  assert.equal(buildCoverage(dir).unresolved.length, 0);
+});
+
+test('invalid WIP changes warn independently while valid active notes and archive protection survive', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  for (const [id, rel, text] of [
+    ['bad-heading', 'specs/cap/spec.md', SPEC('R', ['S'], 'Modified')],
+    ['empty-yaml', '.openspec.yaml', ''],
+    ['open-fence', 'specs/cap/spec.md', '```\nunclosed'],
+  ]) write(dir, `openspec/changes/${id}/${rel}`, text);
+  write(dir, 'openspec/changes/good/specs/cap/spec.md', SPEC('R', ['S'], 'MODIFIED'));
+  write(dir, 'openspec/changes/good/test-plan.md', PLAN([['TP-001', 'R', 'S']]));
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.model.warnings.length, 3);
+  assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.e2e, CLASS.e2e]);
+  assert.deepEqual(out.model.scenarios[0].active, ['good']);
+  for (const id of ['bad-heading', 'empty-yaml', 'open-fence']) {
+    assert.ok(out.stderr.includes(id));
+    assert.ok(out.stdout.includes(id));
+  }
+  assert.deepEqual(JSON.parse(runCoverage({ repo: dir, format: 'json' }).stdout).warnings, out.model.warnings);
+});
+
+test('CI keeps running regression with malformed WIP and logs spec input errors neutrally', t => {
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  write(repo.dir, 'openspec/changes/wip/.openspec.yaml', '');
+  const env = ciEnv({ REGRESSION_COMMAND: 'run-regression', COVERAGE_STRICT: 'false' });
+  const ran = runCiJob(env, { cwd: repo.dir, execFile: regressionExec([]) });
+  assert.equal(ran.code, 0, ran.lines.join('\n'));
+  assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /進行中の change wip を注記から除外/);
+  write(repo.dir, 'openspec/specs/broken/spec.md', '### requirement: R\n');
+  const bad = runCiJob(env, { cwd: repo.dir, execFile: regressionExec([]) });
+  assert.equal(bad.code, 2);
+  assert.match(bad.lines.join('\n'), /入力エラー（詳細は上記）/);
+  assert.match(bad.lines.join('\n'), /broken\/spec.md/);
+  assert.doesNotMatch(bad.lines.join('\n'), /回帰結果 JSON を確認/);
+});
+
+test('malformed TP IDs and delegated rows cannot silently disappear or gain protection', t => {
+  const dir = protectedRepo(t);
+  const plan = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  for (const schema of ['quality-driven-e2e', 'spec-driven-e2e']) {
+    write(dir, 'openspec/changes/archive/2026-01-01-a/.openspec.yaml', `schema: ${schema}\n`);
+    for (const id of ['TP-01', 'TP-0001', 'tp-001']) {
+      write(dir, plan, PLAN([[id, 'R', 'S']]));
+      const model = buildCoverage(dir);
+      const rows = [...model.unresolved, ...model.legacyUnresolved];
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].id, id);
+      assert.match(rows[0].reason, /TP-ID が不正/);
+      assert.equal(model.scenarios[0].classification, CLASS.none);
+    }
+  }
+  write(dir, 'openspec/changes/archive/2026-01-01-a/.openspec.yaml', 'schema: quality-driven-e2e\n');
+  for (const header of ['Scenario', '対応シナリオ']) {
+    const delegated = scenario => `${PLAN([])}\n## 対象外シナリオ\n| Requirement | ${header} | Oracle | Layer | Method |\n|---|---|---|---|---|\n| R | ${scenario} | O1 | Unit | unit test |\n`;
+    write(dir, plan, delegated('S'));
+    assert.equal(buildCoverage(dir).scenarios[0].classification, CLASS.declared);
+    for (const scenario of ['', '...']) {
+      write(dir, plan, delegated(scenario));
+      const model = buildCoverage(dir);
+      assert.equal(model.unresolved.length, 1);
+      assert.match(model.unresolved[0].reason, /シナリオ名がありません/);
+      assert.equal(model.scenarios[0].classification, CLASS.none);
+    }
+  }
+});
+
+test('malformed spec headings and case-only MODIFIED names fail with paths instead of overclaiming coverage', t => {
+  const dir = protectedRepo(t);
+  for (const spec of [
+    SPEC('R', ['S']).replace('#### Scenario: S', '#### Scenario S'),
+    SPEC('R', ['S']).replace('### Requirement:', '### requirement:'),
+    SPEC('R', ['S']).replace('### Requirement: R', '### Requirement:'),
+  ]) {
+    write(dir, 'openspec/specs/cap/spec.md', spec);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 2);
+    assert.match(out.stderr, /openspec\/specs\/cap\/spec.md.*見出し/);
+  }
+  write(dir, 'openspec/specs/cap/spec.md', SPEC('R', ['S']));
+  write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('r', ['S'], 'MODIFIED'));
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 2);
+  assert.match(out.stderr, /2026-02-01-b.*大小文字/);
+});
+
+test('worst result wins regardless of project order and across every TP of a scenario', t => {
+  const dir = protectedRepo(t);
+  const failed = { projectName: 'firefox', status: 'unexpected', results: [{ status: 'failed' }] };
+  const skipped = { status: 'skipped', results: [{ status: 'skipped' }] };
+  for (const tests of [[failed, passed], [passed, failed]]) {
+    const model = attachResults(buildCoverage(dir), resultFor(tests));
+    assert.equal(model.scenarios[0].result.bucket, 'fail');
+    assert.equal(summarize(model).needsAction, 1);
+  }
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN([['TP-001', 'R', 'S'], ['TP-002', 'R', 'S']]));
+  for (const [first, second, expected] of [
+    [passed, failed, 'fail'], [failed, passed, 'fail'],
+    [passed, skipped, '未実行'], [skipped, passed, '未実行'],
+    [skipped, failed, 'fail'], [failed, skipped, 'fail'], [passed, passed, 'pass'],
+  ]) {
+    const model = attachResults(buildCoverage(dir), { suites: [{ specs: [
+      { title: '@a @TP-001', tests: [first] }, { title: '@a @TP-002', tests: [second] },
+    ] }] });
+    assert.equal(model.scenarios[0].result.bucket, expected);
+    assert.equal(model.scenarios[0].result.tps.length, 2);
+    const summary = summarize(model);
+    assert.equal(summary['実行で確認済み'], expected === 'pass' ? 1 : 0);
+    assert.equal(summary.needsAction, expected === 'pass' ? 0 : 1);
+  }
+});
+
+test('unknown schemas warn and skip plans while their deltas still invalidate protection', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-02-01-b';
+  write(dir, `${archive}/.openspec.yaml`, 'schema: quality-drivn\n');
+  write(dir, `${archive}/specs/cap/spec.md`, SPEC('R', ['S'], 'MODIFIED'));
+  write(dir, `${archive}/test-plan.md`, PLAN([['TP-001', 'R', 'S']]));
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 0);
+  assert.equal(out.model.scenarios[0].classification, CLASS.stale);
+  assert.match(out.stderr, /未対応の schema quality-drivn/);
+});
+
+test('strict boolean values are explicit and false does not enable strict', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN([['TP-001', 'R', 'S']]));
+  assert.equal(gate(dir, ['--strict=false']).status, 0);
+  assert.equal(gate(dir, ['--strict=true']).status, 1);
+  assert.equal(gate(dir, ['--strict=bogus']).status, 2);
+});
+
+test('result validation does not disguise unexpected internal exceptions as malformed JSON', () => {
+  const bug = new Error('unexpected internal failure');
+  const data = { get suites() { throw bug; } };
+  assert.throws(() => validateResults(data), err => err === bug);
+  assert.match(validateResults({ suites: [null] }), /suites\[0\].*object/);
+});
+
+test('CI preserves summary and risk output if either coverage artifact cannot be written', t => {
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  for (const filename of ['coverage.md', 'coverage.json']) {
+    const output = join(repo.dir, 'github-output');
+    const exec = regressionExec([]);
+    const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
+      cwd: repo.dir,
+      execFile(file, args, opts) {
+        const result = exec(file, args, opts);
+        if (args.includes('run-regression')) mkdirSync(join(opts.env.TESTKIT_RUN_DIR, filename));
+        return result;
+      },
+    });
+    assert.equal(ran.code, 2);
+    assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /シナリオ対応表を保存できません.*EISDIR/);
+    assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+  }
+});
+
+test('CI includes invalid E2E JSON reasons in its summary log', t => {
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  write(repo.dir, 'openspec/changes/e2e/.openspec.yaml', 'schema: quality-driven-e2e\n');
+  write(repo.dir, 'openspec/changes/e2e/test-plan.md', PLAN([['TP-001', 'R', 'S']]));
+  repo.commit('active E2E');
+  const ran = runCiJob(ciEnv({ BASE_REF: 'HEAD~1', E2E_COMMAND: 'run-e2e' }), {
+    cwd: repo.dir,
+    execFile(file, args, opts) {
+      if (args.includes('run-e2e')) writeFileSync(opts.env.TESTKIT_RESULTS_JSON, JSON.stringify({ suites: [], errors: [{ message: 'global setup failed' }] }));
+      return '';
+    },
+    evaluateChange: () => ({ phase: 'plan', warnings: [], failures: [] }),
+  });
+  assert.equal(ran.code, 2, ran.lines.join('\n'));
+  assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /Playwright JSON が不正.*global setup failed/);
 });

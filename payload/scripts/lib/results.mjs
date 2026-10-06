@@ -1,6 +1,7 @@
 import { hasBoundedToken } from './markdown.mjs';
 
-// Shared by the per-change reporter and the coverage map so both classify attempts identically.
+// Shared attempt labels. Coverage counts expected-fail as fail; the per-change
+// reporter excludes it from the fail count and reports its TP as missing coverage.
 export const STATUS_LABEL = { expected: 'pass', unexpected: 'fail', flaky: 'pass', skipped: 'skip' };
 
 export function tagTextOf(spec) {
@@ -12,19 +13,22 @@ export function specMatches(spec, changeId, tpId) {
   return hasBoundedToken(tagText, changeId) && hasBoundedToken(tagText, tpId);
 }
 
-// Validate the fields consumed by both reporters; omitted optional arrays remain compatible.
+class InvalidResultsError extends Error {}
+
+// Validate consumed fields and reject top-level Playwright execution errors.
+// Omitted optional arrays remain compatible; suites is required.
 export function validateResults(results) {
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const checkObject = (value, path) => {
-    if (!object(value)) throw new Error(`${path} は object が必要です`);
+    if (!object(value)) throw new InvalidResultsError(`${path} は object が必要です`);
   };
   const array = (value, path) => {
     if (value === undefined) return [];
-    if (!Array.isArray(value)) throw new Error(`${path} は配列が必要です`);
+    if (!Array.isArray(value)) throw new InvalidResultsError(`${path} は配列が必要です`);
     return value;
   };
   const string = (value, path) => {
-    if (value !== undefined && typeof value !== 'string') throw new Error(`${path} は文字列が必要です`);
+    if (value !== undefined && typeof value !== 'string') throw new InvalidResultsError(`${path} は文字列が必要です`);
   };
   function suite(value, path) {
     checkObject(value, path);
@@ -35,7 +39,7 @@ export function validateResults(results) {
       checkObject(spec, at);
       string(spec.title, `${at}.title`);
       array(spec.tags, `${at}.tags`).forEach((tag, n) => {
-        if (typeof tag !== 'string') throw new Error(`${at}.tags[${n}] は文字列が必要です`);
+        if (typeof tag !== 'string') throw new InvalidResultsError(`${at}.tags[${n}] は文字列が必要です`);
       });
       array(spec.tests, `${at}.tests`).forEach((test, n) => {
         const where = `${at}.tests[${n}]`;
@@ -50,18 +54,19 @@ export function validateResults(results) {
   }
   try {
     checkObject(results, 'results');
-    if (!Array.isArray(results.suites)) throw new Error('suites は配列が必要です');
+    if (!Array.isArray(results.suites)) throw new InvalidResultsError('suites は配列が必要です');
     results.suites.forEach((value, i) => suite(value, `suites[${i}]`));
     if (results.stats !== undefined) {
       checkObject(results.stats, 'stats');
       string(results.stats.startTime, 'stats.startTime');
-      if (results.stats.duration !== undefined && typeof results.stats.duration !== 'number') throw new Error('stats.duration は数値が必要です');
+      if (results.stats.duration !== undefined && typeof results.stats.duration !== 'number') throw new InvalidResultsError('stats.duration は数値が必要です');
     }
     const errors = array(results.errors, 'errors');
-    if (errors.length) throw new Error(`errors: Playwright の実行エラーがあります: ${errors.map(error => object(error) ? error.message ?? error.value ?? JSON.stringify(error) : String(error)).join('; ')}`);
+    if (errors.length) throw new InvalidResultsError(`errors: Playwright の実行エラーがあります: ${errors.map(error => object(error) ? error.message ?? error.value ?? JSON.stringify(error) : String(error)).join('; ')}`);
     return null;
   } catch (err) {
-    return err.message;
+    if (err instanceof InvalidResultsError) return err.message;
+    throw err;
   }
 }
 

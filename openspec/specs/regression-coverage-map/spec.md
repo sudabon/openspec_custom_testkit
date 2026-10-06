@@ -29,12 +29,25 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** 未 archive の change の test-plan だけがシナリオを割り当てている
 - **THEN** 対応表はそのシナリオを保護に数えず、進行中の change があることを補足として表示する
 
+#### Scenario: Malformed active change is only a warning
+- **WHEN** 進行中 change の YAML・delta 見出し・コードフェンスなどに不備がある
+- **THEN** その change だけを進行中の注記から除外し、change と理由を警告として表示する
+- **AND** 他の change の対応表を出力し、この警告だけでは strict の有無によらず失敗しない
+
 ### Requirement: Stale and orphaned coverage detection
-システムは、対応する TP より後に archive された change の delta spec で、そのシナリオを含む Requirement が MODIFIED されている場合、その対応を「要再確認」と分類しなければならない（SHALL）。前後関係は archive フォルダの日付と名前の順で決めなければならない（SHALL）。より新しい change が同じシナリオへ TP を割り当てていれば、古い対応では要再確認にしてはならない（MUST NOT）。main spec に存在しないシナリオを指す TP は「孤立」と分類しなければならない（SHALL）。要再確認と孤立を保護に数えてはならない（MUST NOT）。
+システムは、対応する TP より後に archive された change の delta spec で、そのシナリオを含む Requirement が ADDED・MODIFIED・RENAMED で再定義されている場合、その対応を「要再確認」と分類しなければならない（SHALL）。前後関係は archive フォルダの日付と名前の順で決めなければならない（SHALL）。より新しい change が同じシナリオへ TP を割り当てていれば、古い対応では要再確認にしてはならない（MUST NOT）。main spec に存在しないシナリオを指す TP は「孤立」と分類しなければならない（SHALL）。要再確認と孤立を保護に数えてはならない（MUST NOT）。
 
 #### Scenario: Requirement modified after the TP was written
 - **WHEN** change A の TP がシナリオ S を守り、その後に archive された change B が S を含む Requirement を MODIFIED し、B の test-plan は S に TP を割り当てていない
 - **THEN** 対応表は S を「要再確認」とし、A の TP-ID と B の change id を表示する
+
+#### Scenario: Requirement redefined by ADDED or RENAMED
+- **WHEN** TP の archive より後の change が同じ Requirement 名を ADDED または RENAMED の TO として再定義し、新しい対応を割り当てていない
+- **THEN** 古い対応は「要再確認」となり、実際の操作名を表示する
+
+#### Scenario: Quality-driven delta invalidates older coverage
+- **WHEN** 後から archive された `quality-driven` change が既存 TP の Requirement を MODIFIED している
+- **THEN** test-plan を対応の入力にせず、delta によって古い対応を「要再確認」とする
 
 #### Scenario: Requirement modified with a new TP
 - **WHEN** change B が Requirement を MODIFIED し、同じ change の TP でシナリオ S を割り当てている
@@ -46,7 +59,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **AND** Requirement 名を RENAMED した場合も旧名からの対応は引き継がず、新しい名前のシナリオに別の対応が無ければ「未保護」と表示する
 
 ### Requirement: Execution results joined to the coverage map
-システムは、Playwright の JSON 結果を任意で受け取り、E2E 保護の各行に結果を添えなければならない（SHALL）。照合は change id と TP-ID の両方のトークン完全一致で行い、既存の E2E レポータと同じ状態分類を使わなければならない（SHALL）。実 attempt のない行は「未実行」としなければならない（SHALL）。失敗または未実行の行を保護済みとして集計してはならない（MUST NOT）。結果を渡さない場合は、結果欄を空にして宣言上の対応だけを表示しなければならない（SHALL）。
+システムは、Playwright の JSON 結果を任意で受け取り、E2E 保護の各行に結果を添えなければならない（SHALL）。照合は change id と TP-ID の両方のトークン完全一致で行い、attempt の分類を既存 E2E レポーターと共有し、coverage の集計では expected-fail を fail、skip を未実行として扱わなければならない（SHALL）。同じ TP の複数結果と、同じシナリオの複数 TP は、fail・未実行・pass の優先順で合成しなければならない（SHALL）。実行結果の集計は「保護（E2E）」の行だけを対象としなければならない（SHALL）。実 attempt のない行は「未実行」としなければならない（SHALL）。失敗または未実行の行を保護済みとして集計してはならない（MUST NOT）。結果を渡さない場合は、結果欄を空にして宣言上の対応だけを表示しなければならない（SHALL）。
 
 #### Scenario: Full regression run is provided
 - **WHEN** 全量実行の JSON を渡し、保護（E2E）の TP の一つが fail、一つが実行されていない
@@ -71,12 +84,30 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** `--strict` を付け、要再確認が 1 件ある
 - **THEN** 終了コード 1 で終わり、該当シナリオを出力に含める
 
+#### Scenario: Invalid main or archived spec headings
+- **WHEN** main spec または archive の Requirement・Scenario 見出しが不正、または MODIFIED の Requirement 名が既存名と大小文字だけ異なる
+- **THEN** ファイルと理由を示して終了コード 2 で止まり、不完全なシナリオ数や古い保護を成功として出力しない
+
 #### Scenario: Main specs are empty
 - **WHEN** `openspec/specs` にシナリオが 1 件もない
 - **THEN** 0 件であることを明示して出力し、保護率を 100% と表示しない
 
 ### Requirement: Legacy test plans are mapped conservatively
 システムは旧 `spec-driven-e2e` の archive 済み change から、TP-ID、Requirement、シナリオ名の表として解析できる行だけを対応に使わなければならない（SHALL）。シナリオと結び付けられない TP-ID は「旧形式・対応不明」として別欄に表示し、保護に数えてはならない（MUST NOT）。旧 `quality-driven` の change は test-plan を持たないため、対応の入力にしてはならない（MUST NOT）。
+
+#### Scenario: Missing plan depends on the schema
+- **WHEN** archive 済み change に test-plan.md が無い
+- **THEN** `quality-driven-e2e` と `spec-driven-e2e` の場合だけ対応不明として報告する
+- **AND** `spec-driven` などの delta は引き続き要再確認・孤立の判定に使う
+
+#### Scenario: Malformed mapping rows are diagnosed
+- **WHEN** TP-ID が `TP-NNN` 形式でない、列名・表の見出しが不正、または対象外行のシナリオ名が空である
+- **THEN** その行を理由付きで対応不明に表示し、保護に数えない
+- **AND** 対象外行のシナリオ列は `Scenario` または `対応シナリオ` を受け付ける
+
+#### Scenario: Unknown schema is not treated as integrated
+- **WHEN** `.openspec.yaml` が未対応の schema 名を持つ
+- **THEN** 警告を表示し、test-plan を保護に数えず、delta は判定に使う
 
 #### Scenario: Legacy plan with a parsable table
 - **WHEN** 旧 schema の test-plan に TP-ID とシナリオ名の列を持つ表がある

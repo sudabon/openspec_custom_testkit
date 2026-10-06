@@ -5,14 +5,14 @@
 ## 1. fixture と共通化
 
 - [x] 1.1 main spec と archive 済み change の組を持つ fixture repo を作る。保護（E2E）、他層の宣言、未保護、同名シナリオ、要再確認、新 TP 付きの MODIFIED、REMOVED、RENAMED、未 archive の change、旧 schema の表と本文だけの例を含める。完了条件: spec の各 Scenario に対応する fixture が 1 つ以上あり、期待する分類を表にして test に置いている。
-- [x] 1.2 `report.mjs` の結果平坦化と状態分類を共通モジュールへ移す。完了条件: 既存の reporter テストが変更なしで GREEN のまま、終了コード 0/1/2/3 と flaky 表示が変わらない。
+- [x] 1.2 `report.mjs` の結果平坦化と状態分類を共通モジュールへ移す。完了条件: 既存の reporter テストが変更なしで GREEN のまま、正常入力の終了コード 0/1/2/3 と flaky 表示が変わらない。不正 JSON（suites 欠落・トップレベル errors を含む）は終了コード 2 として検証する。
 
 ## 2. 対応表の組み立て
 
 - [x] 2.1 main spec の全 capability・Requirement・Scenario を列挙する処理を実装する。完了条件: 入れ子の capability パスと 0 件の場合を含む fixture で、列挙結果が期待表と一致する。
 - [x] 2.2 archive 済み change の test-plan 行を、同じ change の delta spec から capability に結び付ける処理を実装する。完了条件: 同名シナリオの fixture で一方の capability だけが保護になり、決まらない行は対応不明になる。
 - [x] 2.3 archive フォルダ順で Requirement の最新定義 change を求め、要再確認と孤立を分類する。完了条件: MODIFIED（新 TP あり・なし）、REMOVED、RENAMED の各 fixture が期待どおりに分類され、要再確認と孤立は保護に数えない。
-- [x] 2.4 旧 `spec-driven-e2e` の表を取り込み、本文だけの TP-ID を「旧形式・対応不明」に分ける。旧 `quality-driven` は読まない。完了条件: 旧形式の両 fixture で、表の行だけが保護になる。
+- [x] 2.4 旧 `spec-driven-e2e` の表を取り込み、本文だけの TP-ID を「旧形式・対応不明」に分ける。旧 `quality-driven` の test-plan は読まず、delta は要再確認・孤立の判定に使う。完了条件: 旧形式の両 fixture で、表の行だけが保護になる。
 
 ## 3. 結果の照合とコマンド
 

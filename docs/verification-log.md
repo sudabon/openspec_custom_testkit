@@ -56,3 +56,19 @@ OpenSpec CLI はローカルの 1.13.1 で、三 schema の validate、`quality-
 | Node 20 / 22 での実行 | このホストの Node は v26.2.0 だけで計測した |
 | Linux と hosted GitHub Actions での `regression-command` | workflow の入力は `ci-job.mjs` の local harness（`test/coverage.test.mjs`）でだけ確認した |
 | 実プロジェクトの archive に対する対応表 | fixture と合成 fixture だけで確認した |
+
+## PR #6 再レビュー修正
+
+記録日: 2026-10-06 JST。ホストは Darwin、Node v26.2.0。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 180 pass / 0 fail / 0 skipped。再レビュー向け 11 テストを追加 |
+| `npm run lint` | 成功。250 files scanned |
+| `npm run test:smoke` | 成功（exit 0） |
+| `node payload/scripts/testkit-gate.mjs coverage --format json` | このリポジトリで exit 0、対応不明・旧形式対応不明とも 0 件。spec-driven archive の test-plan 欠落を誤診断しない |
+| `git diff --check` | 成功 |
+
+最初の sandbox 内実行では npm キャッシュ書き込みと Chromium の起動が拒否された。上の全テスト・smoke の成功は sandbox 外で再実行した結果である。hosted GitHub Actions はこの記録には含めない。
+
+回帰テストは、schema ごとの plan 欠落診断、壊れた進行中 change の個別警告と CI 継続、不正 TP-ID・対象外行・spec 見出し・MODIFIED 名の大小文字違い、fail → pass を含む順序非依存の結果合成、複数 TP の合成、未知 schema の警告、strict の真偽値、内部例外の再送出、coverage 保存失敗後の summary/risk 出力、E2E JSON エラーの CI ログを確認する。main spec と archive 済み change の文書も同じ挙動へ合わせた。
