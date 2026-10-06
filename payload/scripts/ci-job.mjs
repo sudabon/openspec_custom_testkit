@@ -172,7 +172,7 @@ export function runCiJob(env = process.env, deps = {}) {
       lines.push(...regression.lines);
       regressionCode = regression.code;
     }
-    const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true });
+    const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true, env });
     // Preserve the command's failure code while still saving the map and final summary.
     lines.push(...[coverage.stdout.trimEnd(), coverage.stderr.trimEnd()].filter(Boolean));
     if (regressionCode) code = code || regressionCode;

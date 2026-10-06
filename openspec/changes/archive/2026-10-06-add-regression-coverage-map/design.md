@@ -75,4 +75,6 @@ archive フォルダは `YYYY-MM-DD-<id>` で、OpenSpec はこの順に main sp
 
 ## 再レビューによる入力診断の補足
 
-main spec・archive の不正な見出し、YAML、MODIFIED 名の大小文字違いは入力エラーにする。進行中 change は注記専用なので、change ごとに不備を警告として除外する。test-plan 欠落を診断するのは E2E schema のみである。未知の schema は警告して test-plan を除外し、delta は判定に使う。警告は Markdown・stderr と JSON の任意フィールド `warnings` に保存する。
+main spec・archive の不正な見出し、YAML、MODIFIED 名の大小文字違いは入力エラーにする。archive の名前照合は、その時点までの履歴で確認できる名前だけを使い、REMOVED や RENAMED の旧名は比較から外す。現在の main spec や将来の archive の名前を過去へ適用しない。進行中 change は現在の main spec と名前を比較し、入力書式の不備だけを専用例外として警告に変換する。I/O エラーと内部例外は再送出する。test-plan 欠落を診断するのは E2E schema のみである。未知の schema は警告して test-plan を除外し、delta は判定に使う。警告は Markdown・stderr と JSON の任意フィールド `warnings` に保存する。
+
+change の schema が未指定なら openspec/config.yaml の schema を使う。QE_SCHEMA の独自の旧 QE schema は警告せず test-plan を除外する。対象外表の見出し誤記は正常な TP 表と独立に診断し、シナリオ列の欠落とセルの空欄を区別する。本文の TP 参照は大文字の独立した ID に限定する。説明用の見出しは構造用宣言と区別し、結果 JSON の suites は 256 階層まで受け付ける。

@@ -16,7 +16,8 @@ export function specMatches(spec, changeId, tpId) {
 class InvalidResultsError extends Error {}
 
 // Validate consumed fields and reject top-level Playwright execution errors.
-// Omitted optional arrays remain compatible; suites is required.
+// Omitted optional arrays remain compatible; suites is required. Limit nesting
+// to 256 suite levels so validation and the shared flattener cannot overflow.
 export function validateResults(results) {
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const checkObject = (value, path) => {
@@ -30,10 +31,11 @@ export function validateResults(results) {
   const string = (value, path) => {
     if (value !== undefined && typeof value !== 'string') throw new InvalidResultsError(`${path} は文字列が必要です`);
   };
-  function suite(value, path) {
+  function suite(value, path, depth) {
+    if (depth > 256) throw new InvalidResultsError('suites のネストは 256 階層までです');
     checkObject(value, path);
     string(value.title, `${path}.title`);
-    array(value.suites, `${path}.suites`).forEach((child, i) => suite(child, `${path}.suites[${i}]`));
+    array(value.suites, `${path}.suites`).forEach((child, i) => suite(child, `${path}.suites[${i}]`, depth + 1));
     array(value.specs, `${path}.specs`).forEach((spec, i) => {
       const at = `${path}.specs[${i}]`;
       checkObject(spec, at);
@@ -55,7 +57,7 @@ export function validateResults(results) {
   try {
     checkObject(results, 'results');
     if (!Array.isArray(results.suites)) throw new InvalidResultsError('suites は配列が必要です');
-    results.suites.forEach((value, i) => suite(value, `suites[${i}]`));
+    results.suites.forEach((value, i) => suite(value, `suites[${i}]`, 1));
     if (results.stats !== undefined) {
       checkObject(results.stats, 'stats');
       string(results.stats.startTime, 'stats.startTime');

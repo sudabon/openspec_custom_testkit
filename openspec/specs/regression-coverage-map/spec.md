@@ -33,6 +33,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** 進行中 change の YAML・delta 見出し・コードフェンスなどに不備がある
 - **THEN** その change だけを進行中の注記から除外し、change と理由を警告として表示する
 - **AND** 他の change の対応表を出力し、この警告だけでは strict の有無によらず失敗しない
+- **AND** I/O エラーや予期しない内部例外は入力書式の警告として握りつぶさない
 
 ### Requirement: Stale and orphaned coverage detection
 システムは、対応する TP より後に archive された change の delta spec で、そのシナリオを含む Requirement が ADDED・MODIFIED・RENAMED で再定義されている場合、その対応を「要再確認」と分類しなければならない（SHALL）。前後関係は archive フォルダの日付と名前の順で決めなければならない（SHALL）。より新しい change が同じシナリオへ TP を割り当てていれば、古い対応では要再確認にしてはならない（MUST NOT）。main spec に存在しないシナリオを指す TP は「孤立」と分類しなければならない（SHALL）。要再確認と孤立を保護に数えてはならない（MUST NOT）。
@@ -70,7 +71,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **THEN** 対応表はその結果を対象の TP に流用せず、未実行と表示する
 
 #### Scenario: Stale or malformed results
-- **WHEN** JSON が欠落・不正、または `--max-age` を超えている
+- **WHEN** JSON が欠落・不正（suites のネストが 256 階層を超える場合を含む）、または `--max-age` を超えている
 - **THEN** コマンドは終了コード 2 で止まり、宣言上の対応表を成功として出力しない
 
 ### Requirement: Coverage command interface and exit codes
@@ -85,8 +86,18 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **THEN** 終了コード 1 で終わり、該当シナリオを出力に含める
 
 #### Scenario: Invalid main or archived spec headings
-- **WHEN** main spec または archive の Requirement・Scenario 見出しが不正、または MODIFIED の Requirement 名が既存名と大小文字だけ異なる
+- **WHEN** main spec または archive の Requirement・Scenario 見出しが不正、または MODIFIED の Requirement 名がそれ以前の archive 履歴で確認できる名前と大小文字だけ異なる
 - **THEN** ファイルと理由を示して終了コード 2 で止まり、不完全なシナリオ数や古い保護を成功として出力しない
+
+#### Scenario: Historical names are checked chronologically
+- **WHEN** 過去の archive が `login` を MODIFIED・REMOVED し、後の archive が `Login` を ADDED している
+- **THEN** 過去の MODIFIED を現在の main spec や将来の archive の名前と比較せず、入力エラーにしない
+- **AND** REMOVED の名前と RENAMED の旧名は以後の比較から外し、ADDED・MODIFIED・RENAMED の新名を以後の名前として保持する
+- **AND** 進行中 change の名前は現在の main spec と比較し、大小文字違いはその change だけの警告にする。同じ change 内の RENAMED は新名での MODIFIED を許容する
+
+#### Scenario: Overview headings are not declarations
+- **WHEN** spec が `# Requirement overview` など説明用の見出しを持つ
+- **THEN** Requirement の `###` と Scenario の `####`、またはコロン付きの宣言だけを構造用として検査し、説明用見出しを入力エラーにしない
 
 #### Scenario: Main specs are empty
 - **WHEN** `openspec/specs` にシナリオが 1 件もない
@@ -99,15 +110,22 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** archive 済み change に test-plan.md が無い
 - **THEN** `quality-driven-e2e` と `spec-driven-e2e` の場合だけ対応不明として報告する
 - **AND** `spec-driven` などの delta は引き続き要再確認・孤立の判定に使う
+- **AND** change の schema が未指定なら `openspec/config.yaml` の schema を既定値に使い、両方に指定が無ければ欠落を診断しない
 
 #### Scenario: Malformed mapping rows are diagnosed
 - **WHEN** TP-ID が `TP-NNN` 形式でない、列名・表の見出しが不正、または対象外行のシナリオ名が空である
 - **THEN** その行を理由付きで対応不明に表示し、保護に数えない
 - **AND** 対象外行のシナリオ列は `Scenario` または `対応シナリオ` を受け付ける
+- **AND** 正常な TP 表があっても `## 対象外シナリオ一覧` などの対象外表の見出し誤記を診断する
+- **AND** シナリオ列の欠落とシナリオ名の空欄を異なる理由として表示する
 
 #### Scenario: Unknown schema is not treated as integrated
 - **WHEN** `.openspec.yaml` が未対応の schema 名を持つ
 - **THEN** 警告を表示し、test-plan を保護に数えず、delta は判定に使う
+
+#### Scenario: Custom legacy QE schema
+- **WHEN** archive の schema が `QE_SCHEMA` で指定された独自の旧 QE schema と一致する
+- **THEN** `quality-driven` と同じく test-plan を対応に使わず、delta は判定に使い、未知の schema の警告を出さない
 
 #### Scenario: Legacy plan with a parsable table
 - **WHEN** 旧 schema の test-plan に TP-ID とシナリオ名の列を持つ表がある
@@ -116,6 +134,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 #### Scenario: Legacy plan with free text only
 - **WHEN** 旧 schema の test-plan に TP-ID が本文中にしか現れない
 - **THEN** その TP-ID は「旧形式・対応不明」に表示され、どのシナリオの保護にも数えない
+- **AND** 本文中は大文字の独立した TP-ID 参照だけを検出し、Fixture のファイル名を TP-ID と誤認しない
 
 ### Requirement: Optional regression run in the reusable workflow
 再利用可能 workflow は任意入力 `regression-command` と `coverage-strict` を受け付けなければならない（SHALL）。`regression-command` が指定されたとき、change の有無にかかわらず実行し、その結果 JSON を固有の出力先へ保存して coverage コマンドに渡さなければならない（SHALL）。`coverage-strict` が真のときだけ coverage の終了コード 1 を job の失敗にしなければならない（SHALL）。未指定時は既存の job の挙動と出力を変えてはならない（MUST NOT）。回帰コマンドの失敗は、coverage の出力を保存した後でも job の失敗として伝えなければならない（SHALL）。

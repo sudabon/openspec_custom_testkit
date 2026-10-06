@@ -556,7 +556,9 @@ test('CI keeps running regression with malformed WIP and logs spec input errors 
   t.after(() => repo.cleanup());
   write(repo.dir, 'openspec/changes/wip/.openspec.yaml', '');
   const env = ciEnv({ REGRESSION_COMMAND: 'run-regression', COVERAGE_STRICT: 'false' });
-  const ran = runCiJob(env, { cwd: repo.dir, execFile: regressionExec([]) });
+  const calls = [];
+  const ran = runCiJob(env, { cwd: repo.dir, execFile: regressionExec(calls) });
+  assert.ok(calls.includes('-c run-regression'));
   assert.equal(ran.code, 0, ran.lines.join('\n'));
   assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /進行中の change wip を注記から除外/);
   write(repo.dir, 'openspec/specs/broken/spec.md', '### requirement: R\n');
@@ -603,6 +605,8 @@ test('malformed spec headings and case-only MODIFIED names fail with paths inste
     SPEC('R', ['S']).replace('#### Scenario: S', '#### Scenario S'),
     SPEC('R', ['S']).replace('### Requirement:', '### requirement:'),
     SPEC('R', ['S']).replace('### Requirement: R', '### Requirement:'),
+    SPEC('R', ['S']).replace('### Requirement:', '## Requirement:'),
+    SPEC('R', ['S']).replace('#### Scenario:', '### Scenario:'),
   ]) {
     write(dir, 'openspec/specs/cap/spec.md', spec);
     const out = runCoverage({ repo: dir });
@@ -705,4 +709,199 @@ test('CI includes invalid E2E JSON reasons in its summary log', t => {
   });
   assert.equal(ran.code, 2, ran.lines.join('\n'));
   assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /Playwright JSON が不正.*global setup failed/);
+});
+
+
+test('archive name checks follow history rather than future main or archive names', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive';
+  write(dir, 'openspec/specs/cap/spec.md', SPEC('Login', ['S']));
+  write(dir, `${archive}/2026-01-01-a/specs/cap/spec.md`, SPEC('login', ['S'], 'MODIFIED'));
+  write(dir, `${archive}/2026-01-01-a/test-plan.md`, PLAN([['TP-001', 'login', 'S']]));
+  write(dir, `${archive}/2026-02-01-b/specs/cap/spec.md`, SPEC('login', [], 'REMOVED'));
+  write(dir, `${archive}/2026-03-01-c/specs/cap/spec.md`, SPEC('Login', ['S']));
+  write(dir, `${archive}/2026-03-01-c/test-plan.md`, PLAN([['TP-001', 'Login', 'S']]));
+  write(dir, `${archive}/2026-04-01-d/specs/cap/spec.md`, SPEC('Login', ['S'], 'MODIFIED'));
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.model.scenarios[0].classification, CLASS.stale);
+  assert.equal(out.model.scenarios[0].source.modifiedBy, 'd');
+  assert.equal(out.model.orphans[0].reason, 'REMOVED（b）');
+  assert.deepEqual(out.model.warnings, []);
+  write(dir, `${archive}/2026-04-01-d/specs/cap/spec.md`, SPEC('login', ['S'], 'MODIFIED'));
+  const typo = runCoverage({ repo: dir });
+  assert.equal(typo.exitCode, 2);
+  assert.match(typo.stderr, /2026-04-01-d.*大小文字/);
+});
+
+test('archive names added and renamed earlier remain case-sensitive for later modifications', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive';
+  write(dir, 'openspec/specs/cap/spec.md', SPEC('Renamed', ['S']));
+  write(dir, `${archive}/2026-02-01-b/specs/cap/spec.md`, '## RENAMED Requirements\n- FROM: Requirement: R\n- TO: Requirement: Renamed\n');
+  write(dir, `${archive}/2026-03-01-c/specs/cap/spec.md`, SPEC('Renamed', ['S'], 'MODIFIED'));
+  assert.equal(runCoverage({ repo: dir }).exitCode, 0);
+  write(dir, `${archive}/2026-03-01-c/specs/cap/spec.md`, SPEC('renamed', ['S'], 'MODIFIED'));
+  const bad = runCoverage({ repo: dir });
+  assert.equal(bad.exitCode, 2);
+  assert.match(bad.stderr, /2026-03-01-c.*renamed \/ Renamed/);
+});
+
+test('a case-only MODIFIED typo in WIP warns and does not hide valid active notes', t => {
+  const dir = protectedRepo(t);
+  for (const [id, req] of [['bad-case', 'r'], ['good', 'R']]) {
+    write(dir, `openspec/changes/${id}/specs/cap/spec.md`, SPEC(req, ['S'], 'MODIFIED'));
+    write(dir, `openspec/changes/${id}/test-plan.md`, PLAN([['TP-001', req, 'S']]));
+  }
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.deepEqual(out.model.scenarios[0].active, ['good']);
+  assert.equal(out.model.warnings.length, 1);
+  assert.match(out.stderr, /bad-case.*大小文字/);
+});
+
+test('malformed delegated headings diagnose their rows even alongside a valid TP table', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  for (const heading of ['## 対象外シナリオ一覧', '## 対象外 シナリオ']) {
+    for (const rows of [[], [['TP-001', 'R', 'S']]]) {
+      write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', `${PLAN(rows)}
+${heading}
+| Requirement | Scenario | Oracle | Layer | Method |
+|---|---|---|---|---|
+| R | T | O1 | Unit | unit test |
+`);
+      const out = runCoverage({ repo: dir });
+      assert.equal(out.exitCode, 0, out.stderr);
+      assert.equal(out.model.unresolved.length, 1);
+      assert.equal(out.model.unresolved[0].scenario, 'T');
+      assert.match(out.model.unresolved[0].reason, /対象外の表の見出しを解析できません/);
+      assert.equal(out.model.scenarios[1].classification, CLASS.none);
+      assert.equal(out.model.scenarios[0].classification, rows.length ? CLASS.e2e : CLASS.none);
+    }
+  }
+});
+
+test('WIP I/O failures and unexpected parser exceptions are not downgraded to warnings', t => {
+  const dir = protectedRepo(t);
+  const rel = 'openspec/changes/wip/test-plan.md';
+  mkdirSync(join(dir, rel), { recursive: true });
+  assert.throws(() => buildCoverage(dir), /test-plan.md.*EISDIR/);
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 2);
+  assert.match(out.stderr, /EISDIR/);
+  assert.doesNotMatch(out.stderr, /注記から除外/);
+  rmSync(join(dir, rel), { recursive: true });
+  write(dir, rel, PLAN([]) + '\ninternal-error');
+  const original = String.prototype.matchAll;
+  const bug = new TypeError('unexpected parser failure');
+  t.mock.method(String.prototype, 'matchAll', function (...args) {
+    if (this.includes('internal-error')) throw bug;
+    return original.apply(this, args);
+  });
+  assert.throws(() => buildCoverage(dir), err => err === bug);
+});
+
+test('missing change schema uses config for missing-plan diagnostics and preserves explicit schemas', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-02-01-b';
+  write(dir, `${archive}/specs/cap/spec.md`, SPEC('R', ['S'], 'MODIFIED'));
+  for (const schema of ['quality-driven-e2e', 'spec-driven-e2e', 'spec-driven', 'quality-driven']) {
+    write(dir, 'openspec/config.yaml', `schema: ${schema}\n`);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.equal(out.model.scenarios[0].classification, CLASS.stale);
+    const unknown = [...out.model.unresolved, ...out.model.legacyUnresolved];
+    assert.equal(unknown.length, schema.endsWith('-e2e') ? 1 : 0, schema);
+    if (unknown.length) assert.match(unknown[0].reason, /2026-02-01-b\/test-plan.md がありません/);
+  }
+  write(dir, 'openspec/config.yaml', 'schema: quality-driven-e2e\n');
+  write(dir, `${archive}/.openspec.yaml`, 'created: 2026-02-01\n');
+  assert.equal(buildCoverage(dir).unresolved.length, 1);
+  write(dir, `${archive}/.openspec.yaml`, 'schema: spec-driven\n');
+  assert.equal(buildCoverage(dir).unresolved.length, 0);
+});
+
+test('fixture paths do not create text-only TP diagnostics while standalone IDs still do', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN([['TP-001', 'R', 'S']])
+    .replace('| f |', '| fixtures/tp-001-user.json, fixtures/TP-002-user.json |') + '\nSee @TP-003 and TP-004.\n');
+  const model = buildCoverage(dir);
+  assert.equal(model.scenarios[0].classification, CLASS.e2e);
+  assert.deepEqual(model.unresolved.map(row => row.id), ['TP-003', 'TP-004']);
+});
+
+test('missing Scenario columns are diagnosed as columns rather than blank cells', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN([['TP-001', 'R', 'S']]).replace('| Scenario |', '| Scenerio |'));
+  const model = buildCoverage(dir);
+  assert.equal(model.unresolved.length, 1);
+  assert.match(model.unresolved[0].reason, /シナリオ列を解析できません/);
+  assert.equal(model.scenarios[0].classification, CLASS.none);
+});
+
+test('structural overview headings do not look like malformed spec declarations', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/specs/cap/spec.md', '# Requirement overview\n## Scenario overview\n' + SPEC('R', ['S']));
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.model.scenarios.length, 1);
+});
+
+test('custom QE_SCHEMA excludes plans without warnings but still consumes deltas', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-02-01-b';
+  write(dir, `${archive}/.openspec.yaml`, 'schema: custom-qe\n');
+  write(dir, `${archive}/specs/cap/spec.md`, SPEC('R', ['S'], 'MODIFIED'));
+  write(dir, `${archive}/test-plan.md`, PLAN([['TP-001', 'R', 'S']]));
+  const out = runCoverage({ repo: dir, env: { QE_SCHEMA: 'custom-qe' } });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.deepEqual(out.model.warnings, []);
+  assert.equal(out.model.scenarios[0].classification, CLASS.stale);
+  assert.match(runCoverage({ repo: dir, env: {} }).stderr, /未対応の schema custom-qe/);
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  write(repo.dir, `${archive}/.openspec.yaml`, 'schema: custom-qe\n');
+  const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', QE_SCHEMA: 'custom-qe' }), {
+    cwd: repo.dir, execFile: regressionExec([]),
+  });
+  assert.equal(ran.code, 0, ran.lines.join('\n'));
+  assert.doesNotMatch(ran.lines.join('\n'), /未対応の schema custom-qe/);
+});
+
+test('excessively nested results are input errors through CLI, reporter and CI with saved summaries', t => {
+  const raw = '{"suites":['.repeat(10000) + '{}' + ']}'.repeat(10000);
+  const nested = JSON.parse(raw);
+  const dir = protectedRepo(t);
+  write(dir, 'results.json', raw);
+  const out = gate(dir, ['--results', 'results.json']);
+  assert.equal(out.status, 2, out.stderr);
+  assert.match(out.stderr, /256 階層/);
+  assert.equal(buildReport({ changeId: 'a', planText: PLAN([['TP-001', 'R', 'S']]), results: nested }).exitCode, 2);
+  const atLimit = JSON.parse('{"suites":['.repeat(256) + '{}' + ']}'.repeat(256));
+  assert.equal(validateResults(atLimit), null);
+  assert.doesNotThrow(() => attachResults(buildCoverage(dir), atLimit));
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  const output = join(repo.dir, 'github-output');
+  const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), {
+    cwd: repo.dir,
+    execFile(file, args, opts) {
+      if (args.includes('run-regression')) writeFileSync(opts.env.TESTKIT_RESULTS_JSON, raw);
+      return '';
+    },
+  });
+  assert.equal(ran.code, 2);
+  for (const path of [join(ran.runDir, 'coverage.md'), join(ran.summaryDir, 'summary.txt')]) assert.match(readFileSync(path, 'utf8'), /256 階層/);
+  assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+});
+
+
+test('a case-changing rename with its new definition is valid in archived and active changes', t => {
+  const dir = protectedRepo(t);
+  const delta = '## RENAMED Requirements\n- FROM: Requirement: R\n- TO: Requirement: r\n' + SPEC('r', ['S'], 'MODIFIED');
+  write(dir, 'openspec/changes/wip/specs/cap/spec.md', delta);
+  assert.deepEqual(buildCoverage(dir).warnings, []);
+  write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', delta);
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 0, out.stderr);
 });
