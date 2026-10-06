@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { digestForSchema } from './digest.mjs';
+import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 import { qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
@@ -30,12 +31,21 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
+  const progress = { level: 'unknown', failures: [], warnings: [], oks: [] };
+  try {
+    return evaluateReadableChange(repo, change, options, progress);
+  } catch (err) {
+    if (typeof err.syscall !== 'string' || typeof err.code !== 'string' || !/^E[A-Z]+$/.test(err.code)) throw err;
+    progress.failures.push(`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`);
+    return { ...progress, phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
+  }
+}
+
+function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
-  const failures = [];
-  const warnings = [];
-  const oks = [];
+  const { failures, warnings, oks } = progress;
   let level = 'none';
 
   const selectedCustomQe = change.qe === true && change.scope === 'out-of-scope' && change.lifecycle !== 'deleted';
@@ -69,6 +79,7 @@ export function evaluateChange(repo, change, options = {}) {
       else {
         const model = qualityModel(text);
         const declared = asString(frontmatter.data.risk_level);
+        if (['high', 'medium', 'low'].includes(declared)) progress.level = declared;
         if (!['high', 'medium', 'low'].includes(declared)) failures.push(`risk_level が不正です: '${declared}'`);
         else if (model.badLevel) failures.push(`Risk が不正です: '${model.badLevel}'`);
         else if (!model.max || declared !== model.max) failures.push(`risk_level ${declared || '(空)'} は Risk Register の最大値 ${model.max ?? '(なし)'} と一致しません`);
@@ -119,12 +130,20 @@ export function evaluateChange(repo, change, options = {}) {
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');
+      if (options.lint !== false) {
+        const lint = lintChange(repo, change, { phase, base: options.base, env, cache: options.cache, tpIds: plan.requiredTags });
+        failures.push(...lint.failures);
+        warnings.push(...lint.warnings);
+        oks.push(...lint.oks);
+      }
     }
   }
-  return { failures: [...new Set(failures)], warnings, oks, level, phase };
+  return { failures, warnings, oks, level, phase };
 }
 
 export function maxLevel(levels) {
+  if (levels.includes('high')) return 'high';
+  if (levels.includes('unknown')) return 'unknown';
   const rank = { none: 0, low: 1, medium: 2, high: 3 };
   return levels.reduce((best, level) => (rank[level] ?? 0) > (rank[best] ?? 0) ? level : best, 'none');
 }

@@ -19,6 +19,7 @@ const MAX_OUTPUT_MIB = 64;
 export function runCiJob(env = process.env, deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
   const execFile = deps.execFile ?? execFileSync;
+  const evaluate = deps.evaluateChange ?? evaluateChange;
   const lines = [];
   let code = 0;
   const fail = (status, message) => {
@@ -82,7 +83,15 @@ export function runCiJob(env = process.env, deps = {}) {
 
   const level = maxLevel(selected.changes.map(change => {
     const path = join(repo, change.path, 'quality.md');
-    return existsSync(path) ? asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level) : 'none';
+    try {
+      if (!existsSync(path)) return 'none';
+      // Malformed frontmatter or an invalid value must not downgrade the risk to none.
+      const declared = asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level);
+      return ['high', 'medium', 'low'].includes(declared) ? declared : 'unknown';
+    } catch (err) {
+      fail(1, `${change.id}: quality.md を読み取れません (${err.code ?? err.message})`);
+      return 'unknown';
+    }
   }));
   const hasFinal = selected.changes.some(change => effectivePhase(phase, change, taskState(parseTasks(change.tasksText))) === 'final');
   if ((phase === 'final' || hasFinal) && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
@@ -150,7 +159,9 @@ export function runCiJob(env = process.env, deps = {}) {
     for (const change of selected.changes) {
       const evidencePath = join(repo, change.path, 'evidence.md');
       if (!existsSync(evidencePath)) continue;
-      const data = executionBlock(readFileSync(evidencePath, 'utf8')).data;
+      let data;
+      try { data = executionBlock(readFileSync(evidencePath, 'utf8')).data; }
+      catch (err) { fail(1, `${change.id}: evidence.md を読み取れません (${err.code ?? err.message})`); continue; }
       for (const evidence of Array.isArray(data?.runs) ? data.runs : []) {
         const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code);
         if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });
@@ -165,7 +176,13 @@ export function runCiJob(env = process.env, deps = {}) {
   }
   const cache = {};
   for (const change of selected.changes) {
-    const result = evaluateChange(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache });
+    let result;
+    try {
+      result = evaluate(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
+    } catch (err) {
+      fail(1, `${change.id}: gate 評価中にエラーが発生しました (${err.code ?? err.name}: ${err.message})`);
+      continue;
+    }
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);

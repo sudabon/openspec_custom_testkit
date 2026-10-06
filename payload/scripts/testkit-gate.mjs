@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
+import { SCHEMA_E2E } from './lib/critical.mjs';
 import { doctor } from './lib/doctor.mjs';
+import { lintRepo } from './lib/e2e-lint.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { toplevel } from './lib/git.mjs';
 import { selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: testkit-gate.mjs doctor
        testkit-gate.mjs select [--base <ref>] [<change>...] --json
-       testkit-gate.mjs check --phase plan|final [--base <ref>] [<change>...]`;
+       testkit-gate.mjs check [--phase plan|final] [--base <ref>] [<change>...]
+       testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]`;
 
 function repoOf() {
   try {
@@ -57,7 +60,7 @@ if (command === 'doctor') {
   console.log('doctor: complete');
   process.exit(0);
 }
-if (command !== 'select' && command !== 'check') {
+if (command !== 'select' && command !== 'check' && command !== 'lint') {
   console.error(USAGE);
   process.exit(2);
 }
@@ -66,7 +69,7 @@ if (args.error) {
   console.error(args.error);
   process.exit(2);
 }
-if (command === 'check' && args.phase !== 'plan' && args.phase !== 'final') {
+if ((command === 'check' || command === 'lint') && args.phase !== 'plan' && args.phase !== 'final') {
   console.error('--phase は plan または final です');
   process.exit(2);
 }
@@ -92,6 +95,29 @@ if (selected.exitCode === 2) {
   console.error(selected.error);
   process.exit(2);
 }
+if (command === 'lint') {
+  const changes = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
+  const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env: process.env, requireSources: true });
+  const selectionErrors = selected.changes.flatMap(change => {
+    const unknown = change.e2e === 'unknown' && !change.pendingPlan;
+    const errors = unknown ? change.errors.filter(error => error !== change.reason) : change.errors;
+    return [...errors.map(error => `${change.id}: ${error}`), ...(unknown ? [`${change.id}: E2E 適用状態を判定できません (${change.reason})`] : [])];
+  });
+  for (const error of selectionErrors) console.error(`✗ ${error}`);
+  console.log(`対象 change: ${changes.map(change => change.id).join(', ') || 'なし（全ソースを警告範囲で表示）'}`);
+  for (const note of result.notes) console.log(`! ${note}`);
+  console.log('強制範囲:');
+  for (const entry of result.enforced) console.log(`  ✗ ${entry.text}`);
+  for (const entry of result.pending) console.log(`  ! ${entry.text}`);
+  for (const entry of result.exceptions.filter(item => item.scope?.enforced)) console.log(`  ✓ ${entry.text}`);
+  console.log('警告範囲:');
+  for (const entry of result.warned) console.log(`  ! ${entry.text}`);
+  for (const entry of result.exceptions.filter(item => !item.scope?.enforced)) console.log(`  ✓ ${entry.text}`);
+  for (const file of result.unsupported) console.log(`対象外: ${file}（.feature は手続きを持たないため lint しません）`);
+  console.log('---');
+  console.log(`e2e-lint: analyzed ${result.analyzed} files, enforced failures ${result.failed}, warnings ${result.warned.length}, pending ${result.pending.length}, exceptions ${result.exceptions.length}`);
+  process.exit(result.failed || selectionErrors.length || !selected.ok ? 1 : 0);
+}
 let failures = 0;
 const levels = [];
 const cache = {};
@@ -103,6 +129,7 @@ for (const change of selected.changes) {
     tags: true,
     env: process.env,
     cache,
+    base: selected.base,
   });
   console.log(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
   for (const line of result.oks) console.log(`  ✓ ${line}`);

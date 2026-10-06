@@ -21,6 +21,7 @@ test('packed tarball installs payload, vendor, roles, and license', () => {
     'install.mjs',
     'payload/scripts/lib/vendor/yaml.mjs',
     'payload/scripts/lib/vendor/yaml.LICENSE',
+    'payload/scripts/lib/e2e-lint.mjs',
     'payload/openspec/roles/oracle-writer.md',
     'payload/.claude/agents/qe-oracle-writer.md',
     'LICENSE',

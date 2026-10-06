@@ -4,7 +4,7 @@ import { isCritical, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
-import { policyIssues } from './policy.mjs';
+import { e2eLintPolicy, policyIssues } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
   const failures = [];
@@ -33,8 +33,14 @@ export function doctor(repo, options = {}) {
   const policyPath = join(repo, 'openspec/quality-policy.md');
   if (!existsSync(policyPath)) failures.push('openspec/quality-policy.md がありません');
   else {
-    const issues = policyIssues(readFileSync(policyPath, 'utf8'));
+    const policyText = readFileSync(policyPath, 'utf8');
+    const issues = policyIssues(policyText);
     if (issues.length) failures.push(...issues);
+    const lint = e2eLintPolicy(policyText);
+    if (lint.missing.length) {
+      notes.push(`quality-policy.md に ${lint.missing.join(' / ')} がありません。既定値（e2e_lint_mode: enforce / e2e_lint_scope: changed）で動かします。設定する場合は人間が追記してください`);
+    }
+    failures.push(...lint.errors);
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);
