@@ -10,7 +10,13 @@ import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs
 
 export function executionBlock(markdown) {
   const body = section(markdown, '## Execution Records');
-  if (body == null) return { error: '## Execution Records がありません', missing: true };
+  if (body == null) {
+    // A near-miss heading is a broken record, not a legacy evidence file without one.
+    if (/^#{1,6}[ \t]*Execution[ \t]+Records\b/im.test(markdown)) {
+      return { error: '## Execution Records の見出しが不正です（`## Execution Records` と正確に書いてください）' };
+    }
+    return { error: '## Execution Records がありません', missing: true };
+  }
   const match = body.match(/```json\s*([\s\S]*?)```/);
   if (!match) return { error: 'Execution Records の JSON がありません' };
   try {

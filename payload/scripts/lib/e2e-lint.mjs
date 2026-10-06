@@ -44,7 +44,10 @@ const SELECTOR_METHODS = new Set([
   'hover', 'focus', 'tap', 'textContent', 'innerText', 'innerHTML', 'getAttribute', 'isVisible', 'isHidden',
   'isEnabled', 'isDisabled', 'isChecked', 'isEditable', 'selectOption', 'setInputFiles', 'dispatchEvent', 'dragAndDrop',
 ]);
-const XPATH = /^\s*(?:xpath=|\(*\/\/|\.\.?\/)/;
+// Playwright's auto-detection treats selectors starting with `//` or `..` as XPath; `./` is CSS.
+const XPATH = /^\s*(?:xpath=|\(*\/\/|\.\.)/;
+// Locators lack these methods, so their first argument is a selector whatever the receiver is named.
+const PAGE_ONLY_SELECTOR_METHODS = new Set(['waitForSelector', 'dragAndDrop']);
 const KEYWORDS_BEFORE_EXPRESSION = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await', 'extends']);
 const CONTINUES_AFTER = new Set(['.', '?.', ',', '=', '=>', '+', '-', '*', '/', '%', '&', '|', '^', '?', ':', '<', '...']);
 const CONTINUES_BEFORE = new Set(['.', '?.', ',', '=', '=>', '+', '-', '*', '/', '%', '&', '|', '^', '?', ':', '<', '>']);
@@ -824,9 +827,9 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
       raw.push({ rule: 'fixed-wait', offset: call.start, line: call.line, message: 'waitForTimeout による固定待機は禁止です。自動待機ロケーターと expect のリトライに任せてください' });
       continue;
     }
-    const selector = CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (call.page && !call.locator && SELECTOR_METHODS.has(call.name));
-    const filePath = call.name === 'setInputFiles' && /^\s*\.\.?\//.test(call.first?.value ?? '');
-    const xpath = selector && !filePath && isTitle(call.first) && XPATH.test(call.first.value);
+    const selector = CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || PAGE_ONLY_SELECTOR_METHODS.has(call.name)
+      || (call.page && !call.locator && SELECTOR_METHODS.has(call.name));
+    const xpath = selector && isTitle(call.first) && XPATH.test(call.first.value);
     if (CSS_LOCATORS.has(call.name) || xpath) {
       const what = xpath ? `XPath (${call.first.value})` : `${call.name}()`;
       raw.push({ rule: 'forbidden-locator', offset: call.start, line: call.line, message: `${what} は禁止です。getByRole / getByLabel / getByText / getByTestId を使ってください` });

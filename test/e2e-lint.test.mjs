@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { main } from '../lib/cli.mjs';
@@ -916,6 +916,21 @@ test('CI writes a failure summary and unknown risk when quality.md cannot be rea
   } finally { repo.cleanup(); }
 });
 
+test('CI reports unknown risk instead of none when quality.md frontmatter is malformed or invalid', () => {
+  for (const quality of ['---\nrisk_level: high\n', '---\nrisk_level: high\nfoo: [\n---\n', '---\nrisk_level: HIGH\n---\n', '---\ntitle: x\n---\n']) {
+    const repo = gitRepo();
+    try {
+      write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+      write(repo, 'openspec/changes/demo/quality.md', quality);
+      repo.commit('change');
+      const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') }, { cwd: repo.dir });
+      assert.equal(result.code, 1, quality);
+      assert.equal(result.riskLevel, 'unknown', quality);
+      assert.match(readFileSync(join(repo.dir, 'output'), 'utf8'), /risk_level=unknown/, quality);
+    } finally { repo.cleanup(); }
+  }
+});
+
 test('gate preserves known risk on filesystem failures and rethrows internal type errors', () => {
   const repo = gitRepo();
   try {
@@ -977,7 +992,15 @@ test('value-taking receivers do not interpret paths or input text as XPath', () 
     "po.input.fill('//x')",
     "page.setInputFiles('./file')",
   ]) assert.deepEqual(lintSource(source).findings, [], source);
-  for (const source of ["page.setInputFiles('//input', './file')", "popup.fill('//input', '//x')", "page.mainFrame().click('../a')"]) {
+  for (const source of [
+    "page.setInputFiles('//input', './file')",
+    "page.setInputFiles('../input', 'a.pdf')",
+    "frame.setInputFiles('..//input', 'a.pdf')",
+    "popup.fill('//input', '//x')",
+    "page.mainFrame().click('../a')",
+    "tab.waitForSelector('//a')",
+    "tab.dragAndDrop('//a', '//b')",
+  ]) {
     assert.equal(lintSource(source).findings[0]?.rule, 'forbidden-locator', source);
   }
 });
@@ -1001,6 +1024,12 @@ await page.waitForTimeout(500);
         if (changes.length) assert.match(result.enforced[0].text, /Execution Records がありません/);
       }
     }
+    // A near-miss heading must not hide a duplicate Residual ID as if the evidence were legacy.
+    write(repo, 'openspec/changes/archive/2026-01-02-other/evidence.md', evidence([{ id: 'RES-1' }]).replace('## Execution Records', '## Execution Records (CI)'));
+    const variant = lintRepo(repo.dir, [], { env: {} });
+    assert.equal(variant.failed, 1);
+    assert.match(variant.enforced[0].text, /見出しが不正/);
+    rmSync(join(repo.dir, 'openspec/changes/archive/2026-01-02-other'), { recursive: true });
     write(repo, `${legacy.path}/evidence.md`, '## Execution Records\n```json\n{ broken\n```\n');
     const malformed = lintRepo(repo.dir, [], { env: {} });
     assert.equal(malformed.failed, 1);

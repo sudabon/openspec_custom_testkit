@@ -84,7 +84,10 @@ export function runCiJob(env = process.env, deps = {}) {
   const level = maxLevel(selected.changes.map(change => {
     const path = join(repo, change.path, 'quality.md');
     try {
-      return existsSync(path) ? asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level) : 'none';
+      if (!existsSync(path)) return 'none';
+      // Malformed frontmatter or an invalid value must not downgrade the risk to none.
+      const declared = asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level);
+      return ['high', 'medium', 'low'].includes(declared) ? declared : 'unknown';
     } catch (err) {
       fail(1, `${change.id}: quality.md を読み取れません (${err.code ?? err.message})`);
       return 'unknown';

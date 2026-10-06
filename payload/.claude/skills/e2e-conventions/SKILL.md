@@ -50,7 +50,7 @@ gate（`node scripts/testkit-gate.mjs check` / `lint`）は E2E ルート配下�
 
 | 規約 | 規則 ID | 備考 |
 |------|---------|------|
-| page.locator() / page.$() / page.$$() と XPath の禁止、CSS・要素名だけの指定の禁止 | `forbidden-locator` | `locator()` / `$` / `$$` / `$eval` / `$$eval` の呼出しと、セレクタ引数の XPath 文字列 |
+| page.locator() / page.$() / page.$$() と XPath の禁止、CSS・要素名だけの指定の禁止 | `forbidden-locator` | `locator()` / `$` / `$$` / `$eval` / `$$eval` の呼出しと、セレクタ引数の XPath 文字列（`fill()` 等は受け手が `page` / `frame` / `popup` などの名前のときだけ検査） |
 | getByRole / getByLabel / getByText を最優先、次点 getByTestId | lint 対象外 | どれが最適かは画面の意味で決まり、構文から判定できない |
 | UI 文言の変更を test-plan に反映してから行う | lint 対象外 | 仕様変更の判断で、ソースからは判定できない |
 | Page Object Model、fixture、mocks の配置と README | lint 対象外 | fixture と mock の登録検査は別 change（add-fixture-and-mock-registry-checks）が扱う |

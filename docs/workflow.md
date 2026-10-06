@@ -38,7 +38,7 @@ E2E required の change が検査対象にある場合、強制範囲は「検�
 
 ### 例外の承認
 
-XPath の引数検査では、`page` / `p2` / `popup` / `frame`、末尾が `Page` / `Frame` の名前、`frame()` / `*Frame()` の戻り値を Page / Frame の受け手として扱う。型解析は行わないため、それ以外の名前では `fill()` 等の値引数を XPath と判定しない。`setInputFiles()` の `./` / `../` はファイルパスとして扱う。`locator()` 等の禁止メソッドの検出は受け手によらない。
+XPath の引数検査では、`page` / `p2` / `popup` / `frame`、末尾が `Page` / `Frame` の名前、`frame()` / `*Frame()` の戻り値を Page / Frame の受け手として扱う。型解析は行わないため、それ以外の名前では `fill()` 等の値引数を XPath と判定しない。Locator に存在しない `waitForSelector()` / `dragAndDrop()` は、受け手によらず第 1 引数をセレクタとして検査する。XPath とみなすのは Playwright の自動判定と同じく `//` / `..` で始まる文字列と `xpath=` で、`./` は XPath として扱わない。`locator()` 等の禁止メソッドの検出は受け手によらない。
 
 規則の例外は、理由と evidence の Residual ID を書いた抑止コメント `// e2e-lint-allow <rule-id> <residual-id>: <理由>` でだけ書ける。抑止コメントは独立した行に置く。文の行末への配置、ブロックコメントと同じ行へのコード配置、describe 全体の抑止は無効とする。効力は直後の 1 文、またはテスト宣言の直前に置いた場合はそのテスト全体に限る。参照先は change の `evidence.md` の Execution Records にある `residuals[]` で、反例の Residual と同じく `reason`、`impact`、`approved_by`、`approved_at` を検査する。
 
