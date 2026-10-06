@@ -5,7 +5,7 @@ import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { readConfigDocument } from './environment.mjs';
 import { byteCompare } from './hash.mjs';
-import { parseTable, section } from './markdown.mjs';
+import { parseTable } from './markdown.mjs';
 import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
@@ -79,13 +79,13 @@ export function parseSpec(text, { delta = false } = {}) {
     }
     // Reserve explicit overview titles for prose; declarations are checked at every level.
     const overview = /^#{1,2} (?:Requirement|Scenario) overview\s*$/i.test(line);
-    if (!overview && /^#{1,6}[ \t]*requirement(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
+    if (!overview && /^#{1,6}[^\S\r\n]*requirement(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Requirement 見出しが不正です: ${line.trim()}`);
     const scenario = line.match(/^#### Scenario:\s*(.+?)\s*$/);
     if (scenario && current) {
       current.scenarios.push(scenario[1]);
       continue;
     }
-    if (!overview && /^#{1,6}[ \t]*(?:scenario|scenaro)(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
+    if (!overview && /^#{1,6}[^\S\r\n]*(?:scenario|scenaro)(?![A-Za-z0-9_-])/i.test(line)) throw new InvalidCoverageInputError(`Scenario 見出しが不正、または Requirement がありません: ${line.trim()}`);
     const heading = line.match(/^## (.+?)\s*$/);
     if (heading) {
       if (rename) throw new InvalidCoverageInputError('RENAMED の FROM に対応する TO がありません');
@@ -186,18 +186,26 @@ function delegatedList(line) {
     || /[:：]\s*(?:Unit|Integration|Contract|Manual|E2E|単体|結合|手動)(?![A-Za-z])/i.test(bullet);
 }
 
+// Any heading that starts with 対象外 declares delegated rows, except explanatory notes.
 function delegatedHeading(heading) {
-  return /^#{1,6}[ \t]*(?:E2E\s*)?対象外(?:\s*(?:の)?シナリオ.*)?$/.test(heading);
+  return /^#{1,6}[^\S\r\n]*(?:E2E[^\S\r\n]*)?対象外/.test(heading)
+    && !/^#{1,6}[^\S\r\n]*(?:E2E[^\S\r\n]*)?対象外[^\S\r\n]*の?(?:メモ|補足|注|備考|Notes?)/i.test(heading);
+}
+
+function sectionHeading(heading) {
+  return /^#{1,2}(?:[^\S\r\n]|$)/.test(heading)
+    || /^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading)
+    || delegatedHeading(heading);
 }
 
 // Rows of a test plan in a form shared by the integrated and legacy layouts.
 export function planRows(text, { legacy }) {
   const prose = markdownProse(text, { tables: true });
-  // Keep ordinary subheadings inside their parent section, as section() does.
-  // Recognizable misspellings of delegated headings also delimit sections so
-  // their tables cannot leak into the E2E table before being diagnosed.
+  // Ordinary subheadings stay inside their parent section. Every heading that
+  // names a plan section, at any level or spacing, starts a new one so that
+  // tables cannot leak into another section before being diagnosed.
   const headings = [...prose.matchAll(/^ {0,3}#{1,6}[^\S\r\n]*[^\r\n]+/gm)]
-    .filter(match => /^## /.test(match[0]) || delegatedHeading(match[0].trim()));
+    .filter(match => sectionHeading(match[0].trim()));
   const sections = headings.map((match, index) => ({
     heading: match[0].trim(),
     body: prose.slice(match.index + match[0].length, headings[index + 1]?.index ?? prose.length),
@@ -255,7 +263,8 @@ export function planRows(text, { legacy }) {
   // Only uppercase standalone IDs are references; paths and filename stems are not.
   const textOnly = [...new Set([...prose.matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))]
     .filter(id => !tableIds.has(id));
-  return { rows: [...tp, ...delegated], textOnly };
+  const hasSections = sections.some(item => item.heading === '## E2E観点一覧' || item.heading === '## 対象外シナリオ');
+  return { rows: [...tp, ...delegated], textOnly, hasSections };
 }
 
 function deltaIndex(repo, dir) {
@@ -312,7 +321,7 @@ function readChange(repo, dir, id, order, { defaultSchema, configPath, qeSchema 
     throw err;
   }
   change.textOnly = parsed.textOnly;
-  if (!parsed.rows.length && !parsed.textOnly.length && !section(text, '## E2E観点一覧') && !section(text, '## 対象外シナリオ')) {
+  if (!parsed.rows.length && !parsed.textOnly.length && !parsed.hasSections) {
     change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: 'test-plan の対応表を解析できません（## E2E観点一覧 / ## 対象外シナリオ）' });
   }
   for (const row of parsed.rows) {
@@ -360,13 +369,22 @@ function listActive(repo) {
     .map(id => ({ id, dir: `openspec/changes/${id}` }));
 }
 
+function customTag(node) {
+  return Boolean(node?.tag) && !String(node.tag).startsWith('tag:yaml.org,2002:');
+}
+
+// Config keys other than schema belong to other tools and may use their own tags.
+function schemaTagged(doc) {
+  return customTag(doc?.contents) || customTag(doc?.get?.('schema', true));
+}
+
 export function buildCoverage(repo, { env = process.env } = {}) {
   if (!existsSync(join(repo, 'openspec'))) throw new InvalidCoverageInputError(`openspec/ がありません: ${repo}`);
   const mainNames = new Map();
   const main = listMainScenarios(repo, mainNames);
   const config = readInput('openspec/config.yaml または config.yml', () => readConfigDocument(repo));
   const configPath = relative(repo, config.located.path);
-  if (config.parsed && (config.parsed.errors.length || config.parsed.tagged
+  if (config.parsed && (config.parsed.errors.length || schemaTagged(config.parsed.doc)
     || (config.parsed.data != null && (typeof config.parsed.data !== 'object' || Array.isArray(config.parsed.data)))
     || (config.parsed.data?.schema != null && typeof config.parsed.data.schema !== 'string'))) {
     throw new InvalidCoverageInputError(`${configPath} が不正です: ${config.parsed.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);

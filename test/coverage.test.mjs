@@ -614,6 +614,11 @@ test('malformed spec headings and case-only MODIFIED names fail with paths inste
     SPEC('R', ['S']) + '\n###Requirement: R2\n#### Scenario: S2\n',
     SPEC('R', ['S']).replace('#### Scenario:', '## Scenario:'),
     SPEC('R', ['S']).replace('#### Scenario:', '#### Scenaro:'),
+    SPEC('R', ['S']) + '\n#Requirement: R2\n',
+    SPEC('R', ['S']) + '\n###\u3000Requirement: R2\n#### Scenario: S2\n',
+    SPEC('R', ['S']) + '\n###\u00a0Requirement: R2\n#### Scenario: S2\n',
+    SPEC('R', ['S']).replace('#### Scenario:', '####\u3000Scenario:'),
+    SPEC('R', ['S']).replace('#### Scenario:', '####\u00a0Scenario:'),
   ]) {
     write(dir, 'openspec/specs/cap/spec.md', spec);
     const out = runCoverage({ repo: dir });
@@ -769,7 +774,8 @@ test('a case-only MODIFIED typo in WIP warns and does not hide valid active note
 
 test('malformed delegated headings diagnose their rows even alongside a valid TP table', t => {
   const dir = protectedRepo(t, ['S', 'T']);
-  for (const heading of ['## 対象外シナリオ一覧', '## 対象外 シナリオ', '## 対象外のシナリオ', '## 対象外', '## E2E対象外シナリオ', '##対象外シナリオ', '### 対象外シナリオ']) {
+  for (const heading of ['## 対象外シナリオ一覧', '## 対象外 シナリオ', '## 対象外のシナリオ', '## 対象外', '## E2E対象外シナリオ', '##対象外シナリオ', '### 対象外シナリオ',
+    '## E2E対象外(委譲先と理由)', '## 対象外（他層で保護）', '### E2E対象外（他層で担保）']) {
     for (const rows of [[], [['TP-001', 'R', 'S']]]) {
       write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', `${PLAN(rows)}
 ${heading}
@@ -1332,5 +1338,59 @@ test('invalid config is an input error with its actual path and CI retains diagn
       assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
     }
     rmSync(join(repo.dir, `openspec/${name}`));
+  }
+});
+
+test('plan section headings at any level or spacing end the delegated table', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  for (const heading of ['##E2E観点一覧', '### E2E観点一覧', '# 付録']) {
+    write(dir, path, '---\ne2e: required\n---\n## 対象外シナリオ\n| Scenario | Layer | Reason |\n|---|---|---|\n| T | Unit | r |\n'
+      + `${heading}\n| TP-ID | Requirement | Scenario |\n|---|---|---|\n| TP-001 | R | S |\n`);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.deepEqual(out.model.scenarios.map(row => row.classification), [CLASS.none, CLASS.declared], heading);
+    assert.deepEqual(out.model.unresolved.map(row => row.id), ['TP-001'], heading);
+  }
+});
+
+test('plan sections that only appear inside code fences are diagnosed as unparsable', t => {
+  const dir = protectedRepo(t);
+  const path = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  for (const fence of ['```', '~~~']) {
+    write(dir, path, `---\ne2e: required\n---\n${fence}md\n## E2E観点一覧\n## 対象外シナリオ\n${fence}\n`);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 0, out.stderr);
+    assert.equal(out.model.unresolved.length, 1);
+    assert.match(out.model.unresolved[0].reason, /対応表を解析できません/);
+  }
+});
+
+test('tilde fences open even when their info string contains backticks', t => {
+  const dir = protectedRepo(t);
+  const archive = 'openspec/changes/archive/2026-01-01-a';
+  const example = '~~~md `example`\n### Requirement: Example\n#### Scenario: Example\n## E2E観点一覧\n| TP-ID | Scenario |\n|---|---|\n| TP-999 | Example |\n~~~\n';
+  for (const path of ['openspec/specs/cap/spec.md', `${archive}/specs/cap/spec.md`]) write(dir, path, example + SPEC('R', ['S']));
+  write(dir, `${archive}/test-plan.md`, `---\ne2e: required\n---\n${example}` + PLAN([['TP-001', 'R', 'S']]));
+  const out = runCoverage({ repo: dir, strict: true });
+  assert.equal(out.exitCode, 0, out.stderr);
+  assert.equal(out.summary.scenarios, 1);
+  assert.equal(out.model.scenarios[0].classification, CLASS.e2e);
+  assert.deepEqual(out.model.unresolved, []);
+});
+
+test('custom YAML tags only invalidate config when they apply to the schema', t => {
+  const dir = protectedRepo(t);
+  for (const value of ['schema: quality-driven-e2e\ncontext: !include x.md\n', 'rules: !custom\n  a: 1\n']) {
+    write(dir, 'openspec/config.yaml', value);
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 0, `${value}: ${out.stderr}`);
+    assert.equal(out.model.scenarios[0].classification, CLASS.e2e);
+  }
+  for (const value of ['schema: !custom quality-driven-e2e\n', '!custom\nschema: quality-driven-e2e\n']) {
+    write(dir, 'openspec/config.yaml', value);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 2, value);
+    assert.ok(out.stderr.includes('openspec/config.yaml が不正です:'));
   }
 });
