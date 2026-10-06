@@ -437,6 +437,28 @@ test('residuals grouped under a label are still read', () => {
   assert.deepEqual(items('- RR0: 表示系\n  - RR1: 日付をまたぐ表示\n    - 理由: 保証外\n  - RR2：端末差').map(item => item.id), ['RR0', 'RR1', 'RR2']);
 });
 
+test('a nested residual id in another form is kept without an id', () => {
+  const quality = body => `## Residual Risk\n${body}\n`;
+  const items = body => handoffNeed({ qualityText: quality(body), evidence: null }).quality;
+  for (const nested of ['RR1 日付をまたぐ表示', 'RR1- 日付をまたぐ表示', '**RR1**: 日付をまたぐ表示', '[RR1] 日付をまたぐ表示']) {
+    assert.deepEqual(items(`- RR0: 表示系\n  - ${nested}`), [{ id: 'RR0', text: 'RR0: 表示系' }, { id: null, text: nested }], nested);
+  }
+  assert.deepEqual(items('- RR0: 表示系\n  - 理由: RR1 と同じ').map(item => item.id), ['RR0']);
+});
+
+test('final gate fails on a nested residual id without a colon', () => {
+  const ctx = setup();
+  try {
+    writeQuality(ctx, { residuals: ['RR0: 表示系\n  - RR1 日付をまたぐ表示'] });
+    writeEvidence(ctx);
+    writeHandoff(ctx, handoff({ manual: ['| RR0 | Residual | 表示系 | 保証外 |'] }));
+    const result = run(ctx);
+    assert.ok(has(result, 'Residual Risk に ID', 'RR1 日付をまたぐ表示'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
 test('final gate requires every residual grouped under a label', () => {
   const ctx = setup();
   try {

@@ -8,7 +8,7 @@
 ### Requirement: Manual layer requires a reason not to automate
 統合 schema の quality.md の Test Layer Mapping は、`Static` / `Unit` / `Integration` / `E2E` / `Monitoring` に加えて `Manual` 層を受け付けなければならない（SHALL）。探索テストも `Manual` に含める。Test Layer Mapping の表には見出しが `Layer` で始まる列がなければならず、無ければ計画ゲートは失敗しなければならない（MUST）。Layer 列が空の行があれば、計画ゲートは Failure Mode の ID を示して失敗しなければならない（MUST）。Layer 列の値はこの6つの名前（大文字小文字は問わない）を空白・`/`・`,`・`、`・`+`・`・` で区切ったものに限り、それ以外の語（`手動`、`Exploratory`、綴りの誤りなど）があれば計画ゲートは Failure Mode の ID と値を示して失敗しなければならない（MUST）。`Manual` を選んだ Failure Mode の行には、Failure Mode の ID と自動化しない理由を書かなければならない（MUST）。どちらかが空なら計画ゲートは失敗しなければならない（MUST）。`Manual` は E2E 層とはみなさない。`Manual` しか無いことを理由に test-plan の `e2e` を required にしてはならない（MUST）。E2E 層かどうかは Layer 列だけで判定し、選定理由の欄の語は使わない。
 
-quality.md の Residual Risk は `## Residual Risk` 見出しの下の箇条書き（`-` / `*` / `+` または `1.` / `1)`、インデント可）として読む。直前の項目より深くインデントされた箇条書きは、その項目の補足として読み、別の Residual とはみなさない。ただし `RR1:` の形式の ID で始まる箇条書きは、インデントの深さによらず別の Residual として読まなければならない（MUST）。統合 schema の quality.md には `## Residual Risk` 見出しがなければならず、無ければ計画ゲートは失敗しなければならない（MUST）。`### Residual Risk`・`## Residual Risks`・`## Residual Risk（残存リスク）`・`## 残存リスク` のように、`Residual` または `残存リスク` で始まる別の見出しがあれば、計画ゲートは見出しを直すよう示して失敗しなければならない（MUST）。
+quality.md の Residual Risk は `## Residual Risk` 見出しの下の箇条書き（`-` / `*` / `+` または `1.` / `1)`、インデント可）として読む。直前の項目より深くインデントされた箇条書きは、その項目の補足として読み、別の Residual とはみなさない。ただし `RR1:` の形式の ID で始まる箇条書きは、インデントの深さによらず別の Residual として読まなければならない（MUST）。深くインデントされた箇条書きが `RR1 内容`・`**RR1**: 内容` のように `RR1:` 以外の形で RR の ID を書き始めているときは、補足として読み飛ばさず、ID の無い Residual として final ゲートを失敗させなければならない（MUST）。統合 schema の quality.md には `## Residual Risk` 見出しがなければならず、無ければ計画ゲートは失敗しなければならない（MUST）。`### Residual Risk`・`## Residual Risks`・`## Residual Risk（残存リスク）`・`## 残存リスク` のように、`Residual` または `残存リスク` で始まる別の見出しがあれば、計画ゲートは見出しを直すよう示して失敗しなければならない（MUST）。
 
 #### Scenario: Manual layer without a reason
 - **WHEN** Test Layer Mapping のある行が `Manual` を選び、選定理由の欄が空である
@@ -33,6 +33,10 @@ quality.md の Residual Risk は `## Residual Risk` 見出しの下の箇条書�
 #### Scenario: Residuals grouped under a label
 - **WHEN** `- RR0: 表示系` の下に `  - RR1: 日付をまたぐ表示` と `  - RR2: 端末差` がある
 - **THEN** Residual は RR0・RR1・RR2 の3件として読まれ、qa-handoff.md の手動確認範囲にそれぞれが無ければ final ゲートは失敗する
+
+#### Scenario: Nested residual id without a colon
+- **WHEN** `- RR0: 表示系` の下に `  - RR1 日付をまたぐ表示` がある
+- **THEN** final ゲートは失敗し、`RR1 日付をまたぐ表示` に ID が無いことを示す
 
 #### Scenario: Layer column is missing or empty
 - **WHEN** Test Layer Mapping の表に `Layer` で始まる列が無い、またはある行の Layer が空である
