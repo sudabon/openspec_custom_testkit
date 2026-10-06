@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isCritical, STAMP_FILE } from './critical.mjs';
+import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
@@ -23,6 +23,9 @@ export function doctor(repo, options = {}) {
       const abs = join(repo, rel);
       if (!existsSync(abs)) failures.push(`必須ファイルがありません: ${rel}`);
       else if (sha256File(abs) !== expected) failures.push(`必須ファイルが導入内容と違います: ${rel}`);
+    }
+    for (const rel of REQUIRED_MODULES) {
+      if (!Object.hasOwn(files, rel)) failures.push(`必須 module が導入記録にありません（旧版のままです）: ${rel}。install を再実行してください`);
     }
     try {
       installedE2eRoot(repo);

@@ -59,3 +59,66 @@ Agent は `approved_by` を記入しないので、Agent が自分で抑止を�
 ### E2E 層の Mutation を対象外にする理由
 
 E2E の 1 回の実行は数分単位で、変異体ごとにアプリ全体の再ビルドとブラウザ実行が要る。CI の時間と費用が Mutation から得る情報量に見合わない。さらに E2E の結果は環境とフレークの影響を受けるので、生き残った変異体が「Oracle が弱い」のか「実行が不安定」なのかを区別できず、判定が決定的にならない。E2E Oracle の強さは、この lint の静的な弱アサーション検査と、Unit / Integration 層の Mutation で補う。型解決を伴う検査（変数経由のロケーター文字列の追跡など）と自動修正（`--fix`）も提供しない。
+
+## シナリオ対応表（回帰の保護範囲）
+
+`node scripts/testkit-gate.mjs coverage` は、`openspec/specs` の全シナリオが今どのテストで守られているかを一覧にする。archive 済み change の `test-plan.md` を集め、同じ change の delta spec でシナリオを含むファイルのパスから capability を決める。テストのタグは付け替えない。既存の `@<change-id>` と `@TP-NNN` をそのまま使う。
+
+```bash
+node scripts/testkit-gate.mjs coverage [--results <path>] [--max-age <秒>] [--strict] [--format markdown|json]
+```
+
+### 分類の意味
+
+| 分類 | 意味 | 保護に数えるか |
+|---|---|---|
+| 保護（E2E） | 最後にそのシナリオへ行を書いた archive 済み change の TP が割り当てている | 数える |
+| 保護（他層の宣言） | `## 対象外シナリオ` の行だけが割り当てている。Oracle、Layer、Method を表示する。実行結果は照合しない | 「他層の宣言を含む」保護率にだけ数える |
+| 未保護 | どの archive 済み change の行も割り当てていない。進行中の change だけが割り当てている場合は「進行中: <id>」と補足する | 数えない |
+| 要再確認 | TP を書いた change より後の change が、そのシナリオを含む Requirement を MODIFIED し、その change は同じシナリオに行を書いていない | 数えない |
+| 孤立 | TP が指すシナリオが main spec に無い。REMOVED・RENAMED した change を理由欄に出す。テストの削除または付け替えを検討する | 数えない |
+| 対応不明 | 統合 schema の行で、delta spec に該当シナリオが無い、または複数の capability に一致して決まらない | 数えない |
+| 旧形式・対応不明 | 旧 `spec-driven-e2e` で、TP-ID が表の外にしか無い、または表の行をシナリオに結び付けられない | 数えない |
+
+前後関係は archive フォルダ名（`YYYY-MM-DD-<id>`）の順で決める。同じ日付は名前の辞書順である。git の履歴は使わない。シナリオは capability、Requirement、シナリオ名の完全一致で照合し、前後の空白だけを無視する。シナリオ名や Requirement 名を変えると、古い TP は「孤立」、新しい名前のシナリオは「未保護」として同時に出る。旧 `spec-driven-e2e` は TP-ID とシナリオ名（`Scenario` または `対応シナリオ` 列）を持つ表の行だけを使い、`E2E対象外` の表は読まない。旧 `quality-driven` の change は読まない。
+
+`--results` に Playwright の全量実行 JSON を渡すと、TP を持つ行に結果を添える。照合は change id と TP-ID の両方のトークン完全一致で、`e2e-report.mjs` と同じ状態分類を使う。flaky は pass として扱い「pass（flaky）」と表示する。attempt の無いテストと skip は「未実行」になる。別 change に同じ TP-ID があっても流用しない。fail と未実行は「実行で確認済み」に数えない。結果 JSON が読めない、壊れている、または `--max-age` を超えている場合は表を出さずに終了コード 2 で止まる。
+
+終了コードは、既定が 0（表を出すだけ）、`--strict` で未保護・要再確認・孤立・fail・未実行のいずれかがあれば 1、入力の欠落・破損・鮮度違反と引数の誤りは 2 である。対応不明と旧形式・対応不明は strict の判定に含めないが、該当シナリオは未保護として現れる。シナリオが 0 件のときは 0 件と表示し、保護率は算出しない。`--format json` は同じ内容を `scenarios`、`orphans`、`unresolved`、`legacyUnresolved`、`summary` に分けて出す。
+
+kit のリポジトリでは fixture で動作を確認できる。fixture は git 管理外の場所へコピーしてから実行する（git の中では最上位ディレクトリを repo とみなすため）。
+
+```bash
+cp -R test/fixtures/coverage/repo /tmp/coverage-demo
+cd /tmp/coverage-demo
+node <kit>/payload/scripts/testkit-gate.mjs coverage --results <kit>/test/fixtures/coverage/regression-results.json
+```
+
+出力の一部（表の行と集計）は次のとおりである。
+
+<!-- coverage-example:start -->
+```text
+| billing/invoice | Invoice export | Export CSV | 要再確認 | add-invoice TP-001 ／ change-export で MODIFIED | pass |
+| billing/invoice | Invoice print | Print invoice | 保護（E2E） | update-print TP-001 | pass（flaky） |
+| cart | Add item | Add item when out of stock | 保護（他層の宣言） | add-cart 対象外: Oracle O2 / Layer Unit / Method stock service unit test | 宣言のみ（実行結果は未照合） |
+| cart | Show total | Show tax | 未保護 | 進行中: add-tax |  |
+| cart | Checkout button | Empty cart | 保護（E2E） | add-cart TP-002 | fail |
+| search | Search | Search by keyword | 保護（E2E） | legacy-search TP-001 | 未実行 |
+| add-invoice | TP-003 | billing/invoice | Invoice email | Email invoice | REMOVED（drop-email） |
+- シナリオ: 13 件（archive 済み change 9 件から集計）
+- 実行で確認済み: 2 / fail: 1 / 未実行: 1
+- 保護率（E2E）: 4/13（30.8%）
+- 保護率（他層の宣言を含む）: 5/13（38.5%）
+- 保護率（実行で確認済み）: 2/13（15.4%）
+- 要対応: 12
+```
+<!-- coverage-example:end -->
+
+### 段階的な導入
+
+1. update 後に `node scripts/testkit-gate.mjs coverage` をローカルで実行し、既存の archive からどれだけ対応が取れるかを見る。最初は未保護が多く出る想定である。
+2. 孤立と要再確認を先に片付ける。孤立はテストの削除か、新しいシナリオ名への test-plan の修正で消える。要再確認は、Requirement を変えた change の test-plan に TP か対象外行を追加するまで残る。archive 済みの test-plan を直す場合は、通常の change として変更する。
+3. CI の reusable workflow に `regression-command` を設定し、全量実行の結果を表に添える。この段階では `coverage-strict` を付けず、job の成果物（`test-results/testkit/<run>/coverage.md` と `coverage.json`）を確認するだけにする。
+4. 要対応が十分減ったら `coverage-strict: true` にして、未保護・要再確認・孤立・fail・未実行を job の失敗にする。
+
+対応表は archive や plan/final 検査の必須条件ではない。CI で失敗させるのは `coverage-strict` を明示したときだけである。

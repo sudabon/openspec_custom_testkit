@@ -86,6 +86,19 @@ with:
   e2e-command: npx playwright test
 ```
 
+## 全量回帰とシナリオ対応表
+
+`regression-command` は change の差分が無い PR でも実行する。今回の Playwright JSON を `$TESTKIT_RESULTS_JSON`（run ごとのディレクトリの `regression-results.json`）へ書く。job はその JSON で `testkit-gate.mjs coverage` と同じ対応表を作り、`coverage.md` と `coverage.json` として保存する。`report-max-age` の鮮度検査も同じく適用する。
+
+```yaml
+with:
+  test-command: npm test
+  regression-command: npx playwright test
+  coverage-strict: false
+```
+
+`coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON が無い・壊れている場合は終了コード 2 で失敗する。両方とも未指定なら従来と同じ手順で動く。
+
 ## 旧 workflow からの変更
 
 旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age` が増えている。
