@@ -9,19 +9,25 @@ export const HANDOFF_FILE = 'qa-handoff.md';
 const EXAMPLE_MARK = '<!-- example -->';
 const NONE = /^(?:なし|該当なし|none|n\/a)[。.]?$/i;
 const RESIDUAL_HEADING = '## Residual Risk';
-const BULLET = /^\s*(?:[-*+]|\d+[.)])(?:\s+(.*))?$/;
+const NEAR_RESIDUAL_HEADING = /^#{1,6}\s*(?:Residual\b|残存リスク)/i;
+const BULLET = /^(\s*)(?:[-*+]|\d+[.)])(?:\s+(.*))?$/;
 const MANUAL_KINDS = ['Manual', 'Residual'];
 const VERDICTS = ['pass', 'fail'];
 
 // Residual Risk items are list items such as `- RR1: text` or `1. RR1: text`, at any indent.
+// A list item indented deeper than the item above it is a note on that item, not another residual.
 // An empty item or a bare "なし" means no residual.
 export function qualityResiduals(qualityText) {
   const body = section(qualityText ?? '', RESIDUAL_HEADING) ?? '';
   const items = [];
+  let itemIndent = null;
   for (const line of body.split('\n')) {
     const bullet = line.match(BULLET);
     if (!bullet) continue;
-    const text = (bullet[1] ?? '').trim();
+    const indent = bullet[1].length;
+    if (itemIndent !== null && indent > itemIndent) continue;
+    itemIndent = indent;
+    const text = (bullet[2] ?? '').trim();
     if (!text || NONE.test(text)) continue;
     const id = text.match(/^(RR\d+)\s*[:：]/);
     items.push({ id: id ? id[1] : null, text });
@@ -29,14 +35,22 @@ export function qualityResiduals(qualityText) {
   return items;
 }
 
-// A Residual Risk heading in another level or plural would be read as no residual at all.
+// A missing or differently written Residual Risk heading would be read as no residual at all.
 export function residualHeadingErrors(qualityText) {
   const errors = [];
+  let found = false;
   for (const line of String(qualityText ?? '').split('\n')) {
+    if (line.trimEnd() === RESIDUAL_HEADING) {
+      found = true;
+      continue;
+    }
     const heading = line.trim();
-    if (heading !== RESIDUAL_HEADING && /^#{1,6}\s*Residual\s*Risks?\s*$/i.test(heading)) {
+    if (NEAR_RESIDUAL_HEADING.test(heading)) {
       errors.push(`quality.md の見出し「${heading}」は読み取れません。\`${RESIDUAL_HEADING}\` にしてください`);
     }
+  }
+  if (!found && !errors.length) {
+    errors.push(`quality.md に \`${RESIDUAL_HEADING}\` がありません（保証しないことが無ければ \`- なし\` と書きます）`);
   }
   return errors;
 }

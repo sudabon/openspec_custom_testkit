@@ -173,6 +173,8 @@ oracle_digest: "${digest}"
 | Failure Mode | Layer |
 |--------------|-------|
 | F1 | Unit |
+## Residual Risk
+- なし
 `);
   write(repo, 'openspec/changes/demo/test-plan.md', `---
 e2e: not-applicable
@@ -364,6 +366,8 @@ oracle_digest: ""
 | Failure Mode | Layer |
 |--------------|-------|
 | F1 | E2E |
+## Residual Risk
+- なし
 `);
     write(repo, 'openspec/changes/demo/specs/demo/spec.md', '#### Scenario: Visible\n#### Scenario: Hidden\n');
     write(repo, 'openspec/changes/demo/test-plan.md', `---

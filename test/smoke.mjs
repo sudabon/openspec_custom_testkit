@@ -109,6 +109,8 @@ oracle_digest: "${digest.digest}"
 | Failure Mode | Layer |
 |--------------|-------|
 | F1 | E2E |
+## Residual Risk
+- なし
 `;
   mkdirSync(join(repo.dir, 'openspec/changes/smoke-counter'), { recursive: true });
   writeFileSync(join(repo.dir, 'openspec/changes/smoke-counter/.openspec.yaml'), 'schema: quality-driven-e2e\n');

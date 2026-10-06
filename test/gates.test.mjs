@@ -59,6 +59,8 @@ oracle_digest: ""
 | Failure Mode | Layer |
 |--------------|-------|
 | F1 | Unit |
+## Residual Risk
+- なし
 ${extra}`;
 }
 

@@ -422,8 +422,29 @@ test('residual items are read from numbered and indented lists but not from bold
   assert.deepEqual(residualHeadingErrors(quality('- なし')), []);
 });
 
+test('nested list items are notes on the residual above them', () => {
+  const quality = body => `## Residual Risk\n${body}\n`;
+  const items = body => handoffNeed({ qualityText: quality(body), evidence: null }).quality;
+  assert.deepEqual(items('- RR1: 日付をまたぐ表示\n  - 理由: Green では保証しない\n    1. 補足\n- RR2: 端末差').map(item => item.id), ['RR1', 'RR2']);
+  assert.deepEqual(items('  - RR1: 時刻\n    - 理由: 保証外\n  - RR2: 端末').map(item => item.id), ['RR1', 'RR2']);
+  assert.deepEqual(items('- なし\n  - 補足: 将来検討'), []);
+});
+
+test('a nested note under a residual does not fail the final gate', () => {
+  const ctx = setup();
+  try {
+    writeQuality(ctx, { residuals: ['RR1: 日付をまたぐ表示\n  - 理由: Green では保証しない'] });
+    writeEvidence(ctx);
+    writeHandoff(ctx, handoff({ manual: ['| RR1 | Residual | 日付をまたぐ表示 | 保証外 |'] }));
+    const result = run(ctx);
+    assert.deepEqual(result.failures, []);
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
 test('a Residual Risk heading in another form fails the plan gate', () => {
-  for (const heading of ['### Residual Risk', '## Residual Risks']) {
+  for (const heading of ['### Residual Risk', '## Residual Risks', '## Residual Risk（残存リスク）', '## Residual Risk:', '## Residual Risk (RR)', '## Residual-Risk', '## 残存リスク']) {
     const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
     try {
       writeQuality(ctx);
@@ -434,6 +455,43 @@ test('a Residual Risk heading in another form fails the plan gate', () => {
     } finally {
       ctx.repo.cleanup();
     }
+  }
+});
+
+test('a quality.md without a Residual Risk heading fails the plan gate', () => {
+  const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
+  try {
+    writeQuality(ctx);
+    const path = join(ctx.repo.dir, ctx.change.path, 'quality.md');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(/## Residual Risk\n- なし\n/, ''));
+    const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
+    assert.ok(has(result, '`## Residual Risk` がありません'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('a Test Layer Mapping without a Layer column or with an empty Layer fails the plan gate', () => {
+  for (const header of ['| Failure Mode | 層 | 選定理由 |', '| Failure Mode | Test Layer | 選定理由 |']) {
+    const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
+    try {
+      writeQuality(ctx, { layers: [['F1', 'Unit', '純粋関数'], ['F2', '手動', '実機が必要']] });
+      const path = join(ctx.repo.dir, ctx.change.path, 'quality.md');
+      writeFileSync(path, readFileSync(path, 'utf8').replace(LAYER_HEADER.split('\n')[0], header));
+      const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
+      assert.ok(has(result, 'Test Layer Mapping', 'Layer 列がありません'), `${header}: ${JSON.stringify(result.failures)}`);
+    } finally {
+      ctx.repo.cleanup();
+    }
+  }
+  const ctx = setup({ tasks: '- [ ] 1.1 a\n' });
+  try {
+    writeQuality(ctx, { layers: [['F1', 'Unit', '純粋関数'], ['F2', '', '未定']] });
+    const result = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'plan' });
+    assert.ok(has(result, 'F2', 'Layer が空'), JSON.stringify(result.failures));
+    assert.equal(result.failures.some(line => line.includes('F1')), false, JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
   }
 });
 

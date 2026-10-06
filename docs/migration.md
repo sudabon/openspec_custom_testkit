@@ -54,7 +54,7 @@ kit の update で `templates/qa-handoff.md`、schema の Manual 層と `## 6. Q
 3. tasks.md に `## 6. QA Handoff` を追加する。QA 実施結果の記入はチェックボックスにせず、人間が qa-handoff.md に記入する旨の注記にする（チェックボックスにすると全タスク完了にならず、final 検査が走らない）。
 4. QA 実施結果は PR の段階では空でよい（警告のみ）。archive の前に人間が実施者・実施日・判定を記入する。判定 `pass` が無いと archive の検査は失敗する。
 
-統合 schema の Test Layer Mapping の判定も変わる。Layer 列があれば、E2E 層かどうかは Layer 列の値だけで判定し、選定理由などほかの列は見ない。以前は行のどこかに `E2E` があれば E2E 層とみなしていたので、選定理由の列にだけ `E2E` と書いていた change は、`e2e: required` なのに E2E 層が無いとして失敗しうる。その場合は Layer 列に `E2E` を書く。また Layer 列の値は `Static` / `Unit` / `Integration` / `E2E` / `Monitoring` / `Manual` に限るので、`手動` や `単体` などを書いていた change は計画ゲートで失敗する。Layer 列の値を上の名前に直す。Residual Risk の見出しが `## Residual Risk` 以外（`### Residual Risk`、`## Residual Risks` など）の change も失敗するので、見出しを直す。
+統合 schema の Test Layer Mapping の判定も変わる。Layer 列があれば、E2E 層かどうかは Layer 列の値だけで判定し、選定理由などほかの列は見ない。以前は行のどこかに `E2E` があれば E2E 層とみなしていたので、選定理由の列にだけ `E2E` と書いていた change は、`e2e: required` なのに E2E 層が無いとして失敗しうる。その場合は Layer 列に `E2E` を書く。また Layer 列の値は `Static` / `Unit` / `Integration` / `E2E` / `Monitoring` / `Manual` に限るので、`手動` や `単体` などを書いていた change は計画ゲートで失敗する。Layer 列の値を上の名前に直す。Residual Risk の見出しが `## Residual Risk` 以外（`### Residual Risk`、`## Residual Risks`、`## Residual Risk（残存リスク）`、`## 残存リスク` など）の change と、`## Residual Risk` 見出しが無い change も失敗するので、見出しを直すか `## Residual Risk` と `- なし` を足す。Test Layer Mapping の表に見出しが `Layer` で始まる列が無い change（`層` や `Test Layer` など）と、Layer が空の行がある change も失敗するので、列の見出しを `Layer` にして各行に層を書く。
 
 既に archive 済みの統合 change に Residual がある場合、その change を検査し直すと QA 実施結果が無いため失敗する。対象 change を検査に含める PR では、上の手順で handoff を追加する。
 

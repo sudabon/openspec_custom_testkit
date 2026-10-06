@@ -91,6 +91,8 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
         if (change.schema === SCHEMA_INTEGRATED) {
           for (const id of model.manualWithoutReason) failures.push(`Manual 層の ${id} に自動化しない理由（選定理由）がありません`);
           if (model.manualWithoutId) failures.push(`Manual 層の行に Failure Mode の ID がありません（${model.manualWithoutId} 件）`);
+          if (!model.layerColumn) failures.push('Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）');
+          for (const id of model.emptyLayers) failures.push(`Test Layer Mapping の ${id} の Layer が空です（${LAYERS.join(' / ')} から選びます）`);
           for (const row of model.unknownLayers) failures.push(`Test Layer Mapping の ${row.id} の Layer に不明な値があります: ${row.values.join(', ')}（${LAYERS.join(' / ')} から選びます）`);
           failures.push(...residualHeadingErrors(text));
         }
