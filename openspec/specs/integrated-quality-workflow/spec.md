@@ -83,3 +83,18 @@ skip_specs: true の仕様変更を伴わない change でも quality と test-p
 
 - **WHEN** 番号2以降の実装タスクをseal前に完了扱いにする
 - **THEN** ゲートが検出し、タスク記録だけで実際のファイル編集時刻を証明できるとは説明しない
+
+### Requirement: Task sequence ends with a QA handoff
+統合 schema の tasks instruction は、Evidence グループのあとに `## 6. QA Handoff` グループを置くよう指示しなければならない（SHALL）。このグループは qa-handoff.md を evidence と quality.md から作るタスクと、QA が実施結果を記入することの注記を持つ。注記には「人間が実施。Agent は記入しない」と書き、チェックボックスにしてはならない（MUST NOT）。全タスク完了で final 検査が走るため、人間の QA をタスクにすると final 検査が QA まで走らないからである。handoff が不要な change では、その理由（Manual 層なし・Residual なし）を書いたタスク1件にしなければならない（MUST）。番号 2 以降の完了を実装開始とみなす既存の判定を変えてはならない（MUST NOT）。
+
+#### Scenario: Final check runs before QA
+- **WHEN** 配布 tasks テンプレートのチェックボックスがすべて完了し、QA 実施結果欄が空である
+- **THEN** final 検査が走り、handoff と evidence を検査する
+
+#### Scenario: Handoff task counts as an implementation start before seal
+- **WHEN** seal 前に `## 6. QA Handoff` のタスクだけが完了にされている
+- **THEN** 既存の seal 検査どおり、実装開始として扱われて失敗する
+
+#### Scenario: Change needs no handoff
+- **WHEN** Manual 層も Residual も無い change の tasks を作る
+- **THEN** `## 6. QA Handoff` には、不要な理由を書いたタスクが1件だけ置かれる

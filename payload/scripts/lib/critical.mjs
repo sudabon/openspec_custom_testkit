@@ -14,6 +14,7 @@ export const REQUIRED_MODULES = [
   'scripts/lib/e2e-lint.mjs',
   'scripts/lib/results.mjs',
   'scripts/lib/coverage-map.mjs',
+  'scripts/lib/qa-handoff.mjs',
 ];
 
 export function isCritical(rel) {

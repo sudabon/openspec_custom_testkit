@@ -11,6 +11,7 @@
 | 実装 | 実装Agent | 実装、補助テストの生成、失敗解析 |
 | Oracle作成 | qe-oracle-writer(別コンテキスト) | specs と quality.md だけを入力に Oracle テストを作成 |
 | 反証 | qe-falsifier(別コンテキスト) | 実装が間違っていることを証明するテストを作成 |
+| QA | 人間(QA エンジニア) | qa-handoff.md の手動確認範囲と探索チャーターを実施し、QA 実施結果を記入 |
 | 強制 | CI | 決定的なゲート。OpenSpec は artifact の存在しか確認しないため、強制は CI で行う |
 
 ## 2. Risk Level
@@ -43,6 +44,10 @@ e2e_lint_scope: changed
 
 統合 schema `quality-driven-e2e` では low を含む全 Risk で、人間の承認、Oracle seal、独立反証が必須です。`QE_SEAL_REQUIRED_LEVELS` と `QE_SCHEMA` ではこの条件を外せません。上の表で low が「任意」のままの旧 policy は、統合 schema の doctor を通しません。
 
+### Manual 層と QA handoff
+
+統合 schema では Test Layer Mapping に `Manual`(探索テストを含む)を選べる。`Manual` の行には自動化しない理由が必須で、`Manual` は E2E 層とはみなさない。Manual 層、quality.md の Residual Risk、evidence の residuals のどれかがある change は、final で `qa-handoff.md` が必要になる。QA 実施結果欄は人間だけが記入し、archive の時点で実施者・実施日・`pass` の判定が必要になる。kit は記入者の本人確認をしない。誰が記入したかの保証は CODEOWNERS とブランチ保護に依存する。旧 `quality-driven` と `spec-driven-e2e` には適用しない。
+
 ### E2E 規約 lint
 
 `e2e_lint_mode` は `warn` か `enforce`、`e2e_lint_scope` は `changed` か `all` を人間が設定する。欠落時は既定値（`enforce` / `changed`）で動き、doctor は note を表示する。不正値・未知の `e2e_lint_*` キーは lint と doctor の両方で失敗する。
@@ -56,6 +61,7 @@ e2e_lint_scope: changed
 ## 4. Agent が変更してはいけないもの
 
 - quality.md frontmatter の `approved_by` / `approved_at` / `oracle_digest`
+- qa-handoff.md の QA 実施結果欄(実施者・実施日・判定・所見)
 - seal 済みの `oracle_paths` 配下
 - このファイル、`openspec/schemas/`、`scripts/qe-gate.sh`、`.github/workflows/`
 

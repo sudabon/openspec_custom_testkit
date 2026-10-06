@@ -5,7 +5,8 @@ import { digestForSchema } from './digest.mjs';
 import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
+import { LAYERS, qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
+import { checkHandoff, residualHeadingErrors } from './qa-handoff.mjs';
 import { parseTasks, taskState } from './tasks.mjs';
 
 function sealRequired(change, level, env) {
@@ -87,6 +88,14 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           oks.push(`risk_level: ${declared}`);
           level = declared;
         }
+        if (change.schema === SCHEMA_INTEGRATED) {
+          for (const id of model.manualWithoutReason) failures.push(`Manual 層の ${id} に自動化しない理由（選定理由）がありません`);
+          if (model.manualWithoutId) failures.push(`Manual 層の行に Failure Mode の ID がありません（${model.manualWithoutId} 件）`);
+          if (!model.layerColumn) failures.push('Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）');
+          for (const id of model.emptyLayers) failures.push(`Test Layer Mapping の ${id} の Layer が空です（${LAYERS.join(' / ')} から選びます）`);
+          for (const row of model.unknownLayers) failures.push(`Test Layer Mapping の ${row.id} の Layer に不明な値があります: ${row.values.join(', ')}（${LAYERS.join(' / ')} から選びます）`);
+          failures.push(...residualHeadingErrors(text));
+        }
         const approved = approvalOf(change, frontmatter.data);
         if (approved === 'invalid') failures.push('統合版の承認には空でない approved_by と YYYY-MM-DD の approved_at が必要です');
         else if (approved === 'ok') oks.push(`承認済み: ${asString(frontmatter.data.approved_by)}`);
@@ -119,6 +128,11 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           const evidence = checkEvidence(repo, change, { digest: digest.digest, policyText, manifest: options.manifest });
           failures.push(...evidence.errors);
           warnings.push(...evidence.notes);
+          if (change.schema === SCHEMA_INTEGRATED) {
+            const handoff = checkHandoff(repo, change, { qualityText: text });
+            failures.push(...handoff.errors);
+            warnings.push(...handoff.warnings);
+          }
         }
       }
     }

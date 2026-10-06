@@ -25,3 +25,11 @@ E2E Oracle を別テストとして重複実装しない。not-applicable の ch
 ## 5. Evidence
 
 - [ ] 5.1 evidence.md の追跡表と Execution Records が全 Risk で一致し、構造確認と実行確認を分けて記録する
+
+## 6. QA Handoff
+
+Manual 層も Residual も無い change では、このグループを「- [ ] 6.1 QA handoff は不要（Manual 層なし・Residual なし）」の 1 件だけにする。
+
+- [ ] 6.1 qa-handoff.md をテンプレートから作る。自動化済み範囲は evidence の pass の Risk だけにし、Manual 層の F-ID と Residual の ID をすべて手動確認範囲に載せ、記入例の行を残さない
+
+QA の実施はチェックボックスにしない（全タスク完了で final 検査が走るため）。QA が手動確認範囲と探索チャーターを実施し、qa-handoff.md の QA 実施結果を記入する。人間が実施。Agent は記入しない。

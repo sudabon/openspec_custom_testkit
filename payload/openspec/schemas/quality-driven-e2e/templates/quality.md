@@ -30,9 +30,11 @@ oracle_digest: ""         # scripts/qe-gate.sh seal が書き込む。Agent は�
 
 ## Test Layer Mapping
 
-| Failure Mode | Layer (Static / Unit / Integration / E2E / Monitoring) | 選定理由 |
-|--------------|---------------------------------------------------------|----------|
-| F1           |                                                         |          |
+`Manual`（探索テストを含む）を選ぶ行は、選定理由に自動化しない理由を必ず書きます。空なら計画ゲートが失敗します。`Manual` は E2E 層ではありません。
+
+| Failure Mode | Layer (Static / Unit / Integration / E2E / Monitoring / Manual) | 選定理由 |
+|--------------|------------------------------------------------------------------|----------|
+| F1           |                                                                  |          |
 
 ## Quality Gates
 
@@ -48,5 +50,7 @@ oracle_digest: ""         # scripts/qe-gate.sh seal が書き込む。Agent は�
 - その他:
 
 ## Residual Risk
+
+各項目は `- RR1: <保証しないこと>` のように ID を付けます。無ければ `- なし` と書きます。Manual 層か Residual があると、final で qa-handoff.md が必要になります。
 
 -

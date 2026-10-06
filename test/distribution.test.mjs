@@ -24,6 +24,8 @@ test('packed tarball installs payload, vendor, roles, and license', () => {
     'payload/scripts/lib/e2e-lint.mjs',
     'payload/scripts/lib/coverage-map.mjs',
     'payload/scripts/lib/results.mjs',
+    'payload/scripts/lib/qa-handoff.mjs',
+    'payload/openspec/schemas/quality-driven-e2e/templates/qa-handoff.md',
     'payload/openspec/roles/oracle-writer.md',
     'payload/.claude/agents/qe-oracle-writer.md',
     'LICENSE',
@@ -44,7 +46,7 @@ test('packed tarball installs payload, vendor, roles, and license', () => {
   assert.match(output, /導入が完了しました/);
   assert.match(readFileSync(join(installed, 'scripts/lib/vendor/yaml.mjs'), 'utf8'), /yaml@2\.8\.1/);
   assert.equal((readFileSync(join(installed, 'scripts/qe-gate.sh'), 'utf8').includes('exec node')), true);
-  for (const rel of ['scripts/lib/coverage-map.mjs', 'scripts/lib/results.mjs']) {
+  for (const rel of ['scripts/lib/coverage-map.mjs', 'scripts/lib/results.mjs', 'scripts/lib/qa-handoff.mjs', 'openspec/schemas/quality-driven-e2e/templates/qa-handoff.md']) {
     assert.equal(readFileSync(join(installed, rel), 'utf8'), readFileSync(join(root, 'payload', rel), 'utf8'), rel);
   }
   const updated = execFileSync(process.execPath, [bin, 'install', '--target', installed], { encoding: 'utf8' });

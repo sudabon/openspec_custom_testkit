@@ -29,10 +29,44 @@ function ids(rows, key) {
   return rows.map(row => row[key] ?? '').map(value => value.trim()).filter(Boolean);
 }
 
+const E2E_WORD = /(^|[^A-Za-z])E2E([^A-Za-z]|$)/;
+const MANUAL_WORD = /(^|[^A-Za-z])Manual([^A-Za-z]|$)/i;
+export const LAYERS = ['Static', 'Unit', 'Integration', 'E2E', 'Monitoring', 'Manual'];
+const LAYER_HEADER = /^Layer\b/i;
+
+// With a Layer column (header starting with "Layer"), each cell is a list of LAYERS names separated
+// by spaces, `/`, `,`, `、`, `+` or `・`; any other word is reported in `unknown`.
+// Without one, every cell is searched for E2E / Manual so that old quality.md files keep working.
+export function layerAssignments(table) {
+  const layerKey = table.headers.find(header => LAYER_HEADER.test(header));
+  const reasonKey = table.headers.find(header => header.includes('理由') || /^Reason\b/i.test(header));
+  const modeKey = table.headers.find(header => /^Failure Mode\b/i.test(header)) ?? table.headers[0];
+  return table.rows.map(row => {
+    const base = { id: (row[modeKey] ?? '').trim(), reason: reasonKey ? asString(row[reasonKey]) : '' };
+    if (!layerKey) {
+      const layer = Object.values(row).join(' ');
+      return { ...base, layer, empty: false, unknown: [], e2e: E2E_WORD.test(layer), manual: MANUAL_WORD.test(layer) };
+    }
+    const layer = row[layerKey] ?? '';
+    const tokens = layer.split(/[\s/,、+・]+/).filter(Boolean);
+    const known = tokens.map(token => LAYERS.find(name => name.toLowerCase() === token.toLowerCase()));
+    return {
+      ...base,
+      layer,
+      empty: tokens.length === 0,
+      unknown: tokens.filter((_, index) => !known[index]),
+      e2e: known.includes('E2E'),
+      manual: known.includes('Manual'),
+    };
+  });
+}
+
 export function qualityModel(text) {
   const risks = parseTable(section(text, '## Risk Register')).rows.filter(row => /^R\d+$/.test(row.ID ?? ''));
   const oracles = parseTable(section(text, '## Test Oracles')).rows.filter(row => /^O\d+$/.test(row.ID ?? ''));
-  const layers = parseTable(section(text, '## Test Layer Mapping')).rows;
+  const layerTable = parseTable(section(text, '## Test Layer Mapping'));
+  const layers = layerTable.rows;
+  const assignments = layerAssignments(layerTable);
   const levels = risks.map(row => (row.Level ?? '').trim());
   const rank = { low: 1, medium: 2, high: 3 };
   let max = null;
@@ -40,8 +74,14 @@ export function qualityModel(text) {
   if (rawBad == null) {
     for (const level of levels) if (!max || rank[level] > rank[max]) max = level;
   }
-  const e2eLayer = layers.some(row => /(^|[^A-Za-z])E2E([^A-Za-z]|$)/.test(Object.values(row).join(' ')));
-  return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer };
+  const e2eLayer = assignments.some(row => row.e2e);
+  const manual = assignments.filter(row => row.manual);
+  const manualWithoutReason = manual.filter(row => !row.reason).map(row => row.id || '(Failure Mode 空)');
+  const manualWithoutId = manual.filter(row => !row.id).length;
+  const unknownLayers = assignments.filter(row => row.unknown.length).map(row => ({ id: row.id || '(Failure Mode 空)', values: row.unknown }));
+  const layerColumn = layerTable.headers.some(header => LAYER_HEADER.test(header));
+  const emptyLayers = assignments.filter(row => row.empty).map(row => row.id || '(Failure Mode 空)');
+  return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
 export function tpRows(planText) {
