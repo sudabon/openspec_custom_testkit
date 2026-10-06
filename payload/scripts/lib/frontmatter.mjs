@@ -28,9 +28,14 @@ export function parseYamlText(text) {
   } catch {
     errors.push('YAML の構造を検査できません');
   }
+  let data = null;
+  if (!errors.length) {
+    try { data = doc.toJS(); }
+    catch (err) { errors.push(err.message); }
+  }
   return {
     doc,
-    data: errors.length ? null : doc.toJS(),
+    data,
     errors,
     alias,
     tagged,

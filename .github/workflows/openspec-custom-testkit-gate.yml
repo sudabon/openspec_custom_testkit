@@ -51,6 +51,14 @@ on:
         description: 結果 JSON の最大経過秒。空なら鮮度では拒否しない
         type: string
         default: ""
+      regression-command:
+        description: 全量回帰の Playwright JSON を TESTKIT_RESULTS_JSON へ書くコマンド。change の有無にかかわらず実行し、シナリオ対応表に結果を添える
+        type: string
+        default: ""
+      coverage-strict:
+        description: true のとき、シナリオ対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする
+        type: boolean
+        default: false
     outputs:
       risk-level:
         description: 対象 change の最大 risk_level
@@ -89,6 +97,8 @@ jobs:
           E2E_COMMAND: ${{ inputs.e2e-command }}
           E2E_BASE_URL: ${{ inputs.e2e-base-url }}
           REPORT_MAX_AGE: ${{ inputs.report-max-age }}
+          REGRESSION_COMMAND: ${{ inputs.regression-command }}
+          COVERAGE_STRICT: ${{ inputs.coverage-strict }}
         run: node scripts/ci-job.mjs
 
       - name: Save run artifacts

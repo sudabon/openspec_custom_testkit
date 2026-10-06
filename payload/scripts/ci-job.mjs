@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { effectivePhase, evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { headRevision, toplevel } from './lib/git.mjs';
 import { buildReport } from './lib/report.mjs';
+import { renderJson, runCoverage } from './lib/coverage-map.mjs';
 import { selectChanges } from './lib/select.mjs';
 import { SCHEMA_E2E } from './lib/critical.mjs';
 import { executionBlock } from './lib/evidence-check.mjs';
@@ -65,7 +66,7 @@ export function runCiJob(env = process.env, deps = {}) {
     const setup = run(execFile, 'npm', ['ci'], work, env);
     lines.push(...setup.lines);
     if (setup.code) code = code || setup.code;
-    if (env.E2E_COMMAND) {
+    if (env.E2E_COMMAND || env.REGRESSION_COMMAND) {
       const browser = run(execFile, 'npx', ['playwright', 'install', '--with-deps', 'chromium'], work, env);
       lines.push(...browser.lines);
       if (browser.code) code = code || browser.code;
@@ -149,9 +150,47 @@ export function runCiJob(env = process.env, deps = {}) {
         maxAge,
       });
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
-      lines.push(report.stdout.trimEnd());
+      lines.push(...[report.stdout.trimEnd(), report.stderr.trimEnd()].filter(Boolean));
       if (report.exitCode) code = code || report.exitCode;
     }
+  }
+  const coverageStrict = env.COVERAGE_STRICT === 'true' || env.COVERAGE_STRICT === '1';
+  if (env.REGRESSION_COMMAND || coverageStrict) {
+    if (coverageStrict && !env.REGRESSION_COMMAND) lines.push('coverage-strict: regression-command が無いため宣言上の対応だけを検査します。fail・未実行は判定しません。');
+    mkdirSync(runDir, { recursive: true });
+    let regressionCode = 0;
+    let resultsPath = null;
+    if (env.REGRESSION_COMMAND) {
+      resultsPath = join(runDir, 'regression-results.json');
+      const regression = run(execFile, 'bash', ['-c', env.REGRESSION_COMMAND], work, {
+        ...env,
+        E2E_BASE_URL: env.E2E_BASE_URL || 'http://localhost:3000',
+        TESTKIT_RUN_DIR: runDir,
+        TESTKIT_RESULTS_JSON: resultsPath,
+      });
+      record('regression', env.REGRESSION_COMMAND, regression, existsSync(resultsPath) ? resultsPath : undefined);
+      lines.push(...regression.lines);
+      regressionCode = regression.code;
+    }
+    const coverage = runCoverage({ repo, resultsPath, maxAge, strict: true, env }, deps.coverage);
+    // Preserve the command's failure code while still saving the map and final summary.
+    lines.push(...[coverage.stdout.trimEnd(), coverage.stderr.trimEnd()].filter(Boolean));
+    if (regressionCode) code = code || regressionCode;
+    try {
+      writeFileSync(join(runDir, 'coverage.md'), `${coverage.stdout}${coverage.stderr}`);
+    } catch (err) {
+      fail(2, `シナリオ対応表を保存できません: ${err.code ?? err.name}: ${err.message}`);
+    }
+    if (coverage.model) {
+      let json;
+      try { json = (deps.coverage?.renderJson ?? renderJson)(coverage.model, coverage.summary); }
+      catch (err) { fail(3, `シナリオ対応表の内部エラー:\n${err.stack ?? err}`); }
+      if (json !== undefined) try { writeFileSync(join(runDir, 'coverage.json'), json); }
+      catch (err) { fail(2, `シナリオ対応表を保存できません: ${err.code ?? err.name}: ${err.message}`); }
+    }
+    if (coverage.exitCode === 2) fail(2, 'シナリオ対応表を作れません。入力エラー（詳細は上記）');
+    else if (coverage.exitCode === 3) fail(3, 'シナリオ対応表を作れません。内部エラー（スタックトレースは上記）');
+    else if (coverage.exitCode === 1 && coverageStrict) fail(1, 'coverage-strict: 対応表に要対応があります');
   }
   let manifest;
   if (executions.length) {
@@ -181,6 +220,7 @@ export function runCiJob(env = process.env, deps = {}) {
       result = evaluate(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
     } catch (err) {
       fail(1, `${change.id}: gate 評価中にエラーが発生しました (${err.code ?? err.name}: ${err.message})`);
+      if (err.stack) lines.push(err.stack);
       continue;
     }
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);

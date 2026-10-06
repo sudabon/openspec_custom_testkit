@@ -29,6 +29,15 @@ install の終了コード 0 は処理が終わったことだけを表します
 
 fixture に出る `FIXTURE-DUMMY-APPROVAL` は人間の承認ではありません。
 
+## シナリオ対応表
+
+```bash
+node scripts/testkit-gate.mjs coverage
+node scripts/testkit-gate.mjs coverage --results test-results/regression.json --strict
+```
+
+main spec の全シナリオを、archive 済み change の test-plan と照合して「保護（E2E）」「保護（他層の宣言）」「未保護」「要再確認」「孤立」に分けた表を出します。Playwright の全量実行 JSON を渡すと結果も添えます。既定は表示だけで終了コード 0、`--strict` で要対応があれば 1、入力の欠落・破損・鮮度違反、I/O エラーや引数の誤りは 2、内部エラーはスタックトレース付きの 3 です。分類の意味と段階的な導入は [docs/workflow.md](docs/workflow.md#シナリオ対応表回帰の保護範囲) にあります。
+
 ## 開発用コマンド
 
 ```bash

@@ -8,6 +8,14 @@ export const CRITICAL_FILES = [
   'scripts/ci-job.mjs',
 ];
 
+// Modules added after the first release. An older stamp that does not record them means
+// the target still runs a previous kit, so doctor reports it as incomplete.
+export const REQUIRED_MODULES = [
+  'scripts/lib/e2e-lint.mjs',
+  'scripts/lib/results.mjs',
+  'scripts/lib/coverage-map.mjs',
+];
+
 export function isCritical(rel) {
   return CRITICAL_FILES.includes(rel) || rel.startsWith('scripts/lib/');
 }

@@ -1,0 +1,301 @@
+{
+  "scenarios": [
+    {
+      "capability": "billing/invoice",
+      "requirement": "Invoice listing",
+      "scenario": "Empty cart",
+      "classification": "未保護",
+      "source": null,
+      "active": [],
+      "result": null
+    },
+    {
+      "capability": "billing/invoice",
+      "requirement": "Invoice export",
+      "scenario": "Export CSV",
+      "classification": "要再確認",
+      "source": {
+        "change": "add-invoice",
+        "archive": "2026-02-01-add-invoice",
+        "tps": [
+          "TP-001"
+        ],
+        "modifiedBy": "change-export",
+        "operation": "MODIFIED"
+      },
+      "active": [],
+      "result": {
+        "bucket": "pass",
+        "flaky": false,
+        "tps": [
+          {
+            "id": "TP-001",
+            "status": "pass",
+            "bucket": "pass",
+            "flaky": false
+          }
+        ]
+      }
+    },
+    {
+      "capability": "billing/invoice",
+      "requirement": "Invoice print",
+      "scenario": "Print invoice",
+      "classification": "保護（E2E）",
+      "source": {
+        "change": "update-print",
+        "archive": "2026-03-15-update-print",
+        "tps": [
+          "TP-001"
+        ]
+      },
+      "active": [],
+      "result": {
+        "bucket": "pass",
+        "flaky": true,
+        "tps": [
+          {
+            "id": "TP-001",
+            "status": "pass",
+            "bucket": "pass",
+            "flaky": true
+          }
+        ]
+      }
+    },
+    {
+      "capability": "billing/invoice",
+      "requirement": "Wishlist",
+      "scenario": "Save for later",
+      "classification": "未保護",
+      "source": null,
+      "active": [],
+      "result": null
+    },
+    {
+      "capability": "cart",
+      "requirement": "Add item",
+      "scenario": "Add one item",
+      "classification": "保護（E2E）",
+      "source": {
+        "change": "add-cart",
+        "archive": "2026-01-01-add-cart",
+        "tps": [
+          "TP-001"
+        ]
+      },
+      "active": [],
+      "result": {
+        "bucket": "pass",
+        "flaky": false,
+        "tps": [
+          {
+            "id": "TP-001",
+            "status": "pass",
+            "bucket": "pass",
+            "flaky": false
+          }
+        ]
+      }
+    },
+    {
+      "capability": "cart",
+      "requirement": "Add item",
+      "scenario": "Add item when out of stock",
+      "classification": "保護（他層の宣言）",
+      "source": {
+        "change": "add-cart",
+        "archive": "2026-01-01-add-cart",
+        "declared": [
+          {
+            "oracle": "O2",
+            "layer": "Unit",
+            "method": "stock service unit test"
+          }
+        ]
+      },
+      "active": [],
+      "result": "宣言のみ（実行結果は未照合）"
+    },
+    {
+      "capability": "cart",
+      "requirement": "Show total",
+      "scenario": "Show subtotal",
+      "classification": "未保護",
+      "source": null,
+      "active": [
+        "add-tax"
+      ],
+      "result": null
+    },
+    {
+      "capability": "cart",
+      "requirement": "Show total",
+      "scenario": "Show tax",
+      "classification": "未保護",
+      "source": null,
+      "active": [
+        "add-tax"
+      ],
+      "result": null
+    },
+    {
+      "capability": "cart",
+      "requirement": "Checkout button",
+      "scenario": "Empty cart",
+      "classification": "保護（E2E）",
+      "source": {
+        "change": "add-cart",
+        "archive": "2026-01-01-add-cart",
+        "tps": [
+          "TP-002"
+        ]
+      },
+      "active": [],
+      "result": {
+        "bucket": "fail",
+        "flaky": false,
+        "tps": [
+          {
+            "id": "TP-002",
+            "status": "fail",
+            "bucket": "fail",
+            "flaky": false
+          }
+        ]
+      }
+    },
+    {
+      "capability": "cart",
+      "requirement": "Discount code",
+      "scenario": "Apply coupon",
+      "classification": "未保護",
+      "source": null,
+      "active": [],
+      "result": null
+    },
+    {
+      "capability": "cart",
+      "requirement": "Wishlist",
+      "scenario": "Save for later",
+      "classification": "未保護",
+      "source": null,
+      "active": [],
+      "result": null
+    },
+    {
+      "capability": "search",
+      "requirement": "Search",
+      "scenario": "Search by keyword",
+      "classification": "要再確認",
+      "source": {
+        "change": "legacy-search",
+        "archive": "2026-01-15-legacy-search",
+        "tps": [
+          "TP-001"
+        ],
+        "modifiedBy": "legacy-qe",
+        "operation": "MODIFIED"
+      },
+      "active": [],
+      "result": {
+        "bucket": "未実行",
+        "flaky": false,
+        "tps": [
+          {
+            "id": "TP-001",
+            "status": "未実行",
+            "bucket": "未実行",
+            "flaky": false
+          }
+        ]
+      }
+    },
+    {
+      "capability": "search",
+      "requirement": "Search",
+      "scenario": "Search with no results",
+      "classification": "未保護",
+      "source": null,
+      "active": [],
+      "result": null
+    }
+  ],
+  "orphans": [
+    {
+      "change": "add-cart",
+      "archive": "2026-01-01-add-cart",
+      "id": "TP-003",
+      "capability": "cart",
+      "requirement": "Coupon",
+      "scenario": "Apply coupon",
+      "reason": "RENAMED → Discount code（rename-coupon）"
+    },
+    {
+      "change": "add-invoice",
+      "archive": "2026-02-01-add-invoice",
+      "id": "TP-003",
+      "capability": "billing/invoice",
+      "requirement": "Invoice email",
+      "scenario": "Email invoice",
+      "reason": "REMOVED（drop-email）"
+    }
+  ],
+  "unresolved": [
+    {
+      "change": "add-cart",
+      "archive": "2026-01-01-add-cart",
+      "id": "TP-004",
+      "requirement": "Add item",
+      "scenario": "Nonexistent scenario",
+      "reason": "delta spec に Add item / Nonexistent scenario がありません"
+    },
+    {
+      "change": "add-wishlist",
+      "archive": "2026-05-01-add-wishlist",
+      "id": "TP-001",
+      "requirement": "Wishlist",
+      "scenario": "Save for later",
+      "reason": "delta spec の複数箇所に一致します: billing/invoice / Wishlist, cart / Wishlist"
+    }
+  ],
+  "legacyUnresolved": [
+    {
+      "change": "legacy-search",
+      "archive": "2026-01-15-legacy-search",
+      "id": "TP-002",
+      "requirement": "",
+      "scenario": "",
+      "reason": "TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）"
+    }
+  ],
+  "summary": {
+    "scenarios": 13,
+    "保護（E2E）": 3,
+    "保護（他層の宣言）": 1,
+    "未保護": 7,
+    "要再確認": 2,
+    "孤立": 2,
+    "対応不明": 2,
+    "旧形式・対応不明": 1,
+    "coverageE2E": {
+      "count": 3,
+      "total": 13,
+      "percent": 23.1
+    },
+    "coverageWithDeclared": {
+      "count": 4,
+      "total": 13,
+      "percent": 30.8
+    },
+    "実行で確認済み": 2,
+    "fail": 1,
+    "未実行": 0,
+    "coverageConfirmed": {
+      "count": 2,
+      "total": 13,
+      "percent": 15.4
+    },
+    "needsAction": 12
+  }
+}

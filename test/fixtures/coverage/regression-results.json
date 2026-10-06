@@ -1,0 +1,131 @@
+{
+  "stats": {
+    "startTime": "2026-10-06T00:00:00.000Z",
+    "duration": 4200
+  },
+  "suites": [
+    {
+      "title": "cart.spec.ts",
+      "specs": [
+        {
+          "title": "カートに 1 件追加できる",
+          "tags": [
+            "add-cart",
+            "TP-001"
+          ],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "projectName": "",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "空のカートでは購入できない",
+          "tags": [
+            "add-cart",
+            "TP-002"
+          ],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "projectName": "",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "retry": 0
+                },
+                {
+                  "status": "failed",
+                  "retry": 1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "invoice.spec.ts",
+      "specs": [
+        {
+          "title": "請求書を印刷できる",
+          "tags": [
+            "update-print",
+            "TP-001"
+          ],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "projectName": "",
+              "status": "flaky",
+              "results": [
+                {
+                  "status": "failed",
+                  "retry": 0
+                },
+                {
+                  "status": "passed",
+                  "retry": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "CSV を出力できる",
+          "tags": [
+            "add-invoice",
+            "TP-001"
+          ],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "projectName": "",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "other.spec.ts",
+      "specs": [
+        {
+          "title": "別 change の同じ TP-ID",
+          "tags": [
+            "other-change",
+            "TP-001"
+          ],
+          "tests": [
+            {
+              "expectedStatus": "passed",
+              "projectName": "",
+              "status": "expected",
+              "results": [
+                {
+                  "status": "passed",
+                  "retry": 0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

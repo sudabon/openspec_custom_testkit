@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { appendFileSync } from 'node:fs';
 import { SCHEMA_E2E } from './lib/critical.mjs';
+import { parseCoverageArgs, runCoverage } from './lib/coverage-map.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { lintRepo } from './lib/e2e-lint.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
@@ -10,7 +11,8 @@ import { selectChanges } from './lib/select.mjs';
 const USAGE = `usage: testkit-gate.mjs doctor
        testkit-gate.mjs select [--base <ref>] [<change>...] --json
        testkit-gate.mjs check [--phase plan|final] [--base <ref>] [<change>...]
-       testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]`;
+       testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]
+       testkit-gate.mjs coverage [--results <path>] [--max-age <seconds>] [--strict] [--format markdown|json]`;
 
 function repoOf() {
   try {
@@ -59,6 +61,17 @@ if (command === 'doctor') {
   }
   console.log('doctor: complete');
   process.exit(0);
+}
+if (command === 'coverage') {
+  const opts = parseCoverageArgs(rest);
+  if (opts.error) {
+    console.error(opts.error);
+    process.exit(2);
+  }
+  const result = runCoverage({ repo, ...opts });
+  if (result.stderr) console.error(result.stderr.trimEnd());
+  if (result.stdout) process.stdout.write(result.stdout);
+  process.exit(result.exitCode);
 }
 if (command !== 'select' && command !== 'check' && command !== 'lint') {
   console.error(USAGE);
