@@ -98,7 +98,11 @@ if (selected.exitCode === 2) {
 if (command === 'lint') {
   const changes = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
   const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env: process.env, requireSources: true });
-  const selectionErrors = selected.changes.flatMap(change => [...change.errors, ...(change.e2e === 'unknown' ? [`${change.id}: E2E 適用状態を判定できません (${change.reason})`] : [])]);
+  const selectionErrors = selected.changes.flatMap(change => {
+    const unknown = change.e2e === 'unknown' && !change.pendingPlan;
+    const errors = unknown ? change.errors.filter(error => error !== change.reason) : change.errors;
+    return [...errors.map(error => `${change.id}: ${error}`), ...(unknown ? [`${change.id}: E2E 適用状態を判定できません (${change.reason})`] : [])];
+  });
   for (const error of selectionErrors) console.error(`✗ ${error}`);
   console.log(`対象 change: ${changes.map(change => change.id).join(', ') || 'なし（全ソースを警告範囲で表示）'}`);
   for (const note of result.notes) console.log(`! ${note}`);

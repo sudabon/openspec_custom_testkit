@@ -31,15 +31,16 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
+  const progress = { level: 'unknown' };
   try {
-    return evaluateReadableChange(repo, change, options);
+    return evaluateReadableChange(repo, change, options, progress);
   } catch (err) {
-    if (!err.code) throw err;
-    return { failures: [`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`], warnings: [], oks: [], level: 'none', phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
+    if (typeof err.syscall !== 'string' || typeof err.code !== 'string' || !/^E[A-Z]+$/.test(err.code)) throw err;
+    return { failures: [`${change.id}: gate 入力を読み取れません (${err.code}: ${err.path ?? err.message})`], warnings: [], oks: [], level: progress.level, phase: effectivePhase(options.phase, change, taskState(parseTasks(change.tasksText))) };
   }
 }
 
-function evaluateReadableChange(repo, change, options = {}) {
+function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
@@ -79,6 +80,7 @@ function evaluateReadableChange(repo, change, options = {}) {
       else {
         const model = qualityModel(text);
         const declared = asString(frontmatter.data.risk_level);
+        if (['high', 'medium', 'low'].includes(declared)) progress.level = declared;
         if (!['high', 'medium', 'low'].includes(declared)) failures.push(`risk_level が不正です: '${declared}'`);
         else if (model.badLevel) failures.push(`Risk が不正です: '${model.badLevel}'`);
         else if (!model.max || declared !== model.max) failures.push(`risk_level ${declared || '(空)'} は Risk Register の最大値 ${model.max ?? '(なし)'} と一致しません`);
@@ -137,10 +139,11 @@ function evaluateReadableChange(repo, change, options = {}) {
       }
     }
   }
-  return { failures: [...new Set(failures)], warnings, oks, level, phase };
+  return { failures, warnings, oks, level, phase };
 }
 
 export function maxLevel(levels) {
+  if (levels.includes('unknown')) return 'unknown';
   const rank = { none: 0, low: 1, medium: 2, high: 3 };
   return levels.reduce((best, level) => (rank[level] ?? 0) > (rank[best] ?? 0) ? level : best, 'none');
 }

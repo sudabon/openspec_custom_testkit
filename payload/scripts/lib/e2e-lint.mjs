@@ -271,9 +271,9 @@ function lex(src, { jsx = false } = {}) {
         else if (src.startsWith('++', pos) || src.startsWith('--', pos)) value = src.slice(pos, pos + 2);
         else if (ch === '?' && src[pos + 1] === '.' && !/[0-9]/.test(src[pos + 2] ?? '')) value = '?.';
         pos += value.length;
-        const postfix = value === '!' && !expressionStart();
+        const postfix = value === '!' && !expressionStart() && !/[\r\n]/.test(src.slice(tokens.at(-1)?.end ?? 0, start));
         let controlClose = false;
-        if (OPENERS[value]) stack.push({ value, start, control: value === '(' && ['if', 'while', 'for', 'with', 'switch', 'catch'].includes(tokens.at(-1)?.value) });
+        if (OPENERS[value]) stack.push({ value, start, control: value === '(' && ['if', 'while', 'for', 'with', 'switch', 'catch'].includes(tokens.at(-1)?.value) && !['.', '?.'].includes(tokens.at(-2)?.value) });
         else if (CLOSERS.has(value)) {
           const open = stack.pop();
           if (!open || OPENERS[open.value] !== value) throw new LexError('括弧の対応が取れません', start);
@@ -428,10 +428,6 @@ function declarationsOf(seq) {
       }
       if (isPunct(seq[k], '{')) {
         const close = seq.pairs[k];
-        if (seq[close + 1]?.value === 'from') {
-          i = close;
-          continue;
-        }
         for (let m = k + 1; m < close; m++) {
           if (seq[m].type !== 'ident' || seq[m].value === 'type') continue;
           const local = seq[m].value;
@@ -440,7 +436,7 @@ function declarationsOf(seq) {
             name = seq[m + 2].value;
             m += 2;
           }
-          exported.set(name, local);
+          exported.set(name, seq[close + 1]?.value === 'from' ? name : local);
         }
         i = close;
         continue;
@@ -521,8 +517,23 @@ function methodsOf(seq, open) {
 
 function importsOf(seq) {
   const bindings = new Map();
+  // Static CommonJS destructuring and namespace bindings use the same import graph.
   for (let i = 0; i < seq.length; i++) {
-    if (seq[i].type !== 'ident' || seq[i].value !== 'import' || isDot(seq[i - 1]) || isPunct(seq[i + 1], '(') || isDot(seq[i + 1])) continue;
+    if (!['const', 'let', 'var'].includes(seq[i].value)) continue;
+    const start = i + 1;
+    const end = isPunct(seq[start], '{') ? seq.pairs[start] : start;
+    if (!isPunct(seq[end + 1], '=') || seq[end + 2]?.value !== 'require' || !isPunct(seq[end + 3], '(') || seq[end + 4]?.type !== 'string') continue;
+    const specifier = seq[end + 4].value;
+    if (start === end) bindings.set(seq[start].value, { imported: '*', specifier });
+    else for (let k = start + 1; k < end; k++) {
+      if (seq[k].type !== 'ident') continue;
+      const imported = seq[k].value;
+      const local = isPunct(seq[k + 1], ':') ? seq[k += 2].value : imported;
+      bindings.set(local, { imported, specifier });
+    }
+  }
+  for (let i = 0; i < seq.length; i++) {
+    if (seq[i].type !== 'ident' || !['import', 'export'].includes(seq[i].value) || isDot(seq[i - 1]) || isPunct(seq[i + 1], '(') || isDot(seq[i + 1])) continue;
     let k = i + 1;
     if (seq[k]?.value === 'type' && !isPunct(seq[k + 1], ',') && seq[k + 1]?.value !== 'from') continue;
     const found = [];
@@ -556,16 +567,27 @@ function importsOf(seq) {
 }
 
 // Recognize imported test aliases and the statically declared base.extend fixture graph.
-function testBindings(seq, imports) {
-  const roots = new Set(TEST_ROOTS);
+function testBindings(seq, imports, testNames = []) {
+  const roots = new Set([...TEST_ROOTS, ...testNames]);
   for (const [local, binding] of imports) if (binding.imported === 'test') roots.add(local);
+  for (const [local, binding] of imports) if (binding.imported === '*' && binding.specifier === '@playwright/test') roots.add(`${local}.test`);
   const extensions = new Map();
   for (let i = 0; i < seq.length; i++) {
     if (!['const', 'let', 'var'].includes(seq[i].value) || seq[i + 1]?.type !== 'ident' || !isPunct(seq[i + 2], '=')) continue;
     const name = seq[i + 1].value;
-    const base = seq[i + 3]?.value;
-    if (!roots.has(base) || !isDot(seq[i + 4]) || seq[i + 5]?.value !== 'extend') continue;
-    let open = i + 6;
+    let base = seq[i + 3]?.value;
+    let next = i + 4;
+    if (isDot(seq[next]) && seq[next + 1]?.value === 'test' && roots.has(`${base}.test`)) { base += '.test'; next += 2; }
+    if (!roots.has(base)) continue;
+    if (!isDot(seq[next])) {
+      if (!seq[next] || isPunct(seq[next], ';') || seq[next].line > seq[next - 1].line) {
+        roots.add(name);
+        extensions.set(name, { base, fixtures: new Map() });
+      }
+      continue;
+    }
+    if (seq[next + 1]?.value !== 'extend') continue;
+    let open = next + 2;
     if (isPunct(seq[open], '<')) {
       let depth = 1;
       while (++open < seq.length && depth) {
@@ -581,15 +603,16 @@ function testBindings(seq, imports) {
     if (isPunct(seq[object], '{')) {
       for (let k = object + 1; k < seq.pairs[object]; k++) {
         if (isOpener(seq[k])) { k = seq.pairs[k]; continue; }
-        if (!isPunct(seq[k + 1], ':')) continue;
+        if (!isPunct(seq[k + 1], ':') && !isPunct(seq[k + 1], '(')) continue;
         const key = seq[k].value;
         fixtures.set(key, null); // An override without a known constructor must not inherit an assertion.
-        let end = k + 2;
+        const start = isPunct(seq[k + 1], '(') ? k + 1 : k + 2;
+        let end = start;
         while (end < seq.pairs[object] && !isPunct(seq[end], ',')) {
           end = isOpener(seq[end]) ? seq.pairs[end] + 1 : end + 1;
         }
         const vars = new Map();
-        for (let m = k + 2; m < end; m++) {
+        for (let m = start; m < end; m++) {
           if (isPunct(seq[m + 1], '=') && seq[m + 2]?.value === 'new') vars.set(seq[m].value, seq[m + 3]?.value);
           if (seq[m].value !== 'use' || !isPunct(seq[m + 1], '(')) continue;
           const type = seq[m + 2]?.value === 'new' ? seq[m + 3]?.value : vars.get(seq[m + 2]?.value);
@@ -608,6 +631,10 @@ function fixtureParameters(seq, body) {
   if (!body) return bindings;
   let k = body[0];
   if (seq[k]?.value === 'async') k++;
+  if (seq[k]?.value === 'function') {
+    k++;
+    if (seq[k]?.type === 'ident') k++;
+  }
   if (!isPunct(seq[k], '(') || !isPunct(seq[k + 1], '{')) return bindings;
   const end = seq.pairs[k + 1];
   for (let i = k + 2; i < end; i++) {
@@ -628,7 +655,7 @@ function isWeak(item) {
   return WEAK_MATCHERS.includes(matcherLabel(item));
 }
 
-export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), changeIds } = {}) {
+export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), changeIds, testNames } = {}) {
   const lineOf = lineIndex(text);
   let lexed;
   try {
@@ -655,7 +682,23 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
   flat.sort((a, b) => a.token.start - b.token.start);
 
   const imports = importsOf(lexed.tokens);
-  const { roots: testRoots, extensions } = testBindings(lexed.tokens, imports);
+  const locatorVariables = new Set();
+  const locatorExpression = (seq, end) => {
+    if (seq[end]?.type === 'ident') return locatorVariables.has(seq[end].value);
+    if (!isPunct(seq[end], ')')) return false;
+    const open = seq.openers[end];
+    const name = seq[open - 1]?.value ?? '';
+    return isDot(seq[open - 2]) && (/^getBy/.test(name) || ['locator', 'frameLocator', 'filter', 'nth', 'first', 'last', 'and', 'or'].includes(name));
+  };
+  for (const seq of sequences(lexed.tokens)) {
+    for (let i = 0; i < seq.length; i++) {
+      if (seq[i].type !== 'ident' || !isPunct(seq[i + 1], '=')) continue;
+      let end = statementEnd(seq, i);
+      if (isPunct(seq[end], ';')) end--;
+      if (locatorExpression(seq, end)) locatorVariables.add(seq[i].value);
+    }
+  }
+  const { roots: testRoots, extensions } = testBindings(lexed.tokens, imports, testNames);
   for (const seq of sequences(lexed.tokens)) {
     for (let i = 0; i < seq.length; i++) {
       const token = seq[i];
@@ -669,7 +712,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
           const open = seq.openers[i - 1];
           if (seq[open - 1]?.type === 'ident' && seq[open - 2]?.value === 'new') receiver = { kind: 'new', name: seq[open - 1].value };
         }
-        memberCalls.push({ name: seq[i + 1].value, start: seq[i + 1].start, line: seq[i + 1].line, first, receiver });
+        memberCalls.push({ name: seq[i + 1].value, start: seq[i + 1].start, line: seq[i + 1].line, first, receiver, locator: locatorExpression(seq, i - 1) });
       }
       if (token.type === 'ident' && isPunct(seq[i + 1], '=')) {
         let k = i + 2;
@@ -686,7 +729,8 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
       if (!isPunct(seq[next], '(')) continue;
       const { close, list } = argumentsOf(seq, next);
       rootCalls.push({ names, start: token.start, line: token.line });
-      const [root, ...members] = names;
+      let [root, ...members] = names;
+      if (members[0] === 'test' && testRoots.has(`${root}.test`)) { root += '.test'; members = members.slice(1); }
 
       if (root === 'expect' && (members.length === 0 || (members.length === 1 && EXPECT_FORMS.has(members[0])))) {
         let k = close + 1;
@@ -772,8 +816,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
       raw.push({ rule: 'fixed-wait', offset: call.start, line: call.line, message: 'waitForTimeout による固定待機は禁止です。自動待機ロケーターと expect のリトライに任せてください' });
       continue;
     }
-    const selectorReceiver = call.receiver?.kind === 'ident' && ['page', 'frame'].includes(call.receiver.name);
-    const xpath = (CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (selectorReceiver && SELECTOR_METHODS.has(call.name))) && isTitle(call.first) && XPATH.test(call.first.value);
+    const xpath = (CSS_LOCATORS.has(call.name) || call.name === 'frameLocator' || (!call.locator && SELECTOR_METHODS.has(call.name))) && isTitle(call.first) && XPATH.test(call.first.value);
     if (CSS_LOCATORS.has(call.name) || xpath) {
       const what = xpath ? `XPath (${call.first.value})` : `${call.name}()`;
       raw.push({ rule: 'forbidden-locator', offset: call.start, line: call.line, message: `${what} は禁止です。getByRole / getByLabel / getByText / getByTestId を使ってください` });
@@ -815,7 +858,7 @@ export function analyzeSource(text, { path = '', jsx = JSX_SOURCE.test(path), ch
     }
     const previous = flat[lo - 1]?.token;
     const trailing = previous && lineOf(previous.end - 1) === entry.line;
-    if (trailing) entry.error = '抑止コメントは独立した行で対象の直前に置いてください';
+    if (trailing || (flat[lo] && lineOf(comment.end - 1) === flat[lo].token.line)) entry.error = '抑止コメントは独立した行で対象の直前に置いてください';
     const next = trailing ? null : flat[lo];
     if (next) {
       const end = statementEnd(next.seq, next.index);
@@ -975,21 +1018,25 @@ function isIntegrated(change) {
   return change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated';
 }
 
-function envValue(env, key, allowed, notes) {
+function envValue(env, key, allowed, notes, errors) {
   const value = asString(env?.[key]);
-  if (value && !allowed.includes(value)) notes.add(`${key} が不正です (${value})。既定値で動かします`);
+  if (value && !allowed.includes(value)) {
+    const message = `${key} が不正です (${value})。設定を修正してください`;
+    notes.add(message);
+    errors.add(message);
+  }
   return allowed.includes(value) ? value : null;
 }
 
-function modeFor(change, policy, env, notes) {
+function modeFor(change, policy, env, notes, errors) {
   if (isIntegrated(change)) {
     for (const key of ['QE_E2E_LINT_MODE', 'QE_E2E_LINT_SCOPE']) {
       if (asString(env?.[key])) notes.add(`統合 schema の change (${change.id}) では ${key} を無視します。タグ付きソースは常に強制します`);
     }
     return { tagged: true, changed: policy.mode === 'enforce', all: policy.mode === 'enforce' && policy.scope === 'all' };
   }
-  const mode = envValue(env, 'QE_E2E_LINT_MODE', ['warn', 'enforce'], notes) ?? 'warn';
-  const scope = envValue(env, 'QE_E2E_LINT_SCOPE', ['changed', 'all'], notes) ?? policy.scope;
+  const mode = envValue(env, 'QE_E2E_LINT_MODE', ['warn', 'enforce'], notes, errors) ?? 'warn';
+  const scope = envValue(env, 'QE_E2E_LINT_SCOPE', ['changed', 'all'], notes, errors) ?? policy.scope;
   const on = mode === 'enforce';
   return { tagged: on, changed: on, all: on && scope === 'all' };
 }
@@ -1048,6 +1095,11 @@ function loadState(repo, cache, changes) {
   for (let pass = 0; pass < state.helpers.size; pass++) {
     for (const [file, entry] of state.files) {
       if (!state.helpers.has(file)) continue;
+      const testNames = [...entry.analysis.imports].filter(([, binding]) => state.helpers.get(resolveModule(file, binding.specifier, state.helpers))?.tests.has(binding.imported)).map(([name]) => name);
+      if (testNames.some(name => !entry.testNames?.has(name))) {
+        entry.testNames = new Set(testNames);
+        entry.analysis = analyzeSource(entry.text, { path: file, changeIds, testNames });
+      }
       const tests = fixtureTests(file, entry.analysis, state.helpers);
       for (const [exported, local] of entry.analysis.exported) {
         if (tests.has(local)) state.helpers.get(file).tests.set(exported, tests.get(local));
@@ -1088,6 +1140,10 @@ function residualsOf(repo, state, change) {
       state.residualErrors.set(change.path, `evidence.md を読み取れません (${err.code ?? err.message})`);
       return [];
     }
+    if (parsed.error) {
+      state.residualErrors ??= new Map();
+      state.residualErrors.set(change.path, parsed.error);
+    }
     const list = Array.isArray(parsed.data?.residuals) ? parsed.data.residuals.filter(item => item && typeof item === 'object') : [];
     state.residuals.set(change.path, list);
   }
@@ -1095,7 +1151,9 @@ function residualsOf(repo, state, change) {
 }
 
 function residualStatus(id, residuals) {
-  const found = residuals.find(item => item.id === id);
+  const matches = residuals.filter(item => item.id === id);
+  if (matches.length > 1) return { status: 'invalid', detail: `${id} の参照先が複数あります。Residual ID を一意にしてください` };
+  const found = matches[0];
   if (!found) return { status: 'unknown', detail: `${id} が evidence の residuals にありません` };
   const missing = ['reason', 'impact', 'approved_by'].filter(key => !asString(found[key]));
   if (!validDate(found.approved_at)) missing.push('approved_at');
@@ -1124,8 +1182,14 @@ export function lintRepo(repo, changes, options = {}) {
   const notes = new Set(state.policy.invalid);
   const result = { enforced: [], warned: [], exceptions: [], pending: [], notes: [], unsupported: [], analyzed: state.analyzed, failed: 0 };
   const active = changes.filter(change => change.lifecycle !== 'deleted');
-  const modes = active.map(change => ({ change, mode: modeFor(change, state.policy, env, notes) }));
-  const selectedResiduals = active.flatMap(change => residualsOf(repo, state, change));
+  const configErrors = new Set(state.policy.errors);
+  const modes = active.map(change => ({ change, mode: modeFor(change, state.policy, env, notes, configErrors) }));
+  const consulted = new Set();
+  const readResiduals = change => {
+    consulted.add(change.path);
+    return residualsOf(repo, state, change);
+  };
+  const selectedResiduals = active.flatMap(readResiduals);
   const diff = options.base ? changedFiles(repo, state, options.base) : null;
   if (!options.base) notes.add(modes.some(({ mode }) => mode.all)
     ? 'e2e-lint: --base がありませんが、scope: all により全ソースを強制します'
@@ -1143,6 +1207,7 @@ export function lintRepo(repo, changes, options = {}) {
     place(entry, { enforced: true, reason: 'root' });
   }
 
+  for (const message of configErrors) place({ rule: 'invalid-config', file: 'openspec/quality-policy.md / environment', message }, { enforced: true });
   if (state.policyError) place({ rule: 'unreadable', file: 'openspec/quality-policy.md', message: state.policyError }, { enforced: true });
   if (options.requireSources && !state.analyzed && !state.listing.error) place({ rule: 'unreadable', file: state.root, message: '検査対象の E2E ソースが 0 件です' }, { enforced: true });
 
@@ -1171,9 +1236,20 @@ export function lintRepo(repo, changes, options = {}) {
       place({ rule: 'unparseable', file, line: analysis.errorLine, test: null, message: `字句解析できません: ${analysis.error}` }, scope);
       continue;
     }
-    // Resolve existing exceptions against their tagged change, including archived changes.
-    const owners = analysis.suppressions.length ? state.knownChanges.filter(change => hasBoundedToken(entry.text, `@${change.id}`)) : [];
-    const residuals = owners.length ? owners.flatMap(change => residualsOf(repo, state, change)) : selectedResiduals;
+    // Only parsed test tags establish ownership; comments and unrelated strings cannot grant approval.
+    // Selected evidence wins over historical records with the same ID. Untagged helpers retain
+    // historical exceptions, but ambiguous historical IDs require a unique ID.
+    const selectedIds = new Set(selectedResiduals.map(item => item.id));
+    const statusOf = item => {
+      if (item.error) return { status: 'invalid', detail: item.error };
+      const targets = analysis.tests.filter(test => (test.start <= item.from && item.from < test.end) || (item.from <= test.start && test.start < item.to));
+      const tags = new Set(targets.flatMap(test => test.tags));
+      const tagged = [...active, ...state.knownChanges].some(change => tags.has(`@${change.id}`));
+      const owners = state.knownChanges.filter(change =>
+        !active.some(selected => selected.path === change.path) && (!tagged || tags.has(`@${change.id}`)));
+      const residuals = [...selectedResiduals, ...owners.flatMap(readResiduals).filter(record => !selectedIds.has(record.id))];
+      return residualStatus(item.residual, residuals);
+    };
     const findings = [...analysis.findings, ...assertionFindings(analysis, helperResolver(file, analysis, state.helpers))];
     const used = new Set();
     for (const finding of findings) {
@@ -1184,7 +1260,7 @@ export function lintRepo(repo, changes, options = {}) {
         continue;
       }
       matched.forEach(item => used.add(item));
-      const statuses = matched.map(item => item.error ? { status: 'invalid', detail: item.error, id: item.residual } : { ...residualStatus(item.residual, residuals), id: item.residual });
+      const statuses = matched.map(item => ({ ...statusOf(item), id: item.residual }));
       const worst = statuses.reduce((low, item) => STATUS_RANK[item.status] < STATUS_RANK[low.status] ? item : low);
       if (worst.status === 'approved') {
         base.residual = worst.id;
@@ -1204,7 +1280,7 @@ export function lintRepo(repo, changes, options = {}) {
     }
     for (const item of analysis.suppressions) {
       if (used.has(item)) continue;
-      const status = item.error ? { status: 'invalid', detail: item.error } : residualStatus(item.residual, residuals);
+      const status = statusOf(item);
       if (status.status === 'invalid' || status.status === 'unknown') {
         place({ rule: 'invalid-suppression', file, line: item.line, test: item.test, message: `抑止コメントが無効です: ${status.detail}` }, { enforced: true, reason: 'invalid-suppression' });
       }
@@ -1228,7 +1304,7 @@ export function lintRepo(repo, changes, options = {}) {
     }
   }
 
-  for (const [path, message] of state.residualErrors ?? []) place({ rule: 'unreadable', file: `${path}/evidence.md`, message }, { enforced: true });
+  for (const [path, message] of state.residualErrors ?? []) if (consulted.has(path)) place({ rule: 'unreadable', file: `${path}/evidence.md`, message }, { enforced: true });
   result.notes = [...notes];
   result.failed = result.enforced.length;
   return result;

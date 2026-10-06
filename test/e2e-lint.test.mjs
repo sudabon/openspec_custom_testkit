@@ -273,7 +273,7 @@ test('scope harness: tagged and changed files fail, untouched files only warn', 
   }
 });
 
-test('policy fields fall back to defaults and the integrated schema keeps tagged sources enforced', () => {
+test('missing policy fields use defaults, invalid fields fail, and tagged sources stay enforced', () => {
   const variants = {
     missing: shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, ''),
     invalid: shippedPolicy.replace(/^e2e_lint_mode:.*$/m, 'e2e_lint_mode: maybe').replace(/^e2e_lint_scope:.*$/m, 'e2e_lint_scope: some'),
@@ -284,7 +284,8 @@ test('policy fields fall back to defaults and the integrated schema keeps tagged
     const { repo, base } = scopeRepo({ policy });
     try {
       const result = lintRepo(repo.dir, [change()], { phase: 'plan', base, env: {} });
-      assert.deepEqual(files(result.enforced), ['missing-assertion:tests/e2e/edited.spec.ts', 'weak-assertion:tests/e2e/tagged.spec.ts'], name);
+      assert.deepEqual(files(result.enforced.filter(entry => entry.rule !== 'invalid-config')), ['missing-assertion:tests/e2e/edited.spec.ts', 'weak-assertion:tests/e2e/tagged.spec.ts'], name);
+      assert.equal(result.enforced.filter(entry => entry.rule === 'invalid-config').length, name === 'invalid' ? 2 : 0);
       if (name === 'invalid') assert.match(result.notes.join('\n'), /既定値/);
     } finally {
       repo.cleanup();
@@ -734,5 +735,190 @@ test('an unreadable E2E source fails instead of producing a clean root report', 
     const result = lintRepo(repo.dir, [], { env: {} });
     assert.equal(result.failed, 1);
     assert.match(result.enforced[0].text, /unreadable.*broken.spec.ts/);
+  } finally { repo.cleanup(); }
+});
+
+test('method names resembling control keywords allow division and newline ! starts a regex expression', () => {
+  for (const expression of ['promise.catch(e) / 2', 'Symbol.for(k) / 2', 'obj?.if(k) / 2', 'a\n!/re/.test(s)', 'a\r\n!/re/.test(s)']) {
+    const result = lintSource(`test('@demo @TP-001', () => { ${expression}; expect(1).toBe(1); });`);
+    assert.equal(result.error, null, expression);
+    assert.deepEqual(result.findings, [], expression);
+  }
+});
+
+test('XPath detection follows arbitrary Page names and Frame calls while Locator values remain values', () => {
+  for (const source of ["popup.click('//a')", "p2.fill('//input', 'value')", "page.mainFrame().click('//a')", "frame.waitForSelector('//a')"]) {
+    assert.equal(lintSource(source).findings[0]?.rule, 'forbidden-locator', source);
+  }
+  for (const source of ["page.getByLabel('file').setInputFiles('./a.pdf')", "page.getByLabel('name').fill('../x')", "const input = popup.getByLabel('name'); input.fill('//value');", "const input = popup.getByLabel('name'); const alias = input; alias.fill('../value');"]) {
+    assert.deepEqual(lintSource(source).findings, [], source);
+  }
+});
+
+test('CommonJS, namespace, direct aliases and exported extensions retain test rules', () => {
+  const sources = [
+    "const { test: it3 } = require('@playwright/test'); it3",
+    "const t4 = test; t4",
+    "import * as pw from '@playwright/test'; pw.test",
+    "const pw = require('@playwright/test'); pw.test",
+    "import { test as base } from '@playwright/test'; export const myTest = base.extend({}); myTest",
+    "import * as pw from '@playwright/test'; const custom = pw.test.extend({}); custom",
+  ];
+  for (const prefix of sources) {
+    const result = lintSource(`${prefix}.skip('@demo @TP-001', () => {});`);
+    assert.equal(result.error, null, prefix);
+    assert.equal(result.tests.length, 1, prefix);
+    assert.equal(result.tests[0].excluded, true, prefix);
+    assert.deepEqual(result.findings.map(item => item.rule), ['excluded-test', 'missing-assertion'], prefix);
+  }
+});
+
+test('fixture shorthand, re-exports, named custom tests and function callbacks resolve Page Objects', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/pages/checkout.ts', 'export class CheckoutPage { verifyTotal() { expect(10).toBe(10); } submit() {} }');
+    write(repo, 'tests/e2e/base.ts', `import { test as base } from '@playwright/test';
+import { CheckoutPage } from './pages/checkout';
+export const myTest = base.extend({ async checkoutPage({ page }, use) { await use(new CheckoutPage(page)); } });`);
+    write(repo, 'tests/e2e/barrel.ts', "export { myTest as test } from './base';");
+    write(repo, 'tests/e2e/good.spec.ts', `import { test } from './barrel';
+import { myTest } from './base';
+const alias = test;
+test('@demo @TP-001', async function ({ checkoutPage }) { checkoutPage.verifyTotal(); });
+myTest('@demo @TP-002', async function named({ checkoutPage: checkout }) { checkout.verifyTotal(); });
+alias('@demo @TP-003', ({ checkoutPage }) => checkoutPage.verifyTotal());
+myTest('@demo @TP-004', async function ({ checkoutPage }) { checkoutPage.submit(); });`);
+    const result = lintRepo(repo.dir, [change({ tpIds: ['TP-001', 'TP-002', 'TP-003', 'TP-004'] })], { env: {} });
+    assert.deepEqual(brief(result.enforced), ['missing-assertion:7:@demo @TP-004']);
+  } finally { repo.cleanup(); }
+});
+
+test('residual lookup ignores comment tags and includes selected approvals for historical test tags', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([{ ...unapproved, id: 'RES-1' }, { ...approved, id: 'RES-NEW' }]));
+    const source = tag => `// related: @old
+// e2e-lint-allow weak-assertion RES-1: display
+ test('${tag} @TP-001', () => expect(true).toBeTruthy());`;
+    write(repo, 'tests/e2e/test.spec.ts', source('@demo'));
+    let result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+    assert.equal(result.exceptions.length, 0);
+    assert.match(result.enforced[0].text, /人間の承認がありません/);
+    // A comment cannot borrow an archived ID even when selected evidence lacks that ID.
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([{ ...approved, id: 'RES-NEW' }]));
+    result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+    assert.equal(result.exceptions.length, 0);
+    assert.match(result.enforced[0].text, /residuals にありません/);
+    write(repo, 'tests/e2e/test.spec.ts', source('@demo') + strongSpec('unrelated historical test', ['@old', '@TP-002']));
+    result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+    assert.equal(result.exceptions.length, 0); // Another test in the file cannot grant approval either.
+    write(repo, 'tests/e2e/test.spec.ts', source('@old').replace('RES-1', 'RES-NEW'));
+    result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
+    assert.equal(result.failed, 0);
+    assert.equal(result.exceptions.length, 1);
+  } finally { repo.cleanup(); }
+});
+
+test('untagged helper exceptions survive later changes and no-change lint, but ambiguous IDs fail', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    write(repo, 'tests/e2e/pages/old.ts', `export async function wait(page) {
+// e2e-lint-allow fixed-wait RES-1: inherited exception
+await page.waitForTimeout(1);
+}`);
+    for (const selected of [[change()], []]) {
+      const result = lintRepo(repo.dir, selected, { env: {}, phase: 'final' });
+      assert.equal(result.failed, 0);
+      assert.equal(result.exceptions.length, 1);
+    }
+    write(repo, 'openspec/changes/archive/2026-02-01-other/evidence.md', evidence([approved]));
+    const ambiguous = lintRepo(repo.dir, [], { env: {} });
+    assert.equal(ambiguous.failed, 1);
+    assert.match(ambiguous.enforced[0].text, /参照先が複数/);
+  } finally { repo.cleanup(); }
+});
+
+test('malformed evidence reports JSON errors and cached evidence failures stay scoped to consulted changes', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
+    write(repo, 'openspec/changes/demo/evidence.md', '## Execution Records\n```json\n{ broken\n```\n');
+    const cache = {};
+    const broken = lintRepo(repo.dir, [change()], { env: {}, cache });
+    assert.match(broken.enforced.map(item => item.text).join('\n'), /JSON が不正/);
+    const other = lintRepo(repo.dir, [change({ id: 'other', path: 'openspec/changes/other' })], { env: {}, cache });
+    assert.equal(other.failed, 0);
+  } finally { repo.cleanup(); }
+});
+
+test('block suppressions must occupy an independent line', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    write(repo, 'tests/e2e/inline.ts', `/* e2e-lint-allow fixed-wait RES-1: same line */ await page.waitForTimeout(1);`);
+    const result = lintRepo(repo.dir, [change()], { env: {} });
+    assert.equal(result.exceptions.length, 0);
+    assert.match(result.enforced.map(item => item.text).join('\n'), /独立した行/);
+  } finally { repo.cleanup(); }
+});
+
+test('invalid lint settings fail clean source lint while an absent policy is quiet', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    const run = env => spawnSync(process.execPath, [gate, 'lint', 'demo'], { cwd: repo.dir, encoding: 'utf8', env: { ...process.env, ...env } });
+    const noPolicy = lintRepo(repo.dir, [], { env: {} });
+    assert.doesNotMatch(noPolicy.notes.join('\n'), /e2e_lint_mode.*ありません/);
+    for (const env of [{ QE_E2E_LINT_MODE: 'ENFORCE' }, { QE_E2E_LINT_SCOPE: 'ALL' }]) {
+      assert.equal(run(env).status, 1);
+    }
+    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\n');
+    assert.equal(run({}).status, 1);
+  } finally { repo.cleanup(); }
+});
+
+test('lint permits pending plans and reports unknown applicability once', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    const run = command => spawnSync(process.execPath, [gate, command, 'demo'], { cwd: repo.dir, encoding: 'utf8' });
+    for (const command of ['select', 'check', 'lint']) assert.equal(run(command).status, 0, command);
+    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
+    const unknown = run('lint');
+    assert.equal(unknown.status, 1);
+    assert.equal(unknown.stderr.trim().split('\n').length, 1);
+    assert.match(unknown.stderr, /E2E 適用状態を判定できません/);
+  } finally { repo.cleanup(); }
+});
+
+test('CI writes a failure summary and unknown risk when quality.md cannot be read', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    mkdirSync(join(repo.dir, 'openspec/changes/demo/quality.md'));
+    repo.commit('change');
+    const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') }, { cwd: repo.dir });
+    assert.equal(result.code, 1);
+    assert.equal(result.riskLevel, 'unknown');
+    assert.match(readFileSync(join(result.summaryDir, 'summary.txt'), 'utf8'), /quality.md を読み取れません/);
+    assert.match(readFileSync(join(repo.dir, 'output'), 'utf8'), /risk_level=unknown/);
+  } finally { repo.cleanup(); }
+});
+
+test('gate preserves known risk on filesystem failures and rethrows internal type errors', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/changes/demo/quality.md', '---\nrisk_level: high\n---\n');
+    mkdirSync(join(repo.dir, 'openspec/changes/demo/evidence.md'));
+    const result = evaluateChange(repo.dir, change(), { phase: 'final', plan: false });
+    assert.equal(result.level, 'high');
+    assert.match(result.failures[0], /gate 入力を読み取れません/);
+    assert.throws(() => evaluateChange(repo.dir, change({ path: {} })), { code: 'ERR_INVALID_ARG_TYPE' });
+    const duplicate = evaluateChange(repo.dir, change({ errors: ['same', 'same'] }), { quality: false, plan: false });
+    assert.deepEqual(duplicate.failures, ['same', 'same']);
   } finally { repo.cleanup(); }
 });

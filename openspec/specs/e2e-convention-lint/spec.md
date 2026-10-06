@@ -55,7 +55,7 @@ kit は、強制範囲内のテストについて、アサーションが無い�
 
 kit は、検査対象 change のタグを持つテストソースと、比較元から HEAD までの差分で変更された E2E テストソースについて、lint の指摘を SHALL 失敗にする。それ以外の E2E ソースは警告だけにする。ただし、人間が管理する policy が範囲を全ソースに広げた場合はその限りでない。policy は `warn` と `enforce` のモードを提供する。
 
-統合 schema では、どの環境変数によってもタグ付きソースの強制より弱くしてはならない（MUST NOT）。policy の値が欠落または解釈不能な場合は既定値に戻し、統合 schema を警告だけに落としてはならない。
+統合 schema では、どの環境変数によってもタグ付きソースの強制より弱くしてはならない（MUST NOT）。policy の値が欠落した場合は既定値に戻し、統合 schema を警告だけに落としてはならない。policy の不正値・未知の `e2e_lint_*` キー、および旧 schema に適用する環境変数の不正値は、検査結果に違反がなくても MUST 失敗にする。統合 schema に対する環境変数は引き続き無視する。
 
 #### Scenario: Untouched legacy test
 
@@ -66,6 +66,11 @@ kit は、検査対象 change のタグを持つテストソースと、比較�
 
 - **WHEN** E2E required の change を含む PR が、change タグを持たない既存 E2E ファイルを編集してアサーションを削除する
 - **THEN** 差分に含まれるため失敗する
+
+#### Scenario: Invalid lint configuration
+
+- **WHEN** policy に `e2e_lint_scope: ALL`、または旧 schema の環境変数に `QE_E2E_LINT_MODE=ENFORCE` が指定される
+- **THEN** `invalid-config` として失敗し、緩い設定へ黙ってフォールバックしない
 
 #### Scenario: Attempt to disable via environment
 
@@ -80,6 +85,23 @@ kit は、例外を、規則 ID・理由・change の evidence にある Residua
 - 強制範囲内の plan では、未承認の抑止を「承認待ち」として報告し、通過扱いにしない。
 - 強制範囲外の未承認抑止は警告とする。
 - Residual ID が無い抑止、または存在しない ID を参照する抑止は、強制範囲や schema にかかわらず両方の phase で MUST 失敗にする。書式・規則 ID・配置が不正な抑止も同じ扱いとする。
+
+参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。コメント・一般文字列・同じファイルの別テストのタグは参照先を増やさない。change タグのない共有 helper 等では、archive を含む既知の全 change を候補とし、過去の承認の再利用を認める。同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。 kit はこの参照規則を MUST 適用する。ブロックコメントと同じ行にコードがある配置も、独立した行とはみなさない。
+
+#### Scenario: Historical approval cannot be selected by a comment
+
+- **WHEN** `@demo` のテストの抑止に、コメントだけで `@old` を追加する
+- **THEN** archive の old の承認を流用しない。demo の未承認 Residual は未承認のままとする
+
+#### Scenario: Current approval on a historical test
+
+- **WHEN** 過去の change タグを持つテストを編集し、選択中の change が承認した新しい Residual ID で抑止する
+- **THEN** 選択中の evidence も参照し、承認済み例外として扱う
+
+#### Scenario: Untagged shared helper keeps an existing exception
+
+- **WHEN** タグのない helper の抑止が archive の一意な承認済み Residual を参照する
+- **THEN** 別の change の検査や change 指定なしの lint でも承認を引き継ぐ
 
 #### Scenario: Agent adds its own suppression
 
@@ -110,7 +132,12 @@ kit は、E2E 適用状態が required の change について、`testkit-gate.m
 #### Scenario: Whole-root report
 
 - **WHEN** 利用者が `testkit-gate.mjs lint` を実行する
-- **THEN** すべての E2E ソースの指摘を強制範囲と警告範囲に分けて表示し、強制範囲の失敗、不正な抑止、入力の読み取り失敗、検査ソース 0 件、選択・適用状態の判定失敗がある場合に非ゼロで終了する
+- **THEN** すべての E2E ソースの指摘を強制範囲と警告範囲に分けて表示し、強制範囲の失敗、不正な抑止・設定、入力の読み取り失敗、検査ソース 0 件、選択・適用状態の判定失敗がある場合に非ゼロで終了する
+
+#### Scenario: Pending test plan
+
+- **WHEN** 選択された change が計画途中で test-plan 未作成である
+- **THEN** lint はその change を適用状態の判定失敗として扱わない
 
 #### Scenario: Not-applicable change
 

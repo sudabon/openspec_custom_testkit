@@ -33,7 +33,7 @@ e2e_lint_mode: enforce        # warn | enforce
 e2e_lint_scope: changed       # changed | all
 ```
 
-欄が無い、または値が不正な場合は既定値（`enforce` / `changed`）で動く。doctor は欄が無いことを note として表示するが、失敗にはしない。
+欄が無い場合は既定値（`enforce` / `changed`）で動く。doctor は欄が無いことを note として表示するが、失敗にはしない。policy の不正値・未知の `e2e_lint_*` キーと、旧 schema に適用する環境変数の不正値は `invalid-config` として失敗する。統合 schema では環境変数を引き続き無視する。
 
 1. 導入時は `changed` で始める。統合 schema の change は、次の gate 実行からタグ付きソースと差分ファイルが強制される。既存の弱いテストは Oracle を書き直すか、人間承認済み Residual で例外にする。
 2. `node scripts/testkit-gate.mjs lint --base <ref>` で警告範囲の指摘を確認し、既存テストを直す。

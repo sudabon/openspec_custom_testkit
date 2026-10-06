@@ -64,7 +64,7 @@ gate（`node scripts/testkit-gate.mjs check` / `lint`）は E2E ルート配下�
 | skip / only / fixme / fail の禁止 | `excluded-test` | 除外されたテストの TP は lint 上の実装済みに数えない |
 | アサーションの無いテスト・存在確認だけのテストの禁止 | `missing-assertion` / `weak-assertion` | 存在確認だけの matcher: `toBeVisible` / `toBeAttached` / `toBeDefined` / `toBeTruthy` / `not.toBeNull` / `not.toBeUndefined`（soft・poll 形式を含む） |
 
-規約に対応しない検査として、字句解析できないソース（`unparseable`）、読み取れないソース（`unreadable`）、無効な抑止コメント（`invalid-suppression`）がある。`unparseable` は強制範囲内で失敗する。入力の読み取り失敗と `invalid-suppression` は範囲外でも失敗する。
+規約に対応しない検査として、字句解析できないソース（`unparseable`）、読み取れないソース（`unreadable`）、無効な設定（`invalid-config`）、無効な抑止コメント（`invalid-suppression`）がある。`unparseable` は強制範囲内で失敗する。入力の読み取り失敗、`invalid-config`、`invalid-suppression` は範囲外でも失敗する。
 
 E2E ルート配下で export された関数と Page Object のメソッドのうち、本体に非自明な matcher を持つものは、import した名前（別名を含む）で呼べばアサーションとして数える。`test` の import 別名と `base.extend()` も認識する。相対 import でつながる fixture で `use(new PageObject(...))` または `const value = new PageObject(...); use(value)` として渡したインスタンスは、テストの分割代入引数（別名を含む）から追跡する。テストファイル内だけの helper、動的な呼出し、型情報だけの fixture 解決は数えない。
 
@@ -75,8 +75,9 @@ E2E ルート配下で export された関数と Page Object のメソッドの�
 await expect(page.getByRole('banner')).toBeVisible();
 ```
 
-- 書式は `e2e-lint-allow <rule-id> <residual-id>: <理由>`。独立した行に置き、効力は直後の 1 文だけ。行末の抑止と describe 直前の抑止は無効。テスト宣言の直前に置いた場合はそのテスト全体に効く。ファイル全体を抑止する書式は無い
+- 書式は `e2e-lint-allow <rule-id> <residual-id>: <理由>`。独立した行に置き、効力は直後の 1 文だけ。行末の抑止、ブロックコメントと同じ行へのコード配置、describe 直前の抑止は無効。テスト宣言の直前に置いた場合はそのテスト全体に効く。ファイル全体を抑止する書式は無い
 - 抑止は人間承認済み Residual が必要。`<residual-id>` は change の `evidence.md` の Execution Records にある `residuals[]` の `id` で、`reason` / `impact` / `approved_by` / `approved_at` がそろっている必要がある
+- 参照先は、選択された change と、抑止対象テストの実際の change タグに対応する change（archive を含む）の和集合とする。コメント・一般文字列・同じファイルの別テストのタグは参照先を増やさない。change タグのない共有 helper 等では、archive を含む既知の全 change を候補とし、過去の承認の再利用を認める。同じ ID が選択中の evidence にあればその記録を優先し、過去の承認で未承認状態を上書きしない。優先後の候補に同じ ID が複数残れば、不正な抑止として失敗し、一意な ID への変更を求める。この候補外の change から承認を流用してはならない。
 - Agent は `approved_by` を記入しない。Agent が抑止を書いても plan では「承認待ち」の警告になり、強制範囲内の final は通らない（範囲外は警告）
 - Residual ID の無い抑止と、存在しない ID を参照する抑止は強制範囲や旧 schema の warn モードにかかわらず plan と final の両方で失敗する。書式・規則 ID・配置が不正な場合も同じ
 - `toBeVisible` だけで済ませたい場合も、まず状態の変化を観測する Oracle に書き直せないか検討する。抑止は人間へエスカレーションしてから書く

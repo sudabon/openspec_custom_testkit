@@ -82,7 +82,12 @@ export function runCiJob(env = process.env, deps = {}) {
 
   const level = maxLevel(selected.changes.map(change => {
     const path = join(repo, change.path, 'quality.md');
-    return existsSync(path) ? asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level) : 'none';
+    try {
+      return existsSync(path) ? asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level) : 'none';
+    } catch (err) {
+      fail(1, `${change.id}: quality.md を読み取れません (${err.code ?? err.message})`);
+      return 'unknown';
+    }
   }));
   const hasFinal = selected.changes.some(change => effectivePhase(phase, change, taskState(parseTasks(change.tasksText))) === 'final');
   if ((phase === 'final' || hasFinal) && !env.TEST_COMMAND) fail(1, '最終検証では test-command を空にできません');
