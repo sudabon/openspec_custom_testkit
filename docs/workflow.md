@@ -27,7 +27,7 @@ E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体�
 
 統合 schema の quality.md の Test Layer Mapping は `Static` / `Unit` / `Integration` / `E2E` / `Monitoring` に加えて `Manual` を受け付ける。`Manual` は人が手で確認する層で、探索テストを含む。Layer 列にはこの6つの名前（大文字小文字は問わない）だけを空白・`/`・`,`・`、`・`+`・`・` で区切って書く。`手動` や `Exploratory`、綴りの誤りなど、それ以外の語があると計画ゲートが Failure Mode の ID と値を示して失敗する。`Manual` を選んだ行には Failure Mode の ID と、選定理由の欄に自動化しない理由を書く。どちらかが空なら計画ゲートが失敗する。`Manual` は E2E 層ではない。E2E 層かどうかは Layer 列だけで判定し、選定理由の欄に `E2E` と書いても E2E 層にはならない。層が `Unit` と `Manual` だけなら test-plan を `e2e: not-applicable` にしてよく、`Manual` を理由に `e2e: required` にはしない。
 
-quality.md の Residual Risk は `## Residual Risk` 見出しの下に箇条書き（`-` / `*` / `+` または `1.` / `1)`、インデント可）で書き、各項目には `- RR1: <保証しないこと>` の形式で ID を付ける。無ければ `- なし` と書く。項目の下に一段深くインデントした箇条書きは、その項目の補足として読む。`## Residual Risk` 見出しが無いとき、また `### Residual Risk`・`## Residual Risks`・`## Residual Risk（残存リスク）`・`## 残存リスク` のような近い見出しがあるときは、計画ゲートが失敗する。Test Layer Mapping の表には見出しが `Layer` で始まる列が必要で、Layer が空の行も計画ゲートで失敗する。空の箇条書きと `なし` / `該当なし` / `None` は Residual なしとみなす。
+quality.md の Residual Risk は `## Residual Risk` 見出しの下に箇条書き（`-` / `*` / `+` または `1.` / `1)`、インデント可）で書き、各項目には `- RR1: <保証しないこと>` の形式で ID を付ける。無ければ `- なし` と書く。項目の下に一段深くインデントした箇条書きは、その項目の補足として読む。ただし `RR1:` で始まる箇条書きは、深くインデントしていても別の Residual として読む。`## Residual Risk` 見出しが無いとき、また `### Residual Risk`・`## Residual Risks`・`## Residual Risk（残存リスク）`・`## 残存リスク` のような近い見出しがあるときは、計画ゲートが失敗する。Test Layer Mapping の表には見出しが `Layer` で始まる列が必要で、Layer が空の行も計画ゲートで失敗する。空の箇条書きと `なし` / `該当なし` / `None` は Residual なしとみなす。
 
 次のどれかに当てはまる統合 change では、tasks の `## 6. QA Handoff` で `qa-handoff.md` をテンプレート（`openspec/schemas/quality-driven-e2e/templates/qa-handoff.md`）から作る。
 

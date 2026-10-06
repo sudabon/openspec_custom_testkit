@@ -11,11 +11,13 @@ const NONE = /^(?:なし|該当なし|none|n\/a)[。.]?$/i;
 const RESIDUAL_HEADING = '## Residual Risk';
 const NEAR_RESIDUAL_HEADING = /^#{1,6}\s*(?:Residual\b|残存リスク)/i;
 const BULLET = /^(\s*)(?:[-*+]|\d+[.)])(?:\s+(.*))?$/;
+const RESIDUAL_ID = /^(RR\d+)\s*[:：]/;
 const MANUAL_KINDS = ['Manual', 'Residual'];
 const VERDICTS = ['pass', 'fail'];
 
 // Residual Risk items are list items such as `- RR1: text` or `1. RR1: text`, at any indent.
-// A list item indented deeper than the item above it is a note on that item, not another residual.
+// A list item indented deeper than the item above it is a note on that item, not another residual,
+// unless it starts with an `RR1:` id: residuals grouped under a label must not be dropped.
 // An empty item or a bare "なし" means no residual.
 export function qualityResiduals(qualityText) {
   const body = section(qualityText ?? '', RESIDUAL_HEADING) ?? '';
@@ -25,11 +27,14 @@ export function qualityResiduals(qualityText) {
     const bullet = line.match(BULLET);
     if (!bullet) continue;
     const indent = bullet[1].length;
-    if (itemIndent !== null && indent > itemIndent) continue;
-    itemIndent = indent;
     const text = (bullet[2] ?? '').trim();
+    const id = text.match(RESIDUAL_ID);
+    if (itemIndent !== null && indent > itemIndent) {
+      if (id) items.push({ id: id[1], text });
+      continue;
+    }
+    itemIndent = indent;
     if (!text || NONE.test(text)) continue;
-    const id = text.match(/^(RR\d+)\s*[:：]/);
     items.push({ id: id ? id[1] : null, text });
   }
   return items;

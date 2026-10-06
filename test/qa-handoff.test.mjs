@@ -430,6 +430,27 @@ test('nested list items are notes on the residual above them', () => {
   assert.deepEqual(items('- なし\n  - 補足: 将来検討'), []);
 });
 
+test('residuals grouped under a label are still read', () => {
+  const quality = body => `## Residual Risk\n${body}\n`;
+  const items = body => handoffNeed({ qualityText: quality(body), evidence: null }).quality;
+  assert.deepEqual(items('- 表示系\n  - RR1: 日付をまたぐ表示\n  - RR2: 端末差').map(item => item.id), [null, 'RR1', 'RR2']);
+  assert.deepEqual(items('- RR0: 表示系\n  - RR1: 日付をまたぐ表示\n    - 理由: 保証外\n  - RR2：端末差').map(item => item.id), ['RR0', 'RR1', 'RR2']);
+});
+
+test('final gate requires every residual grouped under a label', () => {
+  const ctx = setup();
+  try {
+    writeQuality(ctx, { residuals: ['RR0: 表示系\n  - RR1: 日付をまたぐ表示\n  - RR2: 端末差'] });
+    writeEvidence(ctx);
+    writeHandoff(ctx, handoff({ manual: ['| RR0 | Residual | 表示系 | 保証外 |'] }));
+    const result = run(ctx);
+    assert.ok(has(result, '手動確認範囲', 'RR1'), JSON.stringify(result.failures));
+    assert.ok(has(result, '手動確認範囲', 'RR2'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
 test('a nested note under a residual does not fail the final gate', () => {
   const ctx = setup();
   try {
