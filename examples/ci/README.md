@@ -97,11 +97,11 @@ with:
   coverage-strict: false
 ```
 
-`coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON が無い・壊れている場合は終了コード 2 で失敗する。両方とも未指定なら従来と同じ手順で動く。
+`coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON が無い・壊れている場合、coverage は終了コード 2 を返す。job は先に発生した失敗の終了コードを保持するため、回帰コマンドが既に非ゼロならそのコードで終了する。`coverage-strict` だけを指定した場合は宣言上の対応だけを検査し、fail・未実行を判定しない旨を表示する。両方とも未指定なら従来と同じ手順で動く。
 
 ## 旧 workflow からの変更
 
-旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age` が増えている。
+旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age`、`regression-command`、`coverage-strict` が増えている。
 
 ## Evidence と実行記録
 

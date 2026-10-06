@@ -13,7 +13,7 @@
 | cart | Checkout button | Empty cart | 保護（E2E） | add-cart TP-002 | fail |
 | cart | Discount code | Apply coupon | 未保護 | - |  |
 | cart | Wishlist | Save for later | 未保護 | - |  |
-| search | Search | Search by keyword | 保護（E2E） | legacy-search TP-001 | 未実行 |
+| search | Search | Search by keyword | 要再確認 | legacy-search TP-001 ／ legacy-qe で MODIFIED | 未実行 |
 | search | Search | Search with no results | 未保護 | - |  |
 
 ## 孤立（テストの削除または付け替えを検討）
@@ -34,19 +34,19 @@
 
 | change | 行 | Requirement | Scenario | 理由 |
 |--------|----|-------------|----------|------|
-| legacy-search | TP-002 |  |  | TP-ID が表の外にしかありません |
+| legacy-search | TP-002 |  |  | TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認） |
 
 ## 集計
 
 - シナリオ: 13 件（archive 済み change 9 件から集計）
-- 保護（E2E）: 4
+- 保護（E2E）: 3
 - 保護（他層の宣言）: 1
 - 未保護: 7
-- 要再確認: 1
+- 要再確認: 2
 - 孤立: 2 TP
 - 対応不明: 2 行 / 旧形式・対応不明: 1 行
-- 実行で確認済み: 2 / fail: 1 / 未実行: 1
-- 保護率（E2E）: 4/13（30.8%）
-- 保護率（他層の宣言を含む）: 5/13（38.5%）
+- 実行で確認済み: 2 / fail: 1 / 未実行: 0
+- 保護率（E2E）: 3/13（23.1%）
+- 保護率（他層の宣言を含む）: 4/13（30.8%）
 - 保護率（実行で確認済み）: 2/13（15.4%）
 - 要対応: 12

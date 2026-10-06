@@ -1,10 +1,9 @@
-# Spec Delta
+# regression-coverage-map Specification
 
 ## Purpose
-
 main spec の全シナリオが、どの E2E テストまたは他層の代替検証で守られているかを一覧にする。保護されていないシナリオ、仕様変更で古くなった対応、削除済み仕様を指すテストを区別して示し、QA が手動回帰テストを減らす判断の根拠にする。
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Scenario coverage map across main specs
 システムは `openspec/specs` 配下の全 capability の全 `#### Scenario:` を、capability のパスとシナリオ名の組をキーとして列挙しなければならない（SHALL）。各シナリオには、archive 済み change の test-plan.md から対応する行を集めて割り当てなければならない（SHALL）。TP 行は E2E 保護、`## 対象外シナリオ` 行は Layer と Method を伴う他層の宣言として扱わなければならない（SHALL）。test-plan の行がどの capability に属するかは、同じ change の delta spec でそのシナリオを含むファイルのパスから決めなければならない（SHALL）。テストのタグを付け替えてはならない（MUST NOT）。

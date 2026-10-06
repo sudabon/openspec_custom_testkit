@@ -27,6 +27,6 @@
 
 - 追加: `payload/scripts/lib/coverage-map.mjs`、`payload/scripts/testkit-gate.mjs` の `coverage` サブコマンド、`test/` の fixture とテスト、`docs/workflow.md` と README の説明。
 - 変更: `.github/workflows/openspec-custom-testkit-gate.yml` と `payload/scripts/ci-job.mjs` に任意入力を追加する。既存の入力・終了コード・plan/final 検査は変えない。
-- 既存の `plan-check.mjs`（`tpRows`）と `report.mjs`（結果の平坦化と状態分類）を共通化して再利用する。
+- `report.mjs` の結果の平坦化と状態分類を `results.mjs` に共通化して再利用する。test-plan は対応不明の行も診断する専用パーサーを使い、Markdown の表と節の解析を共用する。
 - 他 change との関係: `add-qa-handoff` の qa-handoff.md は、この対応表の「未保護」「要再確認」を手動確認範囲の入力にできる。`add-flaky-management` の隔離リストに入った TP は、導入後は保護に数えない扱いへ揃える必要がある。`add-e2e-result-publishing` のジョブサマリーへ対応表を載せる連携は、そちらの change で扱う。
 - 対象外: テストタグの自動付け替え、main spec への ID 埋め込み、単体テスト等の実行結果のシナリオ単位での照合、未 archive の change を保護に数えること。

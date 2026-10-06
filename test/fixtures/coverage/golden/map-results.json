@@ -20,7 +20,8 @@
         "tps": [
           "TP-001"
         ],
-        "modifiedBy": "change-export"
+        "modifiedBy": "change-export",
+        "operation": "MODIFIED"
       },
       "active": [],
       "result": {
@@ -186,13 +187,15 @@
       "capability": "search",
       "requirement": "Search",
       "scenario": "Search by keyword",
-      "classification": "保護（E2E）",
+      "classification": "要再確認",
       "source": {
         "change": "legacy-search",
         "archive": "2026-01-15-legacy-search",
         "tps": [
           "TP-001"
-        ]
+        ],
+        "modifiedBy": "legacy-qe",
+        "operation": "MODIFIED"
       },
       "active": [],
       "result": {
@@ -263,31 +266,31 @@
       "id": "TP-002",
       "requirement": "",
       "scenario": "",
-      "reason": "TP-ID が表の外にしかありません"
+      "reason": "TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）"
     }
   ],
   "summary": {
     "scenarios": 13,
-    "保護（E2E）": 4,
+    "保護（E2E）": 3,
     "保護（他層の宣言）": 1,
     "未保護": 7,
-    "要再確認": 1,
+    "要再確認": 2,
     "孤立": 2,
     "対応不明": 2,
     "旧形式・対応不明": 1,
     "coverageE2E": {
+      "count": 3,
+      "total": 13,
+      "percent": 23.1
+    },
+    "coverageWithDeclared": {
       "count": 4,
       "total": 13,
       "percent": 30.8
     },
-    "coverageWithDeclared": {
-      "count": 5,
-      "total": 13,
-      "percent": 38.5
-    },
     "実行で確認済み": 2,
     "fail": 1,
-    "未実行": 1,
+    "未実行": 0,
     "coverageConfirmed": {
       "count": 2,
       "total": 13,

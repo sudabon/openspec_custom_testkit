@@ -12,6 +12,59 @@ export function specMatches(spec, changeId, tpId) {
   return hasBoundedToken(tagText, changeId) && hasBoundedToken(tagText, tpId);
 }
 
+// Validate the fields consumed by both reporters; omitted optional arrays remain compatible.
+export function validateResults(results) {
+  const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const checkObject = (value, path) => {
+    if (!object(value)) throw new Error(`${path} は object が必要です`);
+  };
+  const array = (value, path) => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) throw new Error(`${path} は配列が必要です`);
+    return value;
+  };
+  const string = (value, path) => {
+    if (value !== undefined && typeof value !== 'string') throw new Error(`${path} は文字列が必要です`);
+  };
+  function suite(value, path) {
+    checkObject(value, path);
+    string(value.title, `${path}.title`);
+    array(value.suites, `${path}.suites`).forEach((child, i) => suite(child, `${path}.suites[${i}]`));
+    array(value.specs, `${path}.specs`).forEach((spec, i) => {
+      const at = `${path}.specs[${i}]`;
+      checkObject(spec, at);
+      string(spec.title, `${at}.title`);
+      array(spec.tags, `${at}.tags`).forEach((tag, n) => {
+        if (typeof tag !== 'string') throw new Error(`${at}.tags[${n}] は文字列が必要です`);
+      });
+      array(spec.tests, `${at}.tests`).forEach((test, n) => {
+        const where = `${at}.tests[${n}]`;
+        checkObject(test, where);
+        for (const field of ['status', 'expectedStatus', 'projectName']) string(test[field], `${where}.${field}`);
+        array(test.results, `${where}.results`).forEach((attempt, j) => {
+          checkObject(attempt, `${where}.results[${j}]`);
+          for (const field of ['status', 'expectedStatus']) string(attempt[field], `${where}.results[${j}].${field}`);
+        });
+      });
+    });
+  }
+  try {
+    checkObject(results, 'results');
+    if (!Array.isArray(results.suites)) throw new Error('suites は配列が必要です');
+    results.suites.forEach((value, i) => suite(value, `suites[${i}]`));
+    if (results.stats !== undefined) {
+      checkObject(results.stats, 'stats');
+      string(results.stats.startTime, 'stats.startTime');
+      if (results.stats.duration !== undefined && typeof results.stats.duration !== 'number') throw new Error('stats.duration は数値が必要です');
+    }
+    const errors = array(results.errors, 'errors');
+    if (errors.length) throw new Error(`errors: Playwright の実行エラーがあります: ${errors.map(error => object(error) ? error.message ?? error.value ?? JSON.stringify(error) : String(error)).join('; ')}`);
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
+
 export function flatten(results) {
   const rows = [];
   function walk(suite, depth, titlePath) {

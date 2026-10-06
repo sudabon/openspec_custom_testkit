@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachResults, buildCoverage, CLASS, listMainScenarios, runCoverage, summarize } from '../payload/scripts/lib/coverage-map.mjs';
+import { buildReport } from '../payload/scripts/lib/report.mjs';
+import { parseYamlText } from '../payload/scripts/lib/frontmatter.mjs';
 import { REQUIRED_MODULES, STAMP_FILE } from '../payload/scripts/lib/critical.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
@@ -33,7 +35,7 @@ const EXPECTED = [
   ['cart', 'Checkout button', 'Empty cart', CLASS.e2e, 'add-cart TP-002', 'Same scenario name in two capabilities'],
   ['cart', 'Discount code', 'Apply coupon', CLASS.none, null, 'Scenario removed or renamed'],
   ['cart', 'Wishlist', 'Save for later', CLASS.none, null, '対応不明は保護に数えない'],
-  ['search', 'Search', 'Search by keyword', CLASS.e2e, 'legacy-search TP-001', 'Legacy plan with a parsable table'],
+  ['search', 'Search', 'Search by keyword', CLASS.stale, 'legacy-search TP-001 / legacy-qe', 'Legacy plan with a parsable table'],
   ['search', 'Search', 'Search with no results', CLASS.none, null, 'Legacy plan with free text only / 旧 quality-driven は読まない'],
 ];
 
@@ -114,9 +116,9 @@ test('modified, removed and renamed requirements become stale or orphaned and ne
   ]);
   assert.equal(find(model, 'cart', 'Discount code', 'Apply coupon').classification, CLASS.none);
   const summary = summarize(model);
-  assert.equal(summary[CLASS.e2e], 4);
-  assert.equal(summary.coverageE2E.count, 4);
-  assert.equal(summary.coverageWithDeclared.count, 5);
+  assert.equal(summary[CLASS.e2e], 3);
+  assert.equal(summary.coverageE2E.count, 3);
+  assert.equal(summary.coverageWithDeclared.count, 4);
 });
 
 test('the latest archive wins even on the same date and an older TP is not stale after a new one', () => {
@@ -143,7 +145,7 @@ test('the latest archive wins even on the same date and an older TP is not stale
 
 test('legacy spec-driven-e2e tables count, free-text TP-IDs and quality-driven plans do not', () => {
   const model = buildCoverage(FIXTURE);
-  assert.equal(find(model, 'search', 'Search', 'Search by keyword').classification, CLASS.e2e);
+  assert.equal(find(model, 'search', 'Search', 'Search by keyword').classification, CLASS.stale);
   assert.equal(find(model, 'search', 'Search', 'Search with no results').classification, CLASS.none);
   assert.deepEqual(model.legacyUnresolved.map(row => [row.change, row.id]), [['legacy-search', 'TP-002']]);
   assert.equal(model.unresolved.some(row => row.change === 'legacy-qe'), false);
@@ -163,7 +165,7 @@ test('results join on change id and TP-ID; fail and not-run are not confirmed', 
   const summary = summarize(model);
   assert.equal(summary['実行で確認済み'], 2);
   assert.equal(summary.fail, 1);
-  assert.equal(summary['未実行'], 1);
+  assert.equal(summary['未実行'], 0);
   assert.equal(summary.coverageConfirmed.count, 2);
 });
 
@@ -259,12 +261,12 @@ function ciEnv(over = {}) {
   return { WORKING_DIRECTORY: '.', BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'echo test', GATE_PHASE: 'plan', ...over };
 }
 
-function regressionExec(calls, { writeJson = true, status = 0 } = {}) {
+function regressionExec(calls, { writeJson = true, status = 0, json = results } = {}) {
   return (file, args, opts) => {
     const command = args.join(' ');
     calls.push(command);
     if (command.includes('run-regression')) {
-      if (writeJson) writeFileSync(opts.env.TESTKIT_RESULTS_JSON, JSON.stringify({ ...results, stats: { startTime: new Date().toISOString() } }));
+      if (writeJson) writeFileSync(opts.env.TESTKIT_RESULTS_JSON, JSON.stringify({ ...json, stats: { startTime: new Date().toISOString() } }));
       if (status) {
         const error = new Error('regression failed');
         error.status = status;
@@ -334,11 +336,168 @@ test('doctor reports an older install without the coverage modules as incomplete
     const old = doctor(repo.dir);
     assert.equal(old.ok, false);
     assert.match(old.failures.join('\n'), /scripts\/lib\/coverage-map\.mjs/);
+    assert.match(old.failures.join('\n'), /scripts\/lib\/e2e-lint\.mjs/);
     assert.equal(await main(['install', '--force', '--target', repo.dir], quiet), 0);
     assert.equal(doctor(repo.dir).ok, true);
   } finally {
     repo.cleanup();
   }
+});
+
+function protectedRepo(t, scenarios = ['S']) {
+  const dir = mkdtempSync(join(tmpdir(), 'tk-cov-review-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  write(dir, 'openspec/specs/cap/spec.md', SPEC('R', scenarios).replace('ADDED Requirements', 'Requirements'));
+  write(dir, 'openspec/changes/archive/2026-01-01-a/.openspec.yaml', 'schema: quality-driven-e2e\n');
+  write(dir, 'openspec/changes/archive/2026-01-01-a/specs/cap/spec.md', SPEC('R', scenarios));
+  write(dir, 'openspec/changes/archive/2026-01-01-a/test-plan.md', PLAN(scenarios.map((s, i) => [`TP-00${i + 1}`, 'R', s])));
+  return dir;
+}
+
+const resultFor = tests => ({ suites: [{ specs: [{ title: '@a @TP-001', tests }] }] });
+const passed = { projectName: 'chromium', status: 'expected', results: [{ status: 'passed' }] };
+
+test('strict independently rejects orphan, fail, skip and missing execution; mixed browsers fail', async t => {
+  for (const [name, data, expected, status] of [
+    ['pass', resultFor([passed]), null, 0],
+    ['fail', resultFor([{ status: 'unexpected', results: [{ status: 'failed' }] }]), 'fail', 1],
+    ['missing', { suites: [] }, '未実行', 1],
+    ['skip', resultFor([{ status: 'skipped', results: [{ status: 'skipped' }] }]), '未実行', 1],
+    ['mixed browsers', resultFor([passed, { projectName: 'firefox', status: 'unexpected', results: [{ status: 'failed' }] }]), 'fail', 1],
+    ['expected failure', resultFor([{ status: 'expected', expectedStatus: 'failed', results: [{ status: 'failed' }] }]), 'fail', 1],
+  ]) await t.test(name, t => {
+    const dir = protectedRepo(t);
+    write(dir, 'results.json', JSON.stringify(data));
+    const out = gate(dir, ['--strict', '--results', 'results.json', '--format', 'json']);
+    assert.equal(out.status, status, out.stderr);
+    const { summary } = JSON.parse(out.stdout);
+    assert.equal(summary.needsAction, status);
+    if (expected) assert.equal(summary[expected], 1);
+  });
+  await t.test('orphan only', t => {
+    const dir = protectedRepo(t);
+    write(dir, 'openspec/specs/cap/spec.md', '# Empty\n');
+    const out = gate(dir, ['--strict', '--format', 'json']);
+    assert.equal(out.status, 1, out.stderr);
+    const { summary } = JSON.parse(out.stdout);
+    assert.equal(summary.needsAction, 1);
+    assert.equal(summary['孤立'], 1);
+    assert.equal(summary[CLASS.none], 0);
+  });
+});
+
+test('a modified requirement with partial new coverage only refreshes the mapped scenario', t => {
+  const dir = protectedRepo(t, ['S', 'T']);
+  write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('R', ['S', 'T'], 'MODIFIED'));
+  write(dir, 'openspec/changes/archive/2026-02-01-b/test-plan.md', PLAN([['TP-001', 'R', 'S']]));
+  const model = buildCoverage(dir);
+  assert.deepEqual(model.scenarios.map(row => [row.scenario, row.classification, row.source.change]), [['S', CLASS.e2e, 'b'], ['T', CLASS.stale, 'a']]);
+});
+
+test('quality-driven deltas still record removed requirements without reading their plans', t => {
+  const dir = protectedRepo(t);
+  write(dir, 'openspec/specs/cap/spec.md', '# Empty\n');
+  write(dir, 'openspec/changes/archive/2026-02-01-b/.openspec.yaml', 'schema: quality-driven\n');
+  write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('R', ['S'], 'REMOVED'));
+  assert.equal(buildCoverage(dir).orphans[0].reason, 'REMOVED（b）');
+  assert.equal(buildCoverage(dir).unresolved.length, 0);
+});
+
+test('invalid result structures and global errors return 2 through CLI and shared reporter', t => {
+  const dir = protectedRepo(t);
+  for (const data of [
+    { foo: 1 }, { suites: {} }, { suites: [null] }, { suites: [{ suites: 'bad' }] },
+    { suites: [{ specs: [null] }] }, { suites: [{ specs: [{ tests: {} }] }] },
+    resultFor([null]), resultFor([{ results: [null] }]), resultFor([{ results: {} }]),
+    { suites: [{ specs: [{ tags: '@a @TP-001' }] }] },
+    { suites: [], errors: [{ message: 'global setup failed' }] }, { suites: [], stats: null },
+    { suites: [], stats: { startTime: { toString: 0 } } }, { suites: [], stats: { duration: {} } },
+  ]) {
+    write(dir, 'results.json', JSON.stringify(data));
+    const out = gate(dir, ['--strict', '--results', 'results.json']);
+    assert.equal(out.status, 2, JSON.stringify(data));
+    assert.equal(out.stdout, '');
+    assert.match(out.stderr, /Playwright JSON が不正/);
+    assert.equal(buildReport({ changeId: 'a', planText: PLAN([['TP-001', 'R', 'S']]), results: data }).exitCode, 2);
+  }
+});
+
+test('invalid delta headings, YAML and incomplete rename pairs cannot silently retain protection', t => {
+  const dir = protectedRepo(t);
+  for (const op of ['MODIFED', 'Modified']) {
+    write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('R', ['S'], op));
+    const out = runCoverage({ repo: dir, strict: true });
+    assert.equal(out.exitCode, 2);
+    assert.match(out.stderr, /操作見出し/);
+  }
+  for (const delta of ['## RENAMED Requirements\n- FROM: Requirement: R\n', '## RENAMED Requirements\n- TO: Requirement: R\n', '```\nunclosed']) {
+    write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', delta);
+    assert.equal(runCoverage({ repo: dir }).exitCode, 2);
+  }
+  write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', SPEC('R', ['S'], 'MODIFIED'));
+  for (const yaml of ['schema: [broken', 'schema: [quality-driven]', '- quality-driven']) {
+    write(dir, 'openspec/changes/archive/2026-02-01-b/.openspec.yaml', yaml);
+    const out = runCoverage({ repo: dir });
+    assert.equal(out.exitCode, 2);
+    assert.match(out.stderr, /\.openspec.yaml が不正/);
+  }
+});
+
+test('stale diagnostics name the actual operation and archive ordering requires dated folders', t => {
+  const dir = protectedRepo(t);
+  for (const [delta, operation] of [[SPEC('R', ['S']), 'ADDED'], ['## RENAMED Requirements\n- FROM: Requirement: Old\n- TO: Requirement: R\n', 'RENAMED']]) {
+    write(dir, 'openspec/changes/archive/2026-02-01-b/specs/cap/spec.md', delta);
+    assert.match(runCoverage({ repo: dir }).stdout, new RegExp(`b で ${operation}`));
+  }
+  write(dir, 'openspec/changes/archive/undated/test-plan.md', PLAN([]));
+  const out = runCoverage({ repo: dir });
+  assert.equal(out.exitCode, 2);
+  assert.match(out.stderr, /YYYY-MM-DD-<id>/);
+});
+
+test('unparsable and missing plans are diagnosed and legacy blank scenarios count once', t => {
+  const dir = protectedRepo(t);
+  const rel = 'openspec/changes/archive/2026-01-01-a/test-plan.md';
+  for (const text of [PLAN([['TP-001', 'R', 'S']]).replace('TP-ID', 'TP ID'), PLAN([['TP-001', 'R', 'S']]).replace('E2E観点一覧', 'E2E 観点一覧')]) {
+    write(dir, rel, text);
+    const model = buildCoverage(dir);
+    assert.equal(model.unresolved.length, 1);
+    assert.match(model.unresolved[0].reason, /解析できません/);
+    assert.equal(model.scenarios[0].classification, CLASS.none);
+  }
+  rmSync(join(dir, rel));
+  assert.match(buildCoverage(dir).unresolved[0].reason, /test-plan.md がありません/);
+  write(dir, 'openspec/changes/archive/2026-01-01-a/.openspec.yaml', 'schema: spec-driven-e2e\n');
+  write(dir, rel, PLAN([['TP-001', 'R', '']]));
+  assert.deepEqual(buildCoverage(dir).legacyUnresolved.map(row => [row.id, row.reason]), [['TP-001', 'シナリオ名がありません']]);
+});
+
+test('CI saves invalid JSON diagnostics, summary and risk output even after a failed command', t => {
+  const repo = ciRepo();
+  t.after(() => repo.cleanup());
+  for (const status of [0, 1]) {
+    const output = join(repo.dir, 'github-output');
+    const ran = runCiJob(ciEnv({ REGRESSION_COMMAND: 'run-regression', GITHUB_OUTPUT: output }), { cwd: repo.dir, execFile: regressionExec([], { json: { suites: [null] }, status }) });
+    assert.equal(ran.code, status || 2);
+    assert.match(readFileSync(join(ran.runDir, 'coverage.md'), 'utf8'), /suites\[0\]/);
+    assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /suites\[0\]/);
+    assert.match(readFileSync(output, 'utf8'), /risk_level=none/);
+  }
+  for (const strict of ['true', '1']) {
+    const ran = runCiJob(ciEnv({ COVERAGE_STRICT: strict }), { cwd: repo.dir, execFile: regressionExec([]) });
+    assert.equal(ran.code, 1);
+    assert.match(ran.lines.join('\n'), /fail・未実行は判定しません/);
+  }
+});
+
+test('workflow passes regression inputs unchanged to the CI environment', () => {
+  const workflow = parseYamlText(readFileSync(new URL('../.github/workflows/openspec-custom-testkit-gate.yml', import.meta.url), 'utf8')).data;
+  const inputs = workflow.on.workflow_call.inputs;
+  assert.deepEqual([inputs['regression-command'].type, inputs['regression-command'].default], ['string', '']);
+  assert.deepEqual([inputs['coverage-strict'].type, inputs['coverage-strict'].default], ['boolean', false]);
+  const job = workflow.jobs.gate.steps.find(step => step.id === 'job');
+  assert.equal(job.env.REGRESSION_COMMAND, '${{ inputs.regression-command }}');
+  assert.equal(job.env.COVERAGE_STRICT, '${{ inputs.coverage-strict }}');
 });
 
 test('the documented coverage example is what the fixture actually prints', () => {

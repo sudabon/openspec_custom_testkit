@@ -5,7 +5,7 @@ import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { byteCompare } from './hash.mjs';
 import { parseTable, section } from './markdown.mjs';
-import { flatten, resultsFreshness, specMatches, tagTextOf } from './results.mjs';
+import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
   e2e: '保護（E2E）',
@@ -54,27 +54,32 @@ function specFiles(repo, root) {
 }
 
 // Reads requirement and scenario headings, tagged with the delta operation of the enclosing `##` section.
-export function parseSpec(text) {
+export function parseSpec(text, { delta = false } = {}) {
   const requirements = [];
   const renames = [];
   let op = null;
   let current = null;
-  let fence = false;
+  let fence = null;
   let rename = null;
   for (const line of String(text).split(/\r?\n/)) {
-    if (/^\s*(```|~~~)/.test(line)) {
-      fence = !fence;
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
       continue;
     }
     if (fence) continue;
     const heading = line.match(/^## (.+?)\s*$/);
     if (heading) {
+      if (rename) throw new Error('RENAMED の FROM に対応する TO がありません');
       op = heading[1].match(/^(ADDED|MODIFIED|REMOVED|RENAMED) Requirements$/)?.[1] ?? null;
+      if (delta && !op && /requirements/i.test(heading[1])) throw new Error(`delta の操作見出しが不正です: ${heading[1]}`);
       current = null;
       continue;
     }
     const requirement = line.match(/^### Requirement:\s*(.+?)\s*$/);
     if (requirement) {
+      if (delta && !op) throw new Error(`delta の操作見出しがありません: ${requirement[1]}`);
       current = { name: requirement[1], op, scenarios: [] };
       requirements.push(current);
       continue;
@@ -91,13 +96,18 @@ export function parseSpec(text) {
     if (op === 'RENAMED') {
       const from = line.match(/FROM:\s*`?\s*(?:###\s*)?Requirement:\s*(.+?)\s*`?\s*$/);
       const to = line.match(/TO:\s*`?\s*(?:###\s*)?Requirement:\s*(.+?)\s*`?\s*$/);
-      if (from) rename = { from: from[1] };
-      else if (to && rename) {
+      if (from) {
+        if (rename) throw new Error('RENAMED の FROM に対応する TO がありません');
+        rename = { from: from[1] };
+      } else if (to) {
+        if (!rename) throw new Error('RENAMED の TO に対応する FROM がありません');
         renames.push({ ...rename, to: to[1] });
         rename = null;
       }
     }
   }
+  if (fence) throw new Error('コードフェンスが閉じられていません');
+  if (rename) throw new Error('RENAMED の FROM に対応する TO がありません');
   return { requirements, renames };
 }
 
@@ -117,7 +127,10 @@ function schemaOf(repo, dir) {
   const rel = `${dir}/.openspec.yaml`;
   if (!existsSync(join(repo, rel))) return null;
   const parsed = parseYamlText(readText(repo, rel));
-  if (parsed.errors.length || parsed.alias || parsed.tagged) return null;
+  if (parsed.errors.length || parsed.alias || parsed.tagged || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)
+    || (parsed.data.schema != null && typeof parsed.data.schema !== 'string')) {
+    throw new Error(`${rel} が不正です: ${parsed.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);
+  }
   return asString(parsed.data?.schema) || null;
 }
 
@@ -147,16 +160,20 @@ export function planRows(text, { legacy }) {
       method: norm(row.Method),
       parsable: true,
     }));
-  const tableIds = new Set(tp.filter(row => row.parsable).map(row => row.id));
-  const textOnly = legacy
-    ? [...new Set([...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]))].filter(id => !tableIds.has(id))
-    : [];
+  const tableIds = new Set(tp.map(row => row.id));
+  const textOnly = [...new Set([...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]))].filter(id => !tableIds.has(id));
   return { rows: [...tp, ...delegated], textOnly };
 }
 
 function deltaIndex(repo, dir) {
   const files = specFiles(repo, `${dir}/specs`);
-  return files.map(({ path, capability }) => ({ capability, ...parseSpec(readText(repo, path)) }));
+  return files.map(({ path, capability }) => {
+    try {
+      return { capability, ...parseSpec(readText(repo, path), { delta: true }) };
+    } catch (err) {
+      throw new Error(`${path}: ${err.message}`);
+    }
+  });
 }
 
 // Design decision 2: a row belongs to the delta file of the same change that contains its scenario.
@@ -181,12 +198,19 @@ function readChange(repo, dir, id, order) {
   change.delta = delta;
   if (change.skipped) return change;
   const planRel = `${dir}/test-plan.md`;
-  if (!existsSync(join(repo, planRel))) return change;
+  if (!existsSync(join(repo, planRel))) {
+    change.legacy = schema === SCHEMA_E2E;
+    change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: `${planRel} がありません` });
+    return change;
+  }
   const text = readText(repo, planRel);
   const legacy = schema === SCHEMA_E2E || !hasFrontmatter(text);
   change.legacy = legacy;
   const parsed = planRows(text, { legacy });
   change.textOnly = parsed.textOnly;
+  if (!parsed.rows.length && !parsed.textOnly.length && !section(text, '## E2E観点一覧') && !section(text, '## 対象外シナリオ')) {
+    change.unresolved.push({ id: '-', requirement: '', scenario: '', reason: 'test-plan の対応表を解析できません（## E2E観点一覧 / ## 対象外シナリオ）' });
+  }
   for (const row of parsed.rows) {
     if (!row.parsable) {
       change.unresolved.push({ ...row, reason: 'シナリオ名がありません' });
@@ -215,7 +239,11 @@ export function listArchives(repo) {
     .map(entry => entry.name)
     // Folders are YYYY-MM-DD-<id>, so byte order is date order with the name as the tie-breaker.
     .sort(byteCompare)
-    .map(folder => ({ folder, id: folder.match(ARCHIVE_FOLDER)?.[1] ?? folder, dir: `openspec/changes/archive/${folder}` }));
+    .map(folder => {
+      const id = folder.match(ARCHIVE_FOLDER)?.[1];
+      if (!id) throw new Error(`archive フォルダ名は YYYY-MM-DD-<id> が必要です: ${folder}`);
+      return { folder, id, dir: `openspec/changes/archive/${folder}` };
+    });
 }
 
 function listActive(repo) {
@@ -238,12 +266,11 @@ export function buildCoverage(repo) {
   const latestDef = new Map();
   const gone = new Map();
   for (const change of archives) {
-    if (change.skipped) continue;
     for (const file of change.delta) {
       for (const requirement of file.requirements) {
         const at = reqKey(file.capability, requirement.name);
         if (requirement.op === 'ADDED' || requirement.op === 'MODIFIED') {
-          latestDef.set(at, change);
+          latestDef.set(at, { ...change, operation: requirement.op });
           gone.delete(at);
         } else if (requirement.op === 'REMOVED') {
           latestDef.delete(at);
@@ -254,7 +281,7 @@ export function buildCoverage(repo) {
         const from = reqKey(file.capability, rename.from);
         latestDef.delete(from);
         gone.set(from, `RENAMED → ${rename.to}（${change.id}）`);
-        latestDef.set(reqKey(file.capability, rename.to), change);
+        latestDef.set(reqKey(file.capability, rename.to), { ...change, operation: 'RENAMED' });
       }
     }
   }
@@ -300,6 +327,7 @@ export function buildCoverage(repo) {
     if (staleBy) {
       row.classification = CLASS.stale;
       row.source.modifiedBy = staleBy;
+      row.source.operation = def.operation;
     } else row.classification = tps.length ? CLASS.e2e : CLASS.declared;
     return row;
   });
@@ -328,7 +356,7 @@ export function buildCoverage(repo) {
       (change.legacy ? legacyUnresolved : unresolved).push(item);
     }
     for (const id of change.textOnly) {
-      legacyUnresolved.push({ change: change.id, archive: change.folder, id, requirement: '', scenario: '', reason: 'TP-ID が表の外にしかありません' });
+      (change.legacy ? legacyUnresolved : unresolved).push({ change: change.id, archive: change.folder, id, requirement: '', scenario: '', reason: 'TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）' });
     }
   }
   return { scenarios, orphans, unresolved, legacyUnresolved, archives: archives.length };
@@ -415,7 +443,7 @@ function sourceText(row) {
     const declared = row.source.declared.map(item => `Oracle ${item.oracle || '-'} / Layer ${item.layer || '-'} / Method ${item.method || '-'}`).join('; ');
     parts.push(`${row.source.change} 対象外: ${declared}`);
   }
-  if (row.source?.modifiedBy) parts.push(`${row.source.modifiedBy} で MODIFIED`);
+  if (row.source?.modifiedBy) parts.push(`${row.source.modifiedBy} で ${row.source.operation ?? 'MODIFIED'}`);
   if (row.active.length) parts.push(`進行中: ${row.active.join(', ')}`);
   return parts.join(' ／ ') || '-';
 }
@@ -531,9 +559,8 @@ export function runCoverage({ repo, resultsPath = null, maxAge = null, strict = 
     } catch {
       return { exitCode: 2, stdout: '', stderr: `Playwright JSON が不正です: ${resultsPath}\n` };
     }
-    if (!results || typeof results !== 'object' || Array.isArray(results)) {
-      return { exitCode: 2, stdout: '', stderr: `Playwright JSON が不正です: ${resultsPath}\n` };
-    }
+    const invalid = validateResults(results);
+    if (invalid) return { exitCode: 2, stdout: '', stderr: `Playwright JSON が不正です: ${resultsPath}: ${invalid}\n` };
     const freshness = resultsFreshness(results, maxAge, now);
     if (freshness.error) return { exitCode: 2, stdout: '', stderr: freshness.error };
   }

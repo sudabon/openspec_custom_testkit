@@ -154,8 +154,9 @@ export function runCiJob(env = process.env, deps = {}) {
       if (report.exitCode) code = code || report.exitCode;
     }
   }
-  const coverageStrict = env.COVERAGE_STRICT === 'true';
+  const coverageStrict = env.COVERAGE_STRICT === 'true' || env.COVERAGE_STRICT === '1';
   if (env.REGRESSION_COMMAND || coverageStrict) {
+    if (coverageStrict && !env.REGRESSION_COMMAND) lines.push('coverage-strict: regression-command が無いため宣言上の対応だけを検査します。fail・未実行は判定しません。');
     mkdirSync(runDir, { recursive: true });
     let regressionCode = 0;
     let resultsPath = null;
@@ -208,6 +209,7 @@ export function runCiJob(env = process.env, deps = {}) {
       result = evaluate(repo, change, { phase, quality: true, plan: true, tags: true, env, manifest, cache, base: selected.base });
     } catch (err) {
       fail(1, `${change.id}: gate 評価中にエラーが発生しました (${err.code ?? err.name}: ${err.message})`);
+      if (err.stack) lines.push(err.stack);
       continue;
     }
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);

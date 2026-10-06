@@ -1,7 +1,7 @@
 import { hasBoundedToken } from './markdown.mjs';
 import { splitFrontmatter } from './frontmatter.mjs';
 import { tpRows } from './plan-check.mjs';
-import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf } from './results.mjs';
+import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export { formatAge };
 
@@ -27,7 +27,8 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
   }
   const planned = plannedIds(planText);
   if (planned.error) return { exitCode: 2, stdout: '', stderr: planned.error + '\n' };
-  if (!results || typeof results !== 'object') return { exitCode: 2, stdout: '', stderr: 'Playwright JSON が不正です\n' };
+  const invalid = validateResults(results);
+  if (invalid) return { exitCode: 2, stdout: '', stderr: `Playwright JSON が不正です: ${invalid}\n` };
 
   const freshness = resultsFreshness(results, maxAge, now);
   if (freshness.error) return { exitCode: 2, stdout: '', stderr: freshness.error };

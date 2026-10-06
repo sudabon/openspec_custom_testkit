@@ -75,16 +75,28 @@ node scripts/testkit-gate.mjs coverage [--results <path>] [--max-age <秒>] [--s
 | 保護（E2E） | 最後にそのシナリオへ行を書いた archive 済み change の TP が割り当てている | 数える |
 | 保護（他層の宣言） | `## 対象外シナリオ` の行だけが割り当てている。Oracle、Layer、Method を表示する。実行結果は照合しない | 「他層の宣言を含む」保護率にだけ数える |
 | 未保護 | どの archive 済み change の行も割り当てていない。進行中の change だけが割り当てている場合は「進行中: <id>」と補足する | 数えない |
-| 要再確認 | TP を書いた change より後の change が、そのシナリオを含む Requirement を MODIFIED し、その change は同じシナリオに行を書いていない | 数えない |
+| 要再確認 | TP を書いた change より後の change が、そのシナリオを含む Requirement を MODIFIED（再 ADDED・RENAMED も含む）し、その change は同じシナリオに行を書いていない | 数えない |
 | 孤立 | TP が指すシナリオが main spec に無い。REMOVED・RENAMED した change を理由欄に出す。テストの削除または付け替えを検討する | 数えない |
 | 対応不明 | 統合 schema の行で、delta spec に該当シナリオが無い、または複数の capability に一致して決まらない | 数えない |
 | 旧形式・対応不明 | 旧 `spec-driven-e2e` で、TP-ID が表の外にしか無い、または表の行をシナリオに結び付けられない | 数えない |
 
-前後関係は archive フォルダ名（`YYYY-MM-DD-<id>`）の順で決める。同じ日付は名前の辞書順である。git の履歴は使わない。シナリオは capability、Requirement、シナリオ名の完全一致で照合し、前後の空白だけを無視する。シナリオ名や Requirement 名を変えると、古い TP は「孤立」、新しい名前のシナリオは「未保護」として同時に出る。旧 `spec-driven-e2e` は TP-ID とシナリオ名（`Scenario` または `対応シナリオ` 列）を持つ表の行だけを使い、`E2E対象外` の表は読まない。旧 `quality-driven` の change は読まない。
+前後関係は archive フォルダ名（`YYYY-MM-DD-<id>`）の順で決める。同じ日付は名前の辞書順である。git の履歴は使わない。シナリオは capability、Requirement、シナリオ名の完全一致で照合し、前後の空白だけを無視する。シナリオ名や Requirement 名を変えると、古い TP は「孤立」、新しい名前のシナリオは「未保護」として同時に出る。旧 `spec-driven-e2e` は TP-ID とシナリオ名（`Scenario` または `対応シナリオ` 列）を持つ表の行だけを使い、`E2E対象外` の表は読まない。旧 `quality-driven` の test-plan は対応に使わないが、delta spec は要再確認・孤立の判定に使い、集計の archive 件数にも含める。操作見出しの誤記、不正な `.openspec.yaml`、日付の無い archive フォルダ名は入力エラーとする。test-plan の欠落や解析できない TP は理由付きで対応不明に表示する。
 
-`--results` に Playwright の全量実行 JSON を渡すと、TP を持つ行に結果を添える。照合は change id と TP-ID の両方のトークン完全一致で、`e2e-report.mjs` と同じ状態分類を使う。flaky は pass として扱い「pass（flaky）」と表示する。attempt の無いテストと skip は「未実行」になる。別 change に同じ TP-ID があっても流用しない。fail と未実行は「実行で確認済み」に数えない。結果 JSON が読めない、壊れている、または `--max-age` を超えている場合は表を出さずに終了コード 2 で止まる。
+`--results` に Playwright の全量実行 JSON を渡すと、TP を持つ行に結果を添える。照合は change id と TP-ID の両方のトークン完全一致で、`e2e-report.mjs` と attempt の状態分類を共有する。coverage の集計では expected-fail（`test.fail()`）を fail に数える（レポーターは fail 件数に含めず、TP のカバレッジ欠落として扱う）。同じ TP が複数ブラウザで実行された場合は fail、未実行、pass の順で最も悪い結果を使う。flaky は pass として扱い「pass（flaky）」と表示する。attempt の無いテストと skip は「未実行」になる。別 change に同じ TP-ID があっても流用しない。fail と未実行は「実行で確認済み」に数えない。結果 JSON が読めない、構造が壊れている、トップレベルの `errors` に実行エラーがある、または `--max-age` を超えている場合は表を出さずに終了コード 2 で止まる。
 
 終了コードは、既定が 0（表を出すだけ）、`--strict` で未保護・要再確認・孤立・fail・未実行のいずれかがあれば 1、入力の欠落・破損・鮮度違反と引数の誤りは 2 である。対応不明と旧形式・対応不明は strict の判定に含めないが、該当シナリオは未保護として現れる。シナリオが 0 件のときは 0 件と表示し、保護率は算出しない。`--format json` は同じ内容を `scenarios`、`orphans`、`unresolved`、`legacyUnresolved`、`summary` に分けて出す。
+
+JSON 出力の各フィールドは次のとおりである。配列が空の場合は `[]`、対応や結果が無い場合は `null` を出す。
+
+| フィールド | 内容 |
+|---|---|
+| `scenarios[]` | `capability`、`requirement`、`scenario`、`classification` と、以下の `source`、`active`、`result` |
+| `scenarios[].source` | 出所の `change` と `archive`。TP は `tps`（ID 配列）、他層の宣言は `declared[]`（`oracle`、`layer`、`method`）。要再確認では `modifiedBy` と `operation`（ADDED / MODIFIED / RENAMED）も付く |
+| `scenarios[].active` | 同じシナリオを割り当てる進行中 change ID の配列 |
+| `scenarios[].result` | `bucket`（pass / fail / 未実行）、`flaky`、`tps[]`（`id`、`status`、`bucket`、`flaky`）。他層の宣言は文字列「宣言のみ（実行結果は未照合）」 |
+| `orphans[]` | `change`、`archive`、`id`、`capability`、`requirement`、`scenario`、`reason` |
+| `unresolved[]` / `legacyUnresolved[]` | `change`、`archive`、`id`、`requirement`、`scenario`、`reason`。plan 全体の診断では `id` は `-` |
+| `summary` | `scenarios`、各分類名の件数、`needsAction`、`coverageE2E`、`coverageWithDeclared`。結果付きでは `実行で確認済み`、`fail`、`未実行`、`coverageConfirmed` も付く。保護率は `{count, total, percent}`、シナリオ 0 件では `null` |
 
 kit のリポジトリでは fixture で動作を確認できる。fixture は git 管理外の場所へコピーしてから実行する（git の中では最上位ディレクトリを repo とみなすため）。
 
@@ -103,12 +115,12 @@ node <kit>/payload/scripts/testkit-gate.mjs coverage --results <kit>/test/fixtur
 | cart | Add item | Add item when out of stock | 保護（他層の宣言） | add-cart 対象外: Oracle O2 / Layer Unit / Method stock service unit test | 宣言のみ（実行結果は未照合） |
 | cart | Show total | Show tax | 未保護 | 進行中: add-tax |  |
 | cart | Checkout button | Empty cart | 保護（E2E） | add-cart TP-002 | fail |
-| search | Search | Search by keyword | 保護（E2E） | legacy-search TP-001 | 未実行 |
+| search | Search | Search by keyword | 要再確認 | legacy-search TP-001 ／ legacy-qe で MODIFIED | 未実行 |
 | add-invoice | TP-003 | billing/invoice | Invoice email | Email invoice | REMOVED（drop-email） |
 - シナリオ: 13 件（archive 済み change 9 件から集計）
-- 実行で確認済み: 2 / fail: 1 / 未実行: 1
-- 保護率（E2E）: 4/13（30.8%）
-- 保護率（他層の宣言を含む）: 5/13（38.5%）
+- 実行で確認済み: 2 / fail: 1 / 未実行: 0
+- 保護率（E2E）: 3/13（23.1%）
+- 保護率（他層の宣言を含む）: 4/13（30.8%）
 - 保護率（実行で確認済み）: 2/13（15.4%）
 - 要対応: 12
 ```
