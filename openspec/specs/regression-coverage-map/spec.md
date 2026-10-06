@@ -36,14 +36,18 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **AND** I/O エラーや予期しない内部例外は入力書式の警告として握りつぶさない
 
 ### Requirement: Stale and orphaned coverage detection
-システムは、対応する TP より後に archive された change の delta spec で、そのシナリオを含む Requirement が ADDED・MODIFIED・RENAMED で再定義されている場合、その対応を「要再確認」と分類しなければならない（SHALL）。前後関係は archive フォルダの日付と名前の順で決めなければならない（SHALL）。より新しい change が同じシナリオへ TP を割り当てていれば、古い対応では要再確認にしてはならない（MUST NOT）。main spec に存在しないシナリオを指す TP は「孤立」と分類しなければならない（SHALL）。要再確認と孤立を保護に数えてはならない（MUST NOT）。
+システムは、対応する TP または他層の宣言（対象外行）より後に archive された change の delta spec で、そのシナリオを含む Requirement が ADDED・MODIFIED・RENAMED で再定義されている場合、その対応を「要再確認」と分類しなければならない（SHALL）。前後関係は archive フォルダの日付と名前の順で決めなければならない（SHALL）。より新しい change が同じシナリオへ TP または対象外行を割り当てていれば、古い対応では要再確認にしてはならない（MUST NOT）。main spec に存在しないシナリオを指す TP は「孤立」と分類しなければならない（SHALL）。要再確認と孤立を保護に数えてはならない（MUST NOT）。
 
 #### Scenario: Requirement modified after the TP was written
 - **WHEN** change A の TP がシナリオ S を守り、その後に archive された change B が S を含む Requirement を MODIFIED し、B の test-plan は S に TP を割り当てていない
 - **THEN** 対応表は S を「要再確認」とし、A の TP-ID と B の change id を表示する
 
+#### Scenario: Requirement modified after a delegated declaration
+- **WHEN** change A の対象外行がシナリオ S を他層で守ると宣言し、後の change B がその Requirement を MODIFIED し、新しい対応を割り当てていない
+- **THEN** S を「要再確認」とし、A の宣言と B の change id を表示する
+
 #### Scenario: Requirement redefined by ADDED or RENAMED
-- **WHEN** TP の archive より後の change が同じ Requirement 名を ADDED または RENAMED の TO として再定義し、新しい対応を割り当てていない
+- **WHEN** TP または対象外行の archive より後の change が同じ Requirement 名を ADDED または RENAMED の TO として再定義し、新しい対応を割り当てていない
 - **THEN** 古い対応は「要再確認」となり、実際の操作名を表示する
 
 #### Scenario: Quality-driven delta invalidates older coverage
@@ -75,7 +79,7 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **THEN** コマンドは終了コード 2 で止まり、宣言上の対応表を成功として出力しない
 
 ### Requirement: Coverage command interface and exit codes
-システムは `testkit-gate.mjs coverage [--results <path>] [--max-age <秒>] [--strict] [--format markdown|json]` を提供しなければならない（SHALL）。既定では分類結果を出力して終了コード 0 で終わらなければならない（SHALL）。`--strict` のとき、未保護、要再確認、孤立、fail、未実行のいずれかがあれば終了コード 1 で終わらなければならない（SHALL）。入力の欠落・破損・鮮度違反は終了コード 2 としなければならない（SHALL）。既存の `doctor`、`select`、`check` の引数と終了コードを変えてはならない（MUST NOT）。
+システムは `testkit-gate.mjs coverage [--results <path>] [--max-age <秒>] [--strict] [--format markdown|json]` を提供しなければならない（SHALL）。既定では分類結果を出力して終了コード 0 で終わらなければならない（SHALL）。`--strict` のとき、未保護、要再確認、孤立、fail、未実行のいずれかがあれば終了コード 1 で終わらなければならない（SHALL）。入力の欠落・破損・鮮度違反および I/O エラーは終了コード 2 としなければならない（SHALL）。予期しない内部例外は終了コード 3 とし、入力エラーと区別してスタックトレースを残さなければならない（SHALL）。既存の `doctor`、`select`、`check` の引数と終了コードを変えてはならない（MUST NOT）。
 
 #### Scenario: Default report
 - **WHEN** 未保護のシナリオがあり `--strict` を付けずに実行する
@@ -93,11 +97,11 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** 過去の archive が `login` を MODIFIED・REMOVED し、後の archive が `Login` を ADDED している
 - **THEN** 過去の MODIFIED を現在の main spec や将来の archive の名前と比較せず、入力エラーにしない
 - **AND** REMOVED の名前と RENAMED の旧名は以後の比較から外し、ADDED・MODIFIED・RENAMED の新名を以後の名前として保持する
-- **AND** 進行中 change の名前は現在の main spec と比較し、大小文字違いはその change だけの警告にする。同じ change 内の RENAMED は新名での MODIFIED を許容する
+- **AND** 進行中 change の名前はシナリオを持たない Requirement も含む現在の main spec と比較し、大小文字違いはその change だけの警告にする。同じ change 内の RENAMED は新名での MODIFIED を許容する
 
 #### Scenario: Overview headings are not declarations
 - **WHEN** spec が `# Requirement overview` など説明用の見出しを持つ
-- **THEN** Requirement の `###` と Scenario の `####`、またはコロン付きの宣言だけを構造用として検査し、説明用見出しを入力エラーにしない
+- **THEN** 説明用の `#` / `## Requirement overview` と `#` / `## Scenario overview` は許容する。それ以外の Requirement / Scenario（Scenaro の誤記を含む）で始まる見出しは、階層・空白・コロンの有無にかかわらず検査し、不正な宣言を入力エラーにする
 
 #### Scenario: Main specs are empty
 - **WHEN** `openspec/specs` にシナリオが 1 件もない
@@ -110,18 +114,18 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **WHEN** archive 済み change に test-plan.md が無い
 - **THEN** `quality-driven-e2e` と `spec-driven-e2e` の場合だけ対応不明として報告する
 - **AND** `spec-driven` などの delta は引き続き要再確認・孤立の判定に使う
-- **AND** change の schema が未指定なら `openspec/config.yaml` の schema を既定値に使い、両方に指定が無ければ欠落を診断しない
+- **AND** change の schema が未指定なら `openspec/config.yaml`（無ければ `config.yml`）の schema を既定値に使い、空・コメントのみ・解析エラーの config は schema 未指定として扱う。YAML アンカーは select と同じ読み込み規則で扱い、change と config の両方に指定が無ければ欠落を診断しない
 
 #### Scenario: Malformed mapping rows are diagnosed
 - **WHEN** TP-ID が `TP-NNN` 形式でない、列名・表の見出しが不正、または対象外行のシナリオ名が空である
 - **THEN** その行を理由付きで対応不明に表示し、保護に数えない
 - **AND** 対象外行のシナリオ列は `Scenario` または `対応シナリオ` を受け付ける
-- **AND** 正常な TP 表があっても `## 対象外シナリオ一覧` などの対象外表の見出し誤記を診断する
+- **AND** 正常な TP 表があっても、対象外表の見出しの誤記・重複・階層や空白の不備、表の代わりの箇条書きを理由付きで診断し、該当する宣言を保護に数えない
 - **AND** シナリオ列の欠落とシナリオ名の空欄を異なる理由として表示する
 
 #### Scenario: Unknown schema is not treated as integrated
-- **WHEN** `.openspec.yaml` が未対応の schema 名を持つ
-- **THEN** 警告を表示し、test-plan を保護に数えず、delta は判定に使う
+- **WHEN** change の `.openspec.yaml` または既定の config が未対応の schema 名を持つ
+- **THEN** schema を指定した実際のファイル名を警告に表示し、test-plan を保護に数えず、delta は判定に使う。同じ config に由来する警告は一度だけ表示する
 
 #### Scenario: Custom legacy QE schema
 - **WHEN** archive の schema が `QE_SCHEMA` で指定された独自の旧 QE schema と一致する
@@ -137,15 +141,20 @@ main spec の全シナリオが、どの E2E テストまたは他層の代替�
 - **AND** 本文中は大文字の独立した TP-ID 参照だけを検出し、Fixture のファイル名を TP-ID と誤認しない
 
 ### Requirement: Optional regression run in the reusable workflow
-再利用可能 workflow は任意入力 `regression-command` と `coverage-strict` を受け付けなければならない（SHALL）。`regression-command` が指定されたとき、change の有無にかかわらず実行し、その結果 JSON を固有の出力先へ保存して coverage コマンドに渡さなければならない（SHALL）。`coverage-strict` が真のときだけ coverage の終了コード 1 を job の失敗にしなければならない（SHALL）。未指定時は既存の job の挙動と出力を変えてはならない（MUST NOT）。回帰コマンドの失敗は、coverage の出力を保存した後でも job の失敗として伝えなければならない（SHALL）。
+再利用可能 workflow は任意入力 `regression-command` と `coverage-strict` を受け付けなければならない（SHALL）。`regression-command` が指定されたとき、change の有無にかかわらず実行し、その結果 JSON を固有の出力先へ保存して coverage コマンドに渡さなければならない（SHALL）。`coverage-strict` が真のときだけ coverage の終了コード 1 を job の失敗にしなければならない（SHALL）。`regression-command` と `coverage-strict` の両方が未指定のときは既存の job の挙動と出力を変えてはならない（MUST NOT）。回帰コマンドの失敗は、coverage の出力を保存した後でも job の失敗として伝えなければならない（SHALL）。
 
 #### Scenario: Implementation-only pull request with regression command
 - **WHEN** `openspec/changes` に差分がない PR で `regression-command` が指定されている
 - **THEN** 回帰コマンドが実行され、対応表が job の出力として保存される
 
 #### Scenario: Regression command is not configured
-- **WHEN** `regression-command` が空である
+- **WHEN** `regression-command` が空で、`coverage-strict` も未指定または false である
 - **THEN** workflow は既存と同じ手順と終了コードで完了する
+
+#### Scenario: Coverage strict without a regression command
+- **WHEN** `regression-command` が空で、`coverage-strict` が true である
+- **THEN** 宣言上の対応表を保存し、未保護・要再確認・孤立を検査する
+- **AND** fail・未実行は判定しない旨を表示する
 
 #### Scenario: Regression run fails
 - **WHEN** 回帰コマンドが非ゼロで終わる

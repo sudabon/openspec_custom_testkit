@@ -97,7 +97,7 @@ with:
   coverage-strict: false
 ```
 
-`coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON の欠落・破損・実行エラー・鮮度違反、main spec・archive の見出しや YAML の不備などの入力エラーでは、coverage は終了コード 2 を返す。進行中 change の不備は警告にして注記から除外するため、それだけでは coverage は失敗しない。レポーターと coverage のエラー詳細は CI ログと summary.txt に残し、対応表の保存に失敗した場合も summary と risk_level の出力を続ける。job は先に発生した失敗の終了コードを保持するため、回帰コマンドが既に非ゼロならそのコードで終了する。`coverage-strict` だけを指定した場合は宣言上の対応だけを検査し、fail・未実行を判定しない旨を表示する。両方とも未指定なら従来と同じ手順で動く。
+`coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON の欠落・破損・実行エラー・鮮度違反、main spec・archive の見出しや YAML の不備などの入力エラーでは、coverage は終了コード 2 を返す。予期しない内部例外は終了コード 3 とし、スタックトレースを CI ログ・coverage.md・summary.txt に残す。進行中 change の不備は警告にして注記から除外するため、それだけでは coverage は失敗しない。レポーターと coverage のエラー詳細は CI ログと summary.txt に残し、対応表の保存に失敗した場合も summary と risk_level の出力を続ける。job は先に発生した失敗の終了コードを保持するため、回帰コマンドが既に非ゼロならそのコードで終了する。`coverage-strict` だけを指定した場合は宣言上の対応だけを検査し、fail・未実行を判定しない旨を表示する。両方とも未指定なら従来と同じ手順で動く。
 
 ## 旧 workflow からの変更
 

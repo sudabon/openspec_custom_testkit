@@ -7,7 +7,7 @@
 ## What Changes
 
 - 新しい gate サブコマンド `testkit-gate.mjs coverage` を追加する。`openspec/specs` の全シナリオを、archive 済み change の test-plan.md（TP 行と `## 対象外シナリオ` 行）と照合し、Markdown 表で出力する。
-- シナリオを「保護（E2E）」「保護（他層の宣言）」「未保護」「要再確認」「孤立」に分類する。要再確認は、対応する TP より後の change で Requirement が ADDED・MODIFIED・RENAMED で再定義されたもの。孤立は、REMOVED / RENAMED で main spec から消えたシナリオを指す TP。
+- シナリオを「保護（E2E）」「保護（他層の宣言）」「未保護」「要再確認」「孤立」に分類する。要再確認は、対応する TP または対象外行より後の change で Requirement が ADDED・MODIFIED・RENAMED で再定義されたもの。孤立は、理由によらず現在の main spec に存在しないシナリオを指す TP。REMOVED / RENAMED の履歴があれば理由を表示する。
 - Playwright の全量実行 JSON を任意で渡すと、E2E 対応行に最新の実行結果（pass / fail / flaky / 未実行）を添える。照合は既存と同じ change id と TP-ID のトークン完全一致で行う。
 - テストのタグは付け替えない。既存の `@<change-id>` と `@TP-NNN` をそのまま使う。
 - 再利用可能 workflow に任意入力 `regression-command` と `coverage-strict` を追加する。未指定時は従来の挙動を変えない。

@@ -44,7 +44,7 @@ test-plan の行には capability がない。同じ change の `specs/<capabili
 
 archive フォルダは `YYYY-MM-DD-<id>` で、OpenSpec はこの順に main spec へ反映する。同じ日付の場合は名前の辞書順にする。git の履歴は使わない。shallow clone や rebase で変わるためである。
 
-各 Requirement について、最後に ADDED・MODIFIED・RENAMED（TO）で定義した change を「最新定義の change」とする。シナリオに対応する TP の change がそれより古ければ要再確認とする。最新定義の change 自身が TP または対象外行を持てば、その行を採用する。
+各 Requirement について、最後に ADDED・MODIFIED・RENAMED（TO）で定義した change を「最新定義の change」とする。シナリオに対応する TP または対象外行の change がそれより古ければ要再確認とする。最新定義の change 自身が TP または対象外行を持てば、その行を採用する。
 
 ### 4. 結果の照合は report.mjs の分類を共通化する
 
@@ -52,7 +52,7 @@ archive フォルダは `YYYY-MM-DD-<id>` で、OpenSpec はこの順に main sp
 
 ### 5. 出力と終了コード
 
-既定は Markdown で、列は capability、Requirement、Scenario、分類、出所、結果。末尾に分類ごとの件数を出す。`--format json` は同じ内容を機械可読で出す（ジョブサマリーや他ツールとの連携用）。終了コードは 0（出力のみ）、1（`--strict` で要対応あり）、2（入力不正）。既存 reporter の 0/1/2/3 と意味が衝突しないよう、fail は単独のコードにせず `--strict` の 1 に含める。
+既定は Markdown で、列は capability、Requirement、Scenario、分類、出所、結果。末尾に分類ごとの件数を出す。`--format json` は同じ内容を機械可読で出す（ジョブサマリーや他ツールとの連携用）。終了コードは 0（出力のみ）、1（`--strict` で要対応あり）、2（入力不正・I/O エラー）、3（内部エラー。スタックトレースを保存）。既存 reporter の 0/1/2/3 と意味が衝突しないよう、fail は単独のコードにせず `--strict` の 1 に含める。
 
 ### 6. CI は任意入力で追加する
 

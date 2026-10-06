@@ -183,6 +183,7 @@ export function runCiJob(env = process.env, deps = {}) {
       fail(2, `シナリオ対応表を保存できません: ${err.code ?? err.name}: ${err.message}`);
     }
     if (coverage.exitCode === 2) fail(2, 'シナリオ対応表を作れません。入力エラー（詳細は上記）');
+    else if (coverage.exitCode === 3) fail(3, 'シナリオ対応表を作れません。内部エラー（スタックトレースは上記）');
     else if (coverage.exitCode === 1 && coverageStrict) fail(1, 'coverage-strict: 対応表に要対応があります');
   }
   let manifest;

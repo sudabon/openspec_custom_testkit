@@ -72,3 +72,21 @@ OpenSpec CLI はローカルの 1.13.1 で、三 schema の validate、`quality-
 最初の sandbox 内実行では npm キャッシュ書き込みと Chromium の起動が拒否された。上の全テスト・smoke の成功は sandbox 外で再実行した結果である。hosted GitHub Actions はこの記録には含めない。
 
 回帰テストは、schema ごとの plan 欠落診断、壊れた進行中 change の個別警告と CI 継続、不正 TP-ID・対象外行・spec 見出し・MODIFIED 名の大小文字違い、fail → pass を含む順序非依存の結果合成、複数 TP の合成、未知 schema の警告、strict の真偽値、内部例外の再送出、coverage 保存失敗後の summary/risk 出力、E2E JSON エラーの CI ログを確認する。main spec と archive 済み change の文書も同じ挙動へ合わせた。
+
+## PR #6 再レビュー修正（2183791 への指摘）
+
+記録日: 2026-10-06 JST。必須修正・修正推奨・文書と spec の不整合を対象とし、「テスト（任意）」の 2 件は対象外。
+
+| コマンド | 結果 |
+|---|---|
+| `node --test test/coverage.test.mjs` | 60 pass / 0 fail |
+| `npm test` | 198 pass / 0 fail / 0 skipped |
+| `node --test --test-name-pattern='later requirements invalidate' test/coverage.test.mjs` | 全体テスト後に追加した他層の宣言の回帰テスト 1 件が成功 |
+| `npm run lint` | 成功。250 files scanned |
+| `npm run test:smoke` | 成功（exit 0） |
+| `node payload/scripts/testkit-gate.mjs coverage --format json` | exit 0。117 シナリオ、対応不明・旧形式対応不明・警告は各 0 件 |
+| `git diff --check` | 成功 |
+
+全体テストの初回は、配布テスト内の npm pack が sandbox の npm キャッシュ書き込み制限（EPERM）で失敗した。198 件の成功は、許可された sandbox 外での再実行結果。
+
+見出しの階層・空白・コロンの不備、Scenaro の誤記、空・コメントのみ・解析エラー・アンカー付き config、config.yml と config.yaml の優先順、設定由来の警告のファイル名と重複排除、対象外見出しの誤記・重複・箇条書き、シナリオのない main Requirement との名前照合を検証した。I/O エラーは終了コード 2、内部例外はスタックトレース付きの 3 とし、strict が無効でも CI は失敗して coverage.md・summary.txt・risk_level を保存することを確認した。
