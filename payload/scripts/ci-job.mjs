@@ -8,7 +8,7 @@ import { headRevision, toplevel } from './lib/git.mjs';
 import { buildReport } from './lib/report.mjs';
 import { renderJson, runCoverage } from './lib/coverage-map.mjs';
 import { selectChanges } from './lib/select.mjs';
-import { SCHEMA_E2E, SCHEMA_INTEGRATED } from './lib/critical.mjs';
+import { SCHEMA_E2E } from './lib/critical.mjs';
 import { reportInputs } from './lib/flaky.mjs';
 import { executionBlock } from './lib/evidence-check.mjs';
 import { sha256File } from './lib/hash.mjs';
@@ -149,7 +149,7 @@ export function runCiJob(env = process.env, deps = {}) {
       try {
         if (resultsError) throw resultsError;
         plan = readFileSync(join(repo, change.path, 'test-plan.md'), 'utf8');
-        inputs = reportInputs(repo, { path: change.path, integrated: change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated' });
+        inputs = reportInputs(repo, change);
       } catch (err) {
         fail(2, `${change.id}: レポートを読めません (${err.message})`);
         summaries.push({ id: change.id, text: unreadable(change.id) });

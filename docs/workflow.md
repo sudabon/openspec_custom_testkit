@@ -170,7 +170,7 @@ screenshot、video、trace には、画面に表示された個人情報、ト�
 
 既定では、Playwright のリトライ後に成功した flaky のテストを pass として coverage に数え、フレーク列に ⚠ を出す。終了コードは変わらない。
 
-Risk に応じて不合格にするには、人間が `openspec/quality-policy.md` の行頭に次の行を追記する。kit はこのファイルを上書きしないので、追記は手で行う。
+Risk に応じて不合格にするには、人間が `openspec/quality-policy.md` に次の設定を独立した行として追記する。インデント・箇条書き記号・バッククォートを付けず、キーとコロンの間も空けない。kit はこのファイルを上書きしないので、追記は手で行う。
 
 ```
 flaky_fail_levels: [high]
@@ -181,7 +181,7 @@ flaky_fail_levels: [high]
 - 列挙した Level の TP が flaky になると、結果列は `pass` のまま、フレーク列に `⚠ 不合格（high）` を出し、終了コード 3（失敗テストあり）にする。
 - 列挙していない Level の flaky は `⚠ 警告（low）` と表示し、coverage に数える。
 - Level を解決できない TP（quality.md が無い、Risk が未登録、Level が不正）の flaky は、理由を表示して不合格にする。
-- 上記以外の値・角括弧の無い値・複数の行は、doctor の失敗、reporter の入力エラー（終了コード 2）になる。黙って無視すると、方針を書いたつもりで効いていない状態になるからである。
+- 上記以外の値・角括弧の無い値・複数の行・設定らしい行の書式違い（インデント、箇条書き、バッククォート、コロン前の空白、単数形のキーなど）は、doctor の失敗、reporter の入力エラー（終了コード 2）になる。黙って無視すると、方針を書いたつもりで効いていない状態になるからである。
 - 戻すときは行を消す。
 
 導入直後は CI が頻繁に落ちることがある。`[high]` から始め、壊れたテストは次の隔離リストで期限付きで外す。
@@ -196,19 +196,19 @@ flaky_fail_levels: [high]
    | TP-002 | add-checkout | 決済モックの起動待ちが不安定 | qa-team | 2026-10-31 | O3 |
    ```
 
-   - `Change` は必須である。同じ TP-ID でも change ごとに別物なので、別の change の行は効かない。
+   - `Change` は必須である。同じ TP-ID でも change ごとに別物なので、別の change の行は効かない。Change が空の行は警告して無視し、coverage や他の行の重複判定に影響させない。
    - `期限` は YYYY-MM-DD で、UTC の日付で比べる。期限日の当日までは有効、翌日から期限切れになる。
    - `代替` は、その change の quality.md の Test Oracles にある Oracle ID（E2E 以外の層で同じ壊れ方を確かめるもの）か、evidence.md の `residuals[]` の ID である。
 2. テストのソースはそのまま残し、実行から外す。CI の e2e-command（またはローカルの実行）に、change と TP の両方のタグを持つテストだけを除く `--grep-invert` を足す。
 
    ```
-   npx playwright test --grep-invert '(?=.*@add-checkout\b)(?=.*@TP-002\b)'
+   npx playwright test --grep-invert '(?=.*@add-checkout(?=\s|$))(?=.*@TP-002(?=\s|$))'
    ```
 
-   `@TP-002` だけで除くと、同じ TP-ID を持つ別の change のテストまで外れる。
+   タグの末尾を空白または行末で区切るため、`@add-checkout-v2` や `@TP-002-extra` は除外しない。`@TP-002` だけで除くと、同じ TP-ID を持つ別の change のテストまで外れる。
 3. final までに代替を evidence.md に記録する。Oracle なら `risk_results` に、その Oracle を含み、`layer` が E2E 以外で `result: "pass"` の行が要る。Residual なら `residuals[]` の該当項目に `approved_by` と `approved_at` が要る。無ければ final ゲートが TP-ID と代替を示して失敗する。
 
-reporter は有効な隔離中の TP を coverage にも欠落にも数えず、`隔離中: N 件` と各行の担当・期限・代替・理由を毎回表示する。隔離中のテストが実行されて pass しても coverage には数えない。実行されて fail した場合は失敗（終了コード 3）のままである。担当・期限・代替・Change のどれかが空の行、期限の書式が不正な行、quality.md に無い Oracle を代替にした行、同じ TP の重複行、期限切れの行は隔離として扱わず、理由を付けて欠落（終了コード 1）にする。
+reporter は有効な隔離中の TP を coverage にも欠落にも数えず、`隔離中: N 件` と各行の担当・期限・代替・理由を毎回表示する。隔離中のテストが実行されて pass しても coverage には数えない。実行されて fail した場合は失敗（終了コード 3）のままである。対象 change の行で理由・担当・期限・代替のどれかが空の行、期限の書式が不正な行、quality.md に無い Oracle を代替にした行、同じ TP の重複行、期限切れの行は隔離として扱わず、理由を付けて欠落（終了コード 1）にする。final ゲートでも対象 change の無効な行を再検査し、TP-ID・担当・期限と理由を表示して失敗する。レポート実行後に期限が切れた場合も同じである。
 
 ### 解除の手順
 

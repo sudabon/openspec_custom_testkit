@@ -60,11 +60,11 @@ e2e_lint_scope: changed
 
 ### フレーク方針
 
-既定では、リトライ後に成功した flaky のテストを pass として coverage に数え、⚠ を表示する。Risk の Level に応じて flaky を不合格にする場合は、人間が行頭に `flaky_fail_levels: [high]` のような行を追記する（例: `[medium, high]`）。
+既定では、リトライ後に成功した flaky のテストを pass として coverage に数え、⚠ を表示する。Risk の Level に応じて flaky を不合格にする場合は、人間が `flaky_fail_levels: [high]` を独立した行として追記する。インデント・箇条書き記号・バッククォートを付けず、キーとコロンの間も空けない（例: `[medium, high]`）。
 
 - 列挙した Level の Risk に紐づく TP（test-plan の Risk 列 → quality.md の Risk Register の Level）が flaky になると、reporter は終了コード 3 で失敗する。複数の TP を持つテストは最も高い Level で判定する。Level を解決できない TP の flaky は不合格として扱う。
 - 列挙していない Level の flaky は pass として数え、警告を表示する。
-- low / medium / high 以外の値や角括弧の無い値は、doctor と reporter の入力エラーになる。行を消せば従来の動作に戻る。
+- low / medium / high 以外の値、角括弧の無い値、設定らしい行の書式違い（単数形のキーなど）は、doctor と reporter の入力エラーになる。行を消せば従来の動作に戻る。
 - 壊れたテストを期限付きで外す場合は、E2E ルート直下の `quarantine.md` に登録する（手順は `quarantine.md` の説明と openspec-custom-testkit の docs/workflow.md）。旧 `spec-driven-e2e` の change には、フレーク方針も隔離リストも適用しない。
 
 ## 4. Agent が変更してはいけないもの

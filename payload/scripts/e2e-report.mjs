@@ -2,7 +2,6 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { toplevel } from './lib/git.mjs';
-import { SCHEMA_INTEGRATED } from './lib/critical.mjs';
 import { reportInputs } from './lib/flaky.mjs';
 import { buildReport, parseReporterArgs } from './lib/report.mjs';
 import { changeSchema, resolveNamed } from './lib/select.mjs';
@@ -40,7 +39,7 @@ if (schema.error) {
 }
 let inputs;
 try {
-  inputs = reportInputs(repo, { path: change.dir, integrated: schema.schema === SCHEMA_INTEGRATED });
+  inputs = reportInputs(repo, { path: change.dir, ...schema });
 } catch (err) {
   console.error(`レポートの入力を読めません: ${err.message}`);
   process.exit(2);

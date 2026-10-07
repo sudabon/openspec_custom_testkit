@@ -29,6 +29,11 @@ E2E のフレークを Risk に応じて合否へ反映し、壊れたテスト�
 - **WHEN** `flaky_fail_levels` に low / medium / high 以外の値がある
 - **THEN** 方針を無視せず、入力エラーとして終了コード 2 を返す
 
+#### Scenario: Malformed flaky policy setting
+
+- **WHEN** 設定らしい行にインデント、箇条書き記号、バッククォート、コロン前の空白、または単数形の `flaky_fail_level` がある
+- **THEN** 方針を無視せず、reporter は入力エラーとして終了コード 2 を返し、doctor も失敗する
+
 ### Requirement: Flaky defaults remain compatible
 
 フレーク方針が policy に無い場合と、旧 schema の change では、reporter は既存の flaky の扱いを MUST 維持する。
@@ -57,6 +62,11 @@ E2E ルート直下の `quarantine.md` は、隔離する TP ごとに TP-ID、c
 - **WHEN** 隔離の行の change が対象 change と異なり、TP-ID だけが一致する
 - **THEN** 対象 change の TP を隔離中として扱わない
 
+#### Scenario: Missing change does not affect other entries
+
+- **WHEN** 隔離行の Change が空で、同じ TP-ID が対象 change の test-plan や有効な隔離行にある
+- **THEN** 空の Change を警告してその行を無視し、coverage と重複判定に影響させない
+
 ### Requirement: Quarantined tests are not coverage
 
 reporter は有効な隔離中の TP を coverage に MUST NOT 数えない。その TP は欠落とは区別して「隔離中」と表示し、件数を報告する。隔離中の TP のテストが実行されて成功しても coverage に数えない。
@@ -79,6 +89,11 @@ reporter は、期限日を過ぎた隔離の行を MUST 失効として扱い�
 
 - **WHEN** 隔離の行の期限が実行日の前日以前である
 - **THEN** 隔離中として扱わず、期限切れの TP と担当を表示して欠落の終了コードを返す
+
+#### Scenario: Quarantine becomes invalid before final
+
+- **WHEN** reporter が成功した後、final ゲートの実行時点で対象 change の隔離行が期限切れまたは無効になっている
+- **THEN** コミットの追加の有無にかかわらず final ゲートを失敗させ、TP-ID、担当、期限、不正の理由を表示する
 
 ### Requirement: Quarantine alternative is evidenced at final
 

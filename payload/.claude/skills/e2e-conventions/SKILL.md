@@ -84,7 +84,7 @@ test('注文フォームにアクセシビリティ違反がない', { tag: ['@a
 
 ## フレークと隔離
 - リトライ後に成功した flaky は、quality-policy の `flaky_fail_levels` に含まれる Level の TP では不合格（終了コード 3）になる。flaky を通すためにリトライ回数・待機・アサーションを緩めない
-- 壊れたテストを一時的に外すときは、E2E ルート直下の `quarantine.md` に TP-ID・Change・理由・担当・期限・代替（E2E 以外の層の Oracle ID か承認済み Residual ID）を書く。テストソースは残し、実行からは `--grep-invert '(?=.*@<change-id>\b)(?=.*@TP-NNN\b)'` で外す
+- 壊れたテストを一時的に外すときは、E2E ルート直下の `quarantine.md` に TP-ID・Change・理由・担当・期限・代替（E2E 以外の層の Oracle ID か承認済み Residual ID）を書く。テストソースは残し、実行からは `--grep-invert '(?=.*@<change-id>(?=\s|$))(?=.*@TP-NNN(?=\s|$))'` で外す
 - 隔離のために `test.skip` / `test.fixme` を付けない。skip の追加と区別できず、期限と代替がレビューで見えなくなる
 - 隔離中の TP は pass しても coverage に数えない。解除は、テストを直して `--grep-invert` を外し、`quarantine.md` の行を消して行う。期限切れの行は欠落として失敗する
 - 手順の詳細は E2E ルートの `quarantine.md` の説明と、openspec-custom-testkit の docs/workflow.md の「フレーク方針と隔離」を参照する

@@ -5,6 +5,7 @@ import { markdownProse, planTables } from './markdown.mjs';
 import { qualityModel, tpRows } from './plan-check.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
 import { RISK_LEVELS } from './policy.mjs';
+import { SCHEMA_INTEGRATED } from './critical.mjs';
 
 const RANK = Object.fromEntries(RISK_LEVELS.map((level, index) => [level, index + 1]));
 
@@ -53,8 +54,8 @@ function quarantineCell(row, column) {
   return /^[-–—ー―]$/.test(value) ? '' : value;
 }
 
-// Rows of quarantine.md that name this change, or that name no change but one of its TPs.
-// `active` is a valid quarantine; `invalid` rows (incomplete, expired, duplicated) must fail as missing coverage.
+// Only rows naming this change can affect coverage. Unscoped rows warn without invalidating another row.
+// `invalid` includes incomplete, malformed, expired, duplicate rows and unknown Oracle alternatives.
 export function quarantineFor(text, { changeId, plannedIds, qualityText, today }) {
   const result = { active: [], invalid: [], warnings: [] };
   if (text == null) return result;
@@ -65,9 +66,13 @@ export function quarantineFor(text, { changeId, plannedIds, qualityText, today }
   const entries = [];
   for (const row of rows) {
     const [tp, change, reason, owner, due, alternative] = QUARANTINE_COLUMNS.map(column => quarantineCell(row, column));
-    if (change && change !== changeId) continue;
+    if (!change) {
+      result.warnings.push(`隔離リストの ${tp || '(TP-ID 空)'} は Change がありません。対象を特定できないため隔離として扱いません`);
+      continue;
+    }
+    if (change !== changeId) continue;
     if (!plannedIds.includes(tp)) {
-      if (change) result.warnings.push(`隔離リストの ${tp || '(TP-ID 空)'} は ${changeId} の test-plan にありません`);
+      result.warnings.push(`隔離リストの ${tp || '(TP-ID 空)'} は ${changeId} の test-plan にありません`);
       continue;
     }
     const entry = { tp, change, reason, owner, due, alternative, problems: [] };
@@ -100,7 +105,7 @@ function readOptional(repo, rel) {
 
 // Reporter inputs beyond test-plan and results. Read errors propagate for integrated changes: the caller
 // reports them as input errors (exit 2). Legacy changes only read the quarantine list, to warn that it does not apply.
-export function reportInputs(repo, { path, integrated }) {
+export function reportInputs(repo, { path, schema, scope, integrated = schema === SCHEMA_INTEGRATED || scope === 'integrated' }) {
   if (!integrated) {
     try {
       const quarantinePath = `${installedE2eRoot(repo)}/quarantine.md`;

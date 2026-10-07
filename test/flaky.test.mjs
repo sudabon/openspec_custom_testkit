@@ -16,9 +16,18 @@ function write(repo, rel, text) {
 }
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { flakyVerdict, quarantineFor, tpLevels } from '../payload/scripts/lib/flaky.mjs';
+import { flakyVerdict, quarantineFor, reportInputs, tpLevels } from '../payload/scripts/lib/flaky.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
 import { checkEvidence } from '../payload/scripts/lib/evidence-check.mjs';
+import { runCiJob } from '../payload/scripts/ci-job.mjs';
+
+const MALFORMED_POLICIES = [
+  '  flaky_fail_levels: [high]',
+  '- flaky_fail_levels: [high]',
+  'flaky_fail_levels : [high]',
+  'flaky_fail_level: [high]',
+  '`flaky_fail_levels: [high]`',
+];
 
 const QUALITY = `# Quality
 
@@ -54,6 +63,10 @@ test('flaky_fail_levels: missing is empty, list values are read, invalid values 
     assert.deepEqual(parsed.levels, [], bad);
   }
   assert.match(flakyFailLevels('flaky_fail_levels: [high]\nflaky_fail_levels: [low]\n').error, /複数/);
+  for (const line of MALFORMED_POLICIES) {
+    assert.match(flakyFailLevels(line).error, /flaky_fail_levels/, line);
+    assert.match(flakyFailLevels(`flaky_fail_levels: [high]\n${line}`).error, /flaky_fail_levels/, line);
+  }
   // Only a line-leading key is a setting; prose that mentions the key is not.
   assert.deepEqual(flakyFailLevels('例: `flaky_fail_levels: [critical]` と書きます\n'), { levels: [], error: null });
 });
@@ -119,6 +132,10 @@ test('doctor accepts a valid flaky policy and fails an invalid one', async () =>
     const invalid = doctor(repo.dir);
     assert.equal(invalid.ok, false);
     assert.match(invalid.failures.join('\n'), /flaky_fail_levels が不正です \(critical\)/);
+    for (const line of MALFORMED_POLICIES) {
+      write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
+      assert.match(doctor(repo.dir).failures.join('\n'), /flaky_fail_levels が不正/, line);
+    }
   } finally {
     repo.cleanup();
   }
@@ -224,6 +241,17 @@ function runReporter(repo, run, args = []) {
   return spawnSync(process.execPath, [reporterCli, 'demo', 'results.json', ...args], { cwd: repo.dir, encoding: 'utf8' });
 }
 
+test('e2e-report CLI rejects malformed policy settings with exit 2', t => {
+  const repo = reporterRepo({ schema: 'quality-driven-e2e' });
+  t.after(() => repo.cleanup());
+  for (const line of [...MALFORMED_POLICIES, 'flaky_fail_levels: [critical]']) {
+    write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
+    const out = runReporter(repo, results([[['TP-001', 'TP-002', 'TP-003'], 'expected']]));
+    assert.equal(out.status, 2, line);
+    assert.match(out.stderr, /flaky_fail_levels が不正/, line);
+  }
+});
+
 test('e2e-report CLI applies the flaky policy only to integrated changes', () => {
   const run = results([[['TP-001'], 'flaky'], [['TP-002'], 'expected'], [['TP-003'], 'expected']]);
   const integrated = reporterRepo({ schema: 'quality-driven-e2e' });
@@ -291,8 +319,8 @@ test('Incomplete quarantine entry is not a quarantine and names the missing colu
   assert.deepEqual(parsed.invalid.map(entry => [entry.tp, entry.problems.join(' / ')]), [
     ['TP-001', '担当 がありません'],
     ['TP-002', '期限・代替 がありません'],
-    ['TP-003', 'Change がありません'],
   ]);
+  assert.match(parsed.warnings.join('\n'), /TP-003.*Change/);
   const badValues = entries([
     ['TP-001', 'demo', '外部障害', 'qa', '2026/10/31', 'O2'],
     ['TP-002', 'demo', '外部障害', 'qa', '2026-10-31', 'O9'],
@@ -334,6 +362,65 @@ test('quarantine rows inside code fences are examples, not entries', () => {
 });
 
 const VALID_ROW = ['TP-002', 'demo', '外部 SaaS の障害', 'qa-team', '2026-10-31', 'O2'];
+
+test('report inputs share integrated classification for schema and scope', t => {
+  const repo = reporterRepo({ schema: 'quality-driven-e2e', quarantine: quarantine([VALID_ROW]) });
+  t.after(() => repo.cleanup());
+  const path = 'openspec/changes/demo';
+  const bySchema = reportInputs(repo.dir, { path, schema: 'quality-driven-e2e' });
+  assert.equal(bySchema.integrated, true);
+  assert.equal(bySchema.qualityText, QUALITY);
+  assert.equal(bySchema.quarantineText, quarantine([VALID_ROW]));
+  assert.deepEqual(reportInputs(repo.dir, { path, scope: 'integrated' }), bySchema);
+  assert.equal(reportInputs(repo.dir, { path, schema: 'spec-driven-e2e', scope: 'legacy-e2e' }).integrated, false);
+});
+
+test('CI and local reporter enforce the same flaky and quarantine verdicts', async t => {
+  const allPassed = [[['TP-001', 'TP-002', 'TP-003'], 'expected']];
+  const highFlaky = [[['TP-001'], 'flaky'], [['TP-002', 'TP-003'], 'expected']];
+  const excluded = [[['TP-001', 'TP-003'], 'expected']];
+  const active = quarantine([['TP-002', 'demo', '障害', 'qa-team', '2999-12-31', 'O2']]);
+  const expired = quarantine([['TP-002', 'demo', '障害', 'qa-team', '2000-01-01', 'O2']]);
+  const cases = [
+    { name: 'high flaky', specs: highFlaky, code: 3, pattern: /フレーク不合格: TP-001 \(high\)/ },
+    { name: 'low flaky', specs: [[['TP-001', 'TP-003'], 'expected'], [['TP-002'], 'flaky']], code: 0, pattern: /フレーク警告: TP-002 \(low\)/ },
+    { name: 'active quarantine', specs: excluded, quarantine: active, code: 0, pattern: /隔離中: 1 件/ },
+    { name: 'expired quarantine', specs: allPassed, quarantine: expired, code: 1, pattern: /隔離の期限切れ: TP-002/ },
+    { name: 'invalid policy', specs: allPassed, policy: MALFORMED_POLICIES[0], code: 2, pattern: /flaky_fail_levels が不正/ },
+    { name: 'legacy flaky', schema: 'spec-driven-e2e', specs: highFlaky, code: 0, pattern: /フレーク 1/ },
+    { name: 'legacy quarantine', schema: 'spec-driven-e2e', specs: excluded, quarantine: active, code: 1, pattern: /旧 schema の change には隔離リストを適用しません: TP-002/ },
+  ];
+  for (const fixture of cases) await t.test(fixture.name, t => {
+    const repo = reporterRepo({ schema: 'quality-driven-e2e', ...fixture });
+    t.after(() => repo.cleanup());
+    const base = repo.git(['rev-parse', 'HEAD']).trim();
+    repo.commit('reporting fixture');
+    const data = results(fixture.specs);
+    const local = runReporter(repo, data);
+    assert.equal(local.status, fixture.code, local.stdout + local.stderr);
+    const stepSummary = join(repo.dir, 'step-summary.md');
+    const ci = runCiJob({ BASE_REF: base, SETUP_MODE: 'caller', E2E_COMMAND: 'run-e2e', GITHUB_STEP_SUMMARY: stepSummary }, {
+      cwd: repo.dir,
+      evaluateChange: () => ({ phase: 'plan', warnings: [], failures: [] }),
+      execFile(file, args, options) {
+        assert.equal(file, 'bash');
+        assert.deepEqual(args, ['-c', 'run-e2e']);
+        writeFileSync(options.env.TESTKIT_RESULTS_JSON, JSON.stringify(data));
+        return '';
+      },
+    });
+    assert.equal(ci.code, fixture.code, ci.lines.join('\n'));
+    const saved = readFileSync(join(ci.runDir, 'demo.report.txt'), 'utf8');
+    assert.match(saved, fixture.pattern);
+    // The relative age on the first line may advance between the two processes.
+    const withoutAge = text => text.replace(/^実行開始:[^\n]*\n/, '');
+    assert.equal(withoutAge(saved), withoutAge(local.stdout + local.stderr));
+    if (fixture.code !== 2) {
+      assert.match(readFileSync(join(ci.runDir, 'demo.summary.md'), 'utf8'), fixture.pattern);
+      assert.match(readFileSync(stepSummary, 'utf8'), fixture.pattern);
+    } else assert.match(readFileSync(stepSummary, 'utf8'), /レポートを作れません/);
+  });
+});
 
 test('Valid quarantine: a TP that did not run is shown as quarantined, not missing', () => {
   const run = results([[['TP-001'], 'expected'], [['TP-003'], 'expected']]);
@@ -466,9 +553,9 @@ test('Residual is not approved: the final gate asks for human approval', () => {
   }
 });
 
-test('the final gate ignores quarantine rows of other changes and expired rows left to the reporter', () => {
+test('the final gate ignores quarantine rows of other changes', () => {
   const repo = evidenceRepo({
-    quarantineRows: [['TP-002', 'other', '外部障害', 'qa-team', '2026-10-31', 'O2'], ['TP-001', 'demo', '外部障害', 'qa-team', '2026-10-01', 'O2']],
+    quarantineRows: [['TP-002', 'other', '外部障害', 'qa-team', '2026-10-01', 'O2']],
     riskResults: [passing(['O1'])],
   });
   try {
@@ -478,11 +565,75 @@ test('the final gate ignores quarantine rows of other changes and expired rows l
   }
 });
 
+test('final rejects quarantine expiry after a passing report without a new commit', t => {
+  const rows = [['TP-002', 'demo', '外部障害', 'qa-team', '2026-10-10', 'O2']];
+  const repo = evidenceRepo({ quarantineRows: rows, riskResults: [passing(['O1', 'O2'])] });
+  t.after(() => repo.cleanup());
+  const before = Date.parse('2026-10-09T12:00:00Z');
+  const run = results([[['TP-001', 'TP-003'], 'expected']]);
+  assert.equal(report({ results: run, quarantineText: quarantine(rows), now: before }).exitCode, 0);
+  const errorsAt = now => checkEvidence(repo.dir, EVIDENCE_CHANGE, { digest: '', policyText: '', now }).errors.filter(error => error.includes('隔離'));
+  assert.deepEqual(errorsAt(before), []);
+  const expired = errorsAt(Date.parse('2026-10-12T12:00:00Z'));
+  assert.equal(expired.length, 1);
+  for (const part of ['TP-002', 'qa-team', '2026-10-10', '期限切れ']) assert.ok(expired[0].includes(part), part);
+});
+
+test('final rejects invalid quarantine rows as well as checking active alternatives', t => {
+  for (const invalid of [
+    ['TP-001', 'demo', '障害', '', '2026-10-31', 'O2'],
+    ['TP-001', 'demo', '障害', 'qa-team', 'not-a-date', 'O2'],
+    ['TP-001', 'demo', '障害', 'qa-team', '2026-10-31', 'O9'],
+  ]) {
+    const repo = evidenceRepo({ quarantineRows: [invalid, VALID_ROW], riskResults: [passing(['O1'])] });
+    t.after(() => repo.cleanup());
+    const errors = quarantineErrors(repo);
+    assert.equal(errors.length, 2);
+    assert.match(errors[0], /TP-001.*担当.*期限/);
+    assert.match(errors[1], /TP-002.*O2/);
+  }
+});
+
+test('blank Change warns without affecting coverage or a valid row for the same TP', () => {
+  for (const blank of ['', '-']) for (const changeId of ['demo', 'other']) {
+    const unscoped = ['TP-002', blank, '障害', 'qa-team', '2026-10-31', 'O2'];
+    const valid = ['TP-002', changeId, '障害', 'qa-team', '2026-10-31', 'O2'];
+    const parsed = entries([unscoped, valid], '2026-10-07', changeId);
+    assert.equal(parsed.active.length, 1);
+    assert.deepEqual(parsed.invalid, []);
+    assert.match(parsed.warnings.join('\n'), /TP-002.*Change/);
+    for (const format of ['text', 'summary']) {
+      const run = results([[['TP-001', 'TP-002', 'TP-003'], 'expected']]);
+      run.suites[0].specs[0].tags[0] = `@${changeId}`;
+      const out = report({ changeId, results: run, format, quarantineText: quarantine([unscoped]) });
+      assert.equal(out.exitCode, 0, out.stdout);
+      assert.match(out.stdout, /TP-002.*Change/);
+      assert.doesNotMatch(out.stdout, /隔離中|カバレッジ欠落: TP/);
+      run.suites[0].specs[0].tags = [`@${changeId}`, '@TP-001', '@TP-003'];
+      const missing = report({ changeId, results: run, format, quarantineText: quarantine([unscoped]) });
+      assert.equal(missing.exitCode, 1, missing.stdout);
+      const isolated = report({ changeId, results: run, format, quarantineText: quarantine([unscoped, valid]) });
+      assert.equal(isolated.exitCode, 0, isolated.stdout);
+      assert.match(isolated.stdout, /隔離中: 1 件/);
+    }
+  }
+});
+
+test('documented exclusion patterns match whole change and TP tags', () => {
+  for (const path of ['../docs/workflow.md', '../payload/tests/e2e/quarantine.md', '../payload/.claude/skills/e2e-conventions/SKILL.md']) {
+    const text = readFileSync(new URL(path, import.meta.url), 'utf8');
+    const pattern = text.match(/--grep-invert '([^']+)'/)[1].replace('<change-id>', 'add-checkout').replace('TP-NNN', 'TP-002');
+    const re = new RegExp(pattern);
+    for (const title of ['case @add-checkout @TP-002', '@TP-002 @add-checkout case', '@add-checkout\t@TP-002']) assert.equal(re.test(title), true, `${path}: ${title}`);
+    for (const title of ['@add-checkout-v2 @TP-002', '@add-checkout @TP-002-extra', '@add-checkout @TP-0020', '@other @TP-002', '@add-checkout @TP-003']) assert.equal(re.test(title), false, `${path}: ${title}`);
+  }
+});
+
 test('the documented quarantine and release steps reproduce on a fixture repo', () => {
   const docs = readFileSync(new URL('../docs/workflow.md', import.meta.url), 'utf8');
   const guide = docs.slice(docs.indexOf('## フレーク方針と隔離'), docs.indexOf('## E2E 規約 lint'));
   const row = guide.match(/^ *(\| TP-002 \| add-checkout \|.*\|)$/m)[1].trim();
-  assert.match(guide, /--grep-invert '\(\?=\.\*@add-checkout\\b\)\(\?=\.\*@TP-002\\b\)'/);
+  assert.ok(guide.includes("--grep-invert '(?=.*@add-checkout(?=\\s|$))(?=.*@TP-002(?=\\s|$))'"));
   const tagged = run => JSON.parse(JSON.stringify(run).replaceAll('@demo', '@add-checkout'));
   const repo = gitRepo();
   try {

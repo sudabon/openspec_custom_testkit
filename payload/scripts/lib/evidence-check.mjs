@@ -133,8 +133,11 @@ function quarantineErrors(repo, change, quality, { results, residuals, now }) {
     const listPath = join(repo, installedE2eRoot(repo), 'quarantine.md');
     if (!existsSync(listPath)) return [];
     const plannedIds = existsSync(planPath) ? tpRows(readFileSync(planPath, 'utf8')).map(row => row['TP-ID']) : [];
-    const { active } = quarantineFor(readFileSync(listPath, 'utf8'), { changeId: change.id, plannedIds, qualityText: quality || null, today: utcDate(now) });
-    return quarantineAlternativeErrors(active, { results, residuals });
+    const { active, invalid } = quarantineFor(readFileSync(listPath, 'utf8'), { changeId: change.id, plannedIds, qualityText: quality || null, today: utcDate(now) });
+    return [
+      ...invalid.map(entry => `隔離リストの ${entry.tp} が無効です (担当 ${entry.owner || '(空)'} / 期限 ${entry.due || '(空)'}): ${entry.problems.join(' / ')}`),
+      ...quarantineAlternativeErrors(active, { results, residuals }),
+    ];
   } catch (err) {
     return [`隔離リストを確認できません (${err.message})`];
   }
