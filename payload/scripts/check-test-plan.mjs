@@ -1,49 +1,54 @@
 #!/usr/bin/env node
-import { SCHEMA_QE, SCHEMA_E2E } from './lib/critical.mjs';
+import { isE2eRequired, SCHEMA_QE } from './lib/critical.mjs';
 import { evaluateChange } from './lib/evaluate.mjs';
-import { toplevel } from './lib/git.mjs';
+import { processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { selectChanges } from './lib/select.mjs';
 
-const base = process.argv[2] || 'origin/main';
-let repo;
-try {
-  repo = toplevel(process.cwd());
-} catch {
-  console.error('git リポジトリではありません');
-  process.exit(2);
-}
-const selected = selectChanges({ repo, base, env: process.env });
-if (selected.exitCode === 2) {
-  console.error(selected.error);
-  process.exit(2);
-}
-if (selected.changes.length === 0 && selected.ok) {
-  console.log('openspec change の差分なし。skip');
-  process.exit(0);
-}
-let failed = selected.ok ? 0 : 1;
-const cache = {};
-for (const change of selected.changes) {
-  const result = evaluateChange(repo, change, {
-    phase: 'plan',
-    quality: false,
-    plan: true,
-    tags: true,
-    env: process.env,
-    cache,
-  });
-  if (change.scope === 'out-of-scope' || change.schema === SCHEMA_QE) {
-    console.log(`${change.id}: E2E計画の対象外 (${change.reason})`);
-    continue;
+const NOT_A_REPO = Symbol('not a repository');
+
+// Checks the test plans of the changes in the diff and returns the exit code. `io` takes log and error;
+// `io.cwd` defaults to process.cwd().
+export function main(argv = process.argv.slice(2), env = process.env, io = processIo) {
+  const base = argv[0] || 'origin/main';
+  const repo = resolveRepo(io.cwd ?? process.cwd(), { onFailure: 'exit2', io: { ...io, exit: () => NOT_A_REPO } });
+  if (repo === NOT_A_REPO) return 2;
+  const selected = selectChanges({ repo, base, env });
+  if (selected.exitCode === 2) {
+    io.error(selected.error);
+    return 2;
   }
-  for (const line of result.failures) {
-    console.error(`::error::${line}`);
-    failed = 1;
+  if (selected.changes.length === 0 && selected.ok) {
+    io.log('openspec change の差分なし。skip');
+    return 0;
   }
-  for (const line of result.planWarnings) console.log(`::warning::${line}`);
-  for (const line of result.oks) console.log(`  ${line}`);
-  if (result.failures.length === 0 && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
-    console.log(`${change.id}: tag-presence pass（実行 coverage ではありません）`);
+  let failed = selected.ok ? 0 : 1;
+  const cache = {};
+  for (const change of selected.changes) {
+    const result = evaluateChange(repo, change, {
+      phase: 'plan',
+      quality: false,
+      plan: true,
+      tags: true,
+      env,
+      cache,
+    });
+    if (change.scope === 'out-of-scope' || change.schema === SCHEMA_QE) {
+      io.log(`${change.id}: E2E計画の対象外 (${change.reason})`);
+      continue;
+    }
+    for (const line of result.failures) {
+      io.error(`::error::${line}`);
+      failed = 1;
+    }
+    for (const line of result.planWarnings) io.log(`::warning::${line}`);
+    for (const line of result.oks) io.log(`  ${line}`);
+    if (result.failures.length === 0 && isE2eRequired(change)) {
+      io.log(`${change.id}: tag-presence pass（実行 coverage ではありません）`);
+    }
   }
+  return failed;
 }
-process.exit(failed);
+
+if (isMain(import.meta.url)) {
+  process.exit(main(process.argv.slice(2), process.env, processIo));
+}

@@ -2,10 +2,20 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isCritical } from '../payload/scripts/lib/critical.mjs';
+import { FORK_BASE, LEGACY_STAMPS, isCritical } from '../payload/scripts/lib/critical.mjs';
 import { sha256 } from '../payload/scripts/lib/hash.mjs';
+import { isMain } from '../payload/scripts/lib/entry.mjs';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SOURCES = {
+  qe: {
+    url: 'https://github.com/sudabon/openspec_quality_kit',
+    sha: 'e537d10da53112fce684f31d1602c1e061ab87a2',
+  },
+  e2e: {
+    url: 'https://github.com/sudabon/openspec_e2e_test',
+    sha: '53e354fa366f02cf412e9ce93419463a37e8255c',
+  },
+};
 
 function walk(dir, base = dir) {
   const out = [];
@@ -18,7 +28,7 @@ function walk(dir, base = dir) {
   return out.sort();
 }
 
-function source(id, meta) {
+function source(root, id, meta) {
   const base = join(root, 'upstream/baselines', id);
   const payload = join(base, 'payload');
   const pkg = JSON.parse(readFileSync(join(base, 'package.json'), 'utf8'));
@@ -40,25 +50,64 @@ function source(id, meta) {
     license: 'MIT',
     copyright: 'Copyright (c) 2026 sudabon',
     packageVersion: pkg.version,
-    stampFile: meta.stampFile,
+    stampFile: LEGACY_STAMPS[id],
     files,
   };
 }
 
-const manifest = {
-  openspecFork: '1.13.1',
-  sources: [
-    source('qe', {
-      url: 'https://github.com/sudabon/openspec_quality_kit',
-      sha: 'e537d10da53112fce684f31d1602c1e061ab87a2',
-      stampFile: '.openspec-quality-kit.json',
-    }),
-    source('e2e', {
-      url: 'https://github.com/sudabon/openspec_e2e_test',
-      sha: '53e354fa366f02cf412e9ce93419463a37e8255c',
-      stampFile: '.openspec-e2e-kit.json',
-    }),
-  ],
-};
-writeFileSync(join(root, 'upstream/manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`wrote upstream/manifest.json (${manifest.sources.reduce((n, item) => n + item.files.length, 0)} files)`);
+export function buildManifest(root) {
+  return {
+    openspecFork: FORK_BASE,
+    sources: Object.entries(SOURCES).map(([id, meta]) => source(root, id, meta)),
+  };
+}
+
+export function serializeManifest(manifest) {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
+// Returns the source ids whose generated entry differs from the committed manifest.
+// `openspecFork` and anything outside `sources` are reported as "(top-level)".
+function changedSources(expected, actualText) {
+  let actual;
+  try {
+    actual = JSON.parse(actualText);
+  } catch {
+    return ['(unparseable)'];
+  }
+  const changed = [];
+  const { sources: expectedSources, ...expectedTop } = expected;
+  const { sources: actualSources, ...actualTop } = actual ?? {};
+  if (JSON.stringify(expectedTop) !== JSON.stringify(actualTop)) changed.push('(top-level)');
+  const ids = new Set([...expectedSources, ...(Array.isArray(actualSources) ? actualSources : [])].map(item => item?.id));
+  for (const id of ids) {
+    const want = expectedSources.find(item => item.id === id);
+    const have = Array.isArray(actualSources) ? actualSources.find(item => item?.id === id) : undefined;
+    if (JSON.stringify(want) !== JSON.stringify(have)) changed.push(String(id));
+  }
+  return changed.length ? changed : ['(formatting)'];
+}
+
+function main(argv) {
+  const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const target = join(root, 'upstream/manifest.json');
+  const manifest = buildManifest(root);
+  const text = serializeManifest(manifest);
+  if (argv.includes('--check')) {
+    const current = readFileSync(target, 'utf8');
+    if (current === text) {
+      console.log('upstream/manifest.json is up to date');
+      return 0;
+    }
+    console.error(`upstream/manifest.json is out of date (sources: ${changedSources(manifest, current).join(', ')})`);
+    console.error('run `npm run manifest` to regenerate it and commit the result');
+    return 1;
+  }
+  writeFileSync(target, text);
+  console.log(`wrote upstream/manifest.json (${manifest.sources.reduce((n, item) => n + item.files.length, 0)} files)`);
+  return 0;
+}
+
+if (isMain(import.meta.url)) {
+  process.exitCode = main(process.argv.slice(2));
+}

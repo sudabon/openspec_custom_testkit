@@ -12,12 +12,23 @@ export const CRITICAL_FILES = [
 // the target still runs a previous kit, so doctor reports it as incomplete.
 export const REQUIRED_MODULES = [
   'scripts/lib/e2e-lint.mjs',
+  'scripts/lib/e2e-lint/analyze.mjs',
+  'scripts/lib/e2e-lint/declarations.mjs',
+  'scripts/lib/e2e-lint/helpers.mjs',
+  'scripts/lib/e2e-lint/lexer.mjs',
+  'scripts/lib/e2e-lint/repo.mjs',
+  'scripts/lib/e2e-lint/tokens.mjs',
   'scripts/lib/results.mjs',
   'scripts/lib/coverage-map.mjs',
   'scripts/lib/qa-handoff.mjs',
   'scripts/lib/flaky.mjs',
   'scripts/lib/registry.mjs',
   'scripts/lib/effort.mjs',
+  'scripts/lib/changes.mjs',
+  'scripts/lib/change-metadata.mjs',
+  'scripts/lib/ids.mjs',
+  'scripts/lib/entry.mjs',
+  'scripts/lib/seal.mjs',
 ];
 
 export function isCritical(rel) {
@@ -37,4 +48,8 @@ export const E2E_ROOT_DEFAULT = 'tests/e2e';
 
 export function isIntegratedChange(change) {
   return change?.schema === SCHEMA_INTEGRATED || change?.scope === 'integrated';
+}
+
+export function isE2eRequired(change) {
+  return change?.e2e === 'required' || change?.schema === SCHEMA_E2E;
 }

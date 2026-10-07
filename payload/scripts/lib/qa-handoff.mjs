@@ -160,23 +160,14 @@ function checkAutomated(rows, evidence, errors, warnings) {
 }
 
 export function checkHandoff(repo, change, { qualityText }) {
-  const errors = [];
-  const warnings = [];
   const evidence = readEvidence(repo, change);
   const need = handoffNeed({ qualityText, evidence: evidence.data });
-  if (!need.required) return { errors, warnings };
-
-  for (const item of need.quality) {
-    if (!item.id) errors.push(`quality.md の Residual Risk に ID（\`- RR1: 内容\` の形式）がありません: ${item.text}`);
-  }
-  for (const item of need.residuals) {
-    if (!asString(item.id)) errors.push('evidence の residuals に id の無い項目があります');
-  }
-
+  if (!need.required) return { errors: [], warnings: [] };
+  const errors = residualIdErrors(need);
   const path = join(repo, change.path, HANDOFF_FILE);
   if (!existsSync(path)) {
     errors.push(`${HANDOFF_FILE} がありません（${need.reasons.join('・')}があるため QA への引き継ぎが必要です）`);
-    return { errors, warnings };
+    return { errors, warnings: [] };
   }
   const text = readFileSync(path, 'utf8');
   const sections = {};
@@ -184,13 +175,30 @@ export function checkHandoff(repo, change, { qualityText }) {
     sections[heading] = section(text, `## ${heading}`);
     if (sections[heading] == null) errors.push(`${HANDOFF_FILE} に ## ${heading} がありません`);
   }
-
   const examples = text.split('\n').filter(line => /^\s*\|/.test(line) && line.includes(EXAMPLE_MARK));
   if (examples.length) errors.push(`${HANDOFF_FILE} にテンプレートの記入例が残っています（${EXAMPLE_MARK} の行が ${examples.length} 件）`);
-
+  const warnings = [];
   checkAutomated(parseTable(sections['自動化済み範囲']).rows, evidence, errors, warnings);
+  errors.push(...manualErrors(parseTable(sections['手動確認範囲']).rows, need));
+  errors.push(...charterErrors(sections['探索チャーター']));
+  const qa = qaResultFindings(change, text);
+  return { errors: [...errors, ...qa.errors], warnings: [...warnings, ...qa.warnings] };
+}
 
-  const manualRows = parseTable(sections['手動確認範囲']).rows;
+function residualIdErrors(need) {
+  const errors = [];
+  for (const item of need.quality) {
+    if (!item.id) errors.push(`quality.md の Residual Risk に ID（\`- RR1: 内容\` の形式）がありません: ${item.text}`);
+  }
+  for (const item of need.residuals) {
+    if (!asString(item.id)) errors.push('evidence の residuals に id の無い項目があります');
+  }
+  return errors;
+}
+
+// Every Manual-layer row and every Residual must have its own manual check row.
+function manualErrors(manualRows, need) {
+  const errors = [];
   for (const row of manualRows) {
     for (const key of ['ID', '種別', '確認観点', '理由']) {
       if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の手動確認範囲 ${rowLabel(row, 'ID')} の ${key} が空です`);
@@ -207,29 +215,35 @@ export function checkHandoff(repo, change, { qualityText }) {
   for (const id of [...new Set(expected)]) {
     if (!manualRows.some(row => hasBoundedToken(cell(row, 'ID'), id))) errors.push(`${HANDOFF_FILE} の手動確認範囲に ${id} がありません`);
   }
+  return errors;
+}
 
-  const charters = parseTable(sections['探索チャーター']).rows;
-  if (sections['探索チャーター'] != null && charters.length === 0) errors.push(`${HANDOFF_FILE} の探索チャーターが 0 件です`);
+function charterErrors(body) {
+  const errors = [];
+  const charters = parseTable(body).rows;
+  if (body != null && charters.length === 0) errors.push(`${HANDOFF_FILE} の探索チャーターが 0 件です`);
   for (const row of charters) {
     for (const key of ['Charter-ID', '目的', '対象', '時間の目安']) {
       if (!cell(row, key)) errors.push(`${HANDOFF_FILE} の探索チャーター ${rowLabel(row, 'Charter-ID')} の ${key} が空です`);
     }
   }
   for (const id of duplicates(charters.map(row => cell(row, 'Charter-ID')))) errors.push(`${HANDOFF_FILE} の探索チャーターで ${id} が重複しています`);
+  return errors;
+}
 
+// The QA result is a warning until archive, where it becomes required.
+function qaResultFindings(change, text) {
   const qa = qaResult(text);
   const filled = qa.by || qa.at || qa.verdict;
   const problems = qaResultProblems(qa);
   const detail = problems.join('、');
   if (change.lifecycle === 'archived') {
-    if (problems.length) errors.push(`archive には ${HANDOFF_FILE} の QA 実施結果（実施者・YYYY-MM-DD の実施日・pass または fail の判定）が必要です（${detail}）`);
-    else if (qa.verdict === 'fail') errors.push('QA 判定が fail です。所見を修正するか、Residual として人間が承認し直してから archive してください');
-  } else if (!filled) {
-    warnings.push(`${HANDOFF_FILE} の QA 実施結果が未記入です（archive の前に人間が記入します）`);
-  } else if (problems.length) {
-    warnings.push(`${HANDOFF_FILE} の QA 実施結果が不正です（${detail}）`);
-  } else if (qa.verdict === 'fail') {
-    warnings.push('QA 判定が fail です。archive の前に修正するか、Residual として人間が承認し直してください');
+    if (problems.length) return { errors: [`archive には ${HANDOFF_FILE} の QA 実施結果（実施者・YYYY-MM-DD の実施日・pass または fail の判定）が必要です（${detail}）`], warnings: [] };
+    if (qa.verdict === 'fail') return { errors: ['QA 判定が fail です。所見を修正するか、Residual として人間が承認し直してから archive してください'], warnings: [] };
+    return { errors: [], warnings: [] };
   }
-  return { errors, warnings };
+  if (!filled) return { errors: [], warnings: [`${HANDOFF_FILE} の QA 実施結果が未記入です（archive の前に人間が記入します）`] };
+  if (problems.length) return { errors: [], warnings: [`${HANDOFF_FILE} の QA 実施結果が不正です（${detail}）`] };
+  if (qa.verdict === 'fail') return { errors: [], warnings: ['QA 判定が fail です。archive の前に修正するか、Residual として人間が承認し直してください'] };
+  return { errors: [], warnings: [] };
 }

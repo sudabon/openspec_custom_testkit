@@ -1,12 +1,11 @@
 #!/usr/bin/env node
-import { appendFileSync } from 'node:fs';
-import { SCHEMA_E2E } from './lib/critical.mjs';
+import { isE2eRequired } from './lib/critical.mjs';
 import { parseCoverageArgs, runCoverage } from './lib/coverage-map.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { runEffort } from './lib/effort.mjs';
-import { lintRepo } from './lib/e2e-lint.mjs';
+import { formatLintReport, lintRepo } from './lib/e2e-lint.mjs';
+import { appendGithubOutput, emit, processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
-import { toplevel } from './lib/git.mjs';
 import { selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: testkit-gate.mjs doctor
@@ -15,14 +14,6 @@ const USAGE = `usage: testkit-gate.mjs doctor
        testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]
        testkit-gate.mjs coverage [--results <path>] [--max-age <seconds>] [--strict] [--format markdown|json]
        testkit-gate.mjs effort [--since YYYY-MM-DD] [--format table|json]`;
-
-function repoOf() {
-  try {
-    return toplevel(process.cwd());
-  } catch {
-    return process.cwd();
-  }
-}
 
 function parseTail(argv) {
   let base;
@@ -41,62 +32,68 @@ function parseTail(argv) {
   return { base, phase, names };
 }
 
-const [command, ...rest] = process.argv.slice(2);
-if (!command || command === '-h' || command === '--help') {
-  console.log(USAGE);
-  process.exit(0);
+// Runs one command and returns its exit code. `io` takes log, error and write; `io.cwd` defaults to process.cwd().
+export function main(argv = process.argv.slice(2), env = process.env, io = processIo) {
+  const [command, ...rest] = argv;
+  if (!command || command === '-h' || command === '--help') {
+    io.log(USAGE);
+    return 0;
+  }
+  const repo = resolveRepo(io.cwd ?? process.cwd());
+  const returned = { ...io, exit: code => code };
+  if (command === 'doctor') return commandDoctor(repo, io);
+  if (command === 'coverage') {
+    const opts = parseCoverageArgs(rest);
+    if (opts.error) {
+      io.error(opts.error);
+      return 2;
+    }
+    return emit(returned, runCoverage({ repo, ...opts }));
+  }
+  if (command === 'effort') return emit(returned, runEffort({ repo, argv: rest }));
+  if (command !== 'select' && command !== 'check' && command !== 'lint') {
+    io.error(USAGE);
+    return 2;
+  }
+  const args = parseTail(rest);
+  if (args.error) {
+    io.error(args.error);
+    return 2;
+  }
+  if ((command === 'check' || command === 'lint') && args.phase !== 'plan' && args.phase !== 'final') {
+    io.error('--phase は plan または final です');
+    return 2;
+  }
+  const selected = selectChanges({ repo, base: args.base, names: args.names, env });
+  if (command === 'select') return commandSelect(selected, io);
+  if (selected.exitCode === 2) {
+    io.error(selected.error);
+    return 2;
+  }
+  if (command === 'lint') return commandLint(repo, selected, args, env, io);
+  return commandCheck(repo, selected, args, env, io);
 }
-const repo = repoOf();
-if (command === 'doctor') {
+
+function commandDoctor(repo, io) {
   let result;
   try {
     result = doctor(repo);
   } catch (err) {
-    console.error(err.message);
-    process.exit(1);
+    io.error(err.message);
+    return 1;
   }
-  for (const note of result.notes) console.log(`! ${note}`);
+  for (const note of result.notes) io.log(`! ${note}`);
   if (!result.ok) {
-    for (const failure of result.failures) console.error(`✗ ${failure}`);
-    console.error('doctor: incomplete');
-    process.exit(1);
+    for (const failure of result.failures) io.error(`✗ ${failure}`);
+    io.error('doctor: incomplete');
+    return 1;
   }
-  console.log('doctor: complete');
-  process.exit(0);
+  io.log('doctor: complete');
+  return 0;
 }
-if (command === 'coverage') {
-  const opts = parseCoverageArgs(rest);
-  if (opts.error) {
-    console.error(opts.error);
-    process.exit(2);
-  }
-  const result = runCoverage({ repo, ...opts });
-  if (result.stderr) console.error(result.stderr.trimEnd());
-  if (result.stdout) process.stdout.write(result.stdout);
-  process.exit(result.exitCode);
-}
-if (command === 'effort') {
-  const result = runEffort({ repo, argv: rest });
-  if (result.stderr) console.error(result.stderr.trimEnd());
-  if (result.stdout) process.stdout.write(result.stdout);
-  process.exit(result.exitCode);
-}
-if (command !== 'select' && command !== 'check' && command !== 'lint') {
-  console.error(USAGE);
-  process.exit(2);
-}
-const args = parseTail(rest);
-if (args.error) {
-  console.error(args.error);
-  process.exit(2);
-}
-if ((command === 'check' || command === 'lint') && args.phase !== 'plan' && args.phase !== 'final') {
-  console.error('--phase は plan または final です');
-  process.exit(2);
-}
-const selected = selectChanges({ repo, base: args.base, names: args.names, env: process.env });
-if (command === 'select') {
-  console.log(JSON.stringify({
+
+function commandSelect(selected, io) {
+  io.log(JSON.stringify({
     ok: selected.ok,
     error: selected.error,
     changes: selected.changes.map(change => ({
@@ -110,57 +107,55 @@ if (command === 'select') {
       errors: change.errors,
     })),
   }, null, 2));
-  process.exit(selected.exitCode === 2 ? 2 : (selected.ok ? 0 : 1));
+  return selected.exitCode === 2 ? 2 : (selected.ok ? 0 : 1);
 }
-if (selected.exitCode === 2) {
-  console.error(selected.error);
-  process.exit(2);
-}
-if (command === 'lint') {
-  const changes = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
-  const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env: process.env, requireSources: true });
-  const selectionErrors = selected.changes.flatMap(change => {
+
+// Selection problems the lint command reports itself, since it does not run the full gate.
+function lintSelectionErrors(changes) {
+  return changes.flatMap(change => {
     const unknown = change.e2e === 'unknown' && !change.pendingPlan;
     const errors = unknown ? change.errors.filter(error => error !== change.reason) : change.errors;
     return [...errors.map(error => `${change.id}: ${error}`), ...(unknown ? [`${change.id}: E2E 適用状態を判定できません (${change.reason})`] : [])];
   });
-  for (const error of selectionErrors) console.error(`✗ ${error}`);
-  console.log(`対象 change: ${changes.map(change => change.id).join(', ') || 'なし（全ソースを警告範囲で表示）'}`);
-  for (const note of result.notes) console.log(`! ${note}`);
-  console.log('強制範囲:');
-  for (const entry of result.enforced) console.log(`  ✗ ${entry.text}`);
-  for (const entry of result.pending) console.log(`  ! ${entry.text}`);
-  for (const entry of result.exceptions.filter(item => item.scope?.enforced)) console.log(`  ✓ ${entry.text}`);
-  console.log('警告範囲:');
-  for (const entry of result.warned) console.log(`  ! ${entry.text}`);
-  for (const entry of result.exceptions.filter(item => !item.scope?.enforced)) console.log(`  ✓ ${entry.text}`);
-  for (const file of result.unsupported) console.log(`対象外: ${file}（.feature は手続きを持たないため lint しません）`);
-  console.log('---');
-  console.log(`e2e-lint: analyzed ${result.analyzed} files, enforced failures ${result.failed}, warnings ${result.warned.length}, pending ${result.pending.length}, exceptions ${result.exceptions.length}`);
-  process.exit(result.failed || selectionErrors.length || !selected.ok ? 1 : 0);
 }
-let failures = 0;
-const levels = [];
-const cache = {};
-for (const change of selected.changes) {
-  const result = evaluateChange(repo, change, {
-    phase: args.phase,
-    quality: true,
-    plan: true,
-    tags: true,
-    env: process.env,
-    cache,
-    base: selected.base,
-  });
-  console.log(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
-  for (const line of result.oks) console.log(`  ✓ ${line}`);
-  for (const line of result.warnings) console.log(`  ! ${line}`);
-  for (const line of result.failures) console.log(`  ✗ ${line}`);
-  failures += result.failures.length;
-  if (result.level !== 'none') levels.push(result.level);
+
+function commandLint(repo, selected, args, env, io) {
+  const changes = selected.changes.filter(isE2eRequired);
+  const result = lintRepo(repo, changes, { phase: args.phase, base: selected.base, env, requireSources: true });
+  const selectionErrors = lintSelectionErrors(selected.changes);
+  for (const error of selectionErrors) io.error(`✗ ${error}`);
+  for (const line of formatLintReport(result, changes)) io.log(line);
+  return result.failed || selectionErrors.length || !selected.ok ? 1 : 0;
 }
-const level = maxLevel(levels);
-console.log('---');
-console.log(`checked: ${selected.changes.length} change(s), max risk_level: ${level}, failures: ${failures}`);
-if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `risk_level=${level}\n`);
-process.exit(failures ? 1 : 0);
+
+function commandCheck(repo, selected, args, env, io) {
+  let failures = 0;
+  const levels = [];
+  const cache = {};
+  for (const change of selected.changes) {
+    const result = evaluateChange(repo, change, {
+      phase: args.phase,
+      quality: true,
+      plan: true,
+      tags: true,
+      env,
+      cache,
+      base: selected.base,
+    });
+    io.log(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
+    for (const line of result.oks) io.log(`  ✓ ${line}`);
+    for (const line of result.warnings) io.log(`  ! ${line}`);
+    for (const line of result.failures) io.log(`  ✗ ${line}`);
+    failures += result.failures.length;
+    if (result.level !== 'none') levels.push(result.level);
+  }
+  const level = maxLevel(levels);
+  io.log('---');
+  io.log(`checked: ${selected.changes.length} change(s), max risk_level: ${level}, failures: ${failures}`);
+  appendGithubOutput(env, { risk_level: level });
+  return failures ? 1 : 0;
+}
+
+if (isMain(import.meta.url)) {
+  process.exit(main(process.argv.slice(2), process.env, processIo));
+}

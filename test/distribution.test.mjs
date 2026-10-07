@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -22,11 +22,22 @@ test('packed tarball installs payload, vendor, roles, and license', () => {
     'payload/scripts/lib/vendor/yaml.mjs',
     'payload/scripts/lib/vendor/yaml.LICENSE',
     'payload/scripts/lib/e2e-lint.mjs',
+    'payload/scripts/lib/e2e-lint/analyze.mjs',
+    'payload/scripts/lib/e2e-lint/declarations.mjs',
+    'payload/scripts/lib/e2e-lint/helpers.mjs',
+    'payload/scripts/lib/e2e-lint/lexer.mjs',
+    'payload/scripts/lib/e2e-lint/repo.mjs',
+    'payload/scripts/lib/e2e-lint/tokens.mjs',
     'payload/scripts/lib/coverage-map.mjs',
     'payload/scripts/lib/results.mjs',
     'payload/scripts/lib/qa-handoff.mjs',
     'payload/scripts/lib/flaky.mjs',
     'payload/scripts/lib/effort.mjs',
+    'payload/scripts/lib/changes.mjs',
+    'payload/scripts/lib/change-metadata.mjs',
+    'payload/scripts/lib/ids.mjs',
+    'payload/scripts/lib/entry.mjs',
+    'payload/scripts/lib/seal.mjs',
     'payload/openspec/roles/qa-reviewer.md',
     'payload/tests/e2e/quarantine.md',
     'payload/openspec/schemas/quality-driven-e2e/templates/qa-handoff.md',
@@ -50,7 +61,7 @@ test('packed tarball installs payload, vendor, roles, and license', () => {
   assert.match(output, /導入が完了しました/);
   assert.match(readFileSync(join(installed, 'scripts/lib/vendor/yaml.mjs'), 'utf8'), /yaml@2\.8\.1/);
   assert.equal((readFileSync(join(installed, 'scripts/qe-gate.sh'), 'utf8').includes('exec node')), true);
-  for (const rel of ['scripts/lib/coverage-map.mjs', 'scripts/lib/results.mjs', 'scripts/lib/qa-handoff.mjs', 'scripts/lib/flaky.mjs', 'scripts/lib/effort.mjs', 'openspec/roles/qa-reviewer.md', 'tests/e2e/quarantine.md', 'openspec/schemas/quality-driven-e2e/templates/qa-handoff.md']) {
+  for (const rel of ['scripts/lib/coverage-map.mjs', 'scripts/lib/results.mjs', 'scripts/lib/qa-handoff.mjs', 'scripts/lib/flaky.mjs', 'scripts/lib/effort.mjs', 'scripts/lib/changes.mjs', 'scripts/lib/change-metadata.mjs', 'scripts/lib/ids.mjs', 'scripts/lib/entry.mjs', 'scripts/lib/seal.mjs', 'openspec/roles/qa-reviewer.md', 'tests/e2e/quarantine.md', 'openspec/schemas/quality-driven-e2e/templates/qa-handoff.md']) {
     assert.equal(readFileSync(join(installed, rel), 'utf8'), readFileSync(join(root, 'payload', rel), 'utf8'), rel);
   }
   const updated = execFileSync(process.execPath, [bin, 'install', '--target', installed], { encoding: 'utf8' });
@@ -146,5 +157,46 @@ test('stamp records the non-functional viewpoint date once and keeps it on updat
     assert.equal(readFileSync(stampPath(target), 'utf8'), kept);
   } finally {
     rmSync(target, { recursive: true, force: true });
+  }
+});
+
+// Intentional differences between a distributed legacy schema and its upstream baseline.
+// Each entry: { path: 'quality-driven/schema.yaml', reason: 'why it differs' }. Keep empty unless a diff is deliberate.
+const LEGACY_SCHEMA_ALLOWLIST = [];
+
+const LEGACY_SCHEMAS = [
+  { schema: 'quality-driven', baseline: 'upstream/baselines/qe/payload/openspec/schemas/quality-driven' },
+  { schema: 'spec-driven-e2e', baseline: 'upstream/baselines/e2e/payload/openspec/schemas/spec-driven-e2e' },
+];
+
+function listFiles(dir, base = dir) {
+  const out = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.DS_Store') continue;
+    const abs = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listFiles(abs, base));
+    else if (entry.isFile()) out.push(relative(base, abs).split('\\').join('/'));
+  }
+  return out.sort();
+}
+
+test('committed upstream manifest matches buildManifest output byte for byte', async () => {
+  const { buildManifest, serializeManifest } = await import('../scripts/build-manifest.mjs');
+  const committed = readFileSync(join(root, 'upstream/manifest.json'), 'utf8');
+  assert.equal(serializeManifest(buildManifest(root)), committed, 'run `npm run manifest` and commit upstream/manifest.json');
+});
+
+test('distributed legacy schemas are identical to their upstream baselines', () => {
+  const allowed = new Set(LEGACY_SCHEMA_ALLOWLIST.map(item => item.path));
+  for (const { schema, baseline } of LEGACY_SCHEMAS) {
+    const shipped = join(root, 'payload/openspec/schemas', schema);
+    const origin = join(root, baseline);
+    const files = listFiles(shipped);
+    assert.ok(files.length > 0, `${schema} has no files`);
+    assert.deepEqual(files, listFiles(origin), `${schema} file list differs from ${baseline}`);
+    for (const rel of files) {
+      if (allowed.has(`${schema}/${rel}`)) continue;
+      assert.ok(readFileSync(join(shipped, rel)).equals(readFileSync(join(origin, rel))), `${schema}/${rel} differs from ${baseline}/${rel}`);
+    }
   }
 });

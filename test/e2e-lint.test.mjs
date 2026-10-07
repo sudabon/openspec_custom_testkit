@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { main } from '../lib/cli.mjs';
@@ -9,10 +8,9 @@ import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { lintChange, lintRepo, lintSource } from '../payload/scripts/lib/e2e-lint.mjs';
 import { evaluateChange, maxLevel } from '../payload/scripts/lib/evaluate.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { capture, gitRepo } from './support.mjs';
+import { capture, changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
 
 const fixtures = fileURLToPath(new URL('./fixtures/e2e-lint/', import.meta.url));
-const gate = fileURLToPath(new URL('../payload/scripts/testkit-gate.mjs', import.meta.url));
 const shippedPolicy = readFileSync(new URL('../payload/openspec/quality-policy.md', import.meta.url), 'utf8');
 
 function fixture(rel) {
@@ -27,30 +25,7 @@ function brief(findings) {
   return findings.map(item => `${item.rule}:${item.line}:${item.test ?? ''}`).sort();
 }
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'demo',
-    path: 'openspec/changes/demo',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'required',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    fallback: false,
-    skipSpecs: true,
-    pendingPlan: false,
-    tasksText: '- [ ] 1.1 plan\n',
-    ...over,
-  };
-}
+const change = (over = {}) => changeFixture({ skipSpecs: true, tasksText: '- [ ] 1.1 plan\n', ...over });
 
 function evidence(residuals) {
   return `# Evidence
@@ -77,25 +52,25 @@ test('${title}', { tag: ${JSON.stringify(tags)} }, async ({ page }) => {
 // Temporary git repo whose base..HEAD diff holds a tagged file, a changed untagged file, and an untouched file.
 function scopeRepo({ policy = shippedPolicy } = {}) {
   const repo = gitRepo();
-  write(repo, 'openspec/quality-policy.md', policy);
-  write(repo, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
-  write(repo, 'tests/e2e/legacy.spec.ts', `import { expect, test } from '@playwright/test';
+  writeIn(repo.dir, 'openspec/quality-policy.md', policy);
+  writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
+  writeIn(repo.dir, 'tests/e2e/legacy.spec.ts', `import { expect, test } from '@playwright/test';
 
 test('古いテスト', { tag: ['@old', '@TP-009'] }, async ({ page }) => {
   await page.locator('.save').click();
   await expect(page.getByRole('status')).toHaveText('保存しました');
 });
 `);
-  write(repo, 'tests/e2e/edited.spec.ts', strongSpec('編集される古いテスト', ['@old', '@TP-010']));
+  writeIn(repo.dir, 'tests/e2e/edited.spec.ts', strongSpec('編集される古いテスト', ['@old', '@TP-010']));
   repo.commit('base');
   const base = repo.git(['rev-parse', 'HEAD']).trim();
-  write(repo, 'tests/e2e/edited.spec.ts', `import { test } from '@playwright/test';
+  writeIn(repo.dir, 'tests/e2e/edited.spec.ts', `import { test } from '@playwright/test';
 
 test('編集される古いテスト', { tag: ['@old', '@TP-010'] }, async ({ page }) => {
   await page.getByRole('button', { name: '保存' }).click();
 });
 `);
-  write(repo, 'tests/e2e/tagged.spec.ts', `import { expect, test } from '@playwright/test';
+  writeIn(repo.dir, 'tests/e2e/tagged.spec.ts', `import { expect, test } from '@playwright/test';
 
 test('新しい TP', { tag: ['@demo', '@TP-001'] }, async ({ page }) => {
   await expect(page.getByRole('heading')).toBeVisible();
@@ -199,13 +174,13 @@ test('dynamic titles and non-literal bodies are not skipped, and postfix increme
 test('a suppression cannot cover a whole describe and helper methods need a page object receiver', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/pages/form.ts', `import { expect } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/pages/form.ts', `import { expect } from '@playwright/test';
 export class FormPage {
   constructor(page) { this.page = page; }
   async fill(value) { await expect(this.page.getByRole('status')).toHaveText(value); }
 }
 `);
-    write(repo, 'tests/e2e/group.spec.ts', `import { expect, test } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/group.spec.ts', `import { expect, test } from '@playwright/test';
 import { FormPage } from './pages/form';
 
 // e2e-lint-allow fixed-wait RES-1: グループ全体
@@ -226,7 +201,7 @@ test('Page Object の fill は数える', { tag: ['@demo', '@TP-003'] }, async (
   await new FormPage(page).fill('b');
 });
 `);
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved]));
     repo.commit('describe');
     const result = lintRepo(repo.dir, [change()], { phase: 'final', env: {} });
     assert.deepEqual(brief(result.enforced), ['fixed-wait:7:待つ', 'missing-assertion:12:別の fill は数えない']);
@@ -240,7 +215,7 @@ test('Page Object の fill は数える', { tag: ['@demo', '@TP-003'] }, async (
 test('assertions through exported page objects and helpers under the E2E root count', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
     cpSync(join(fixtures, 'root'), join(repo.dir, 'tests/e2e'), { recursive: true });
     repo.commit('fixtures');
     const result = lintRepo(repo.dir, [], { phase: 'plan', env: {} });
@@ -308,7 +283,7 @@ test('missing policy fields use defaults, invalid fields fail, and tagged source
     assert.match(result.notes.join('\n'), /QE_E2E_LINT_MODE.*無視/);
 
     const all = shippedPolicy.replace(/^e2e_lint_scope:.*$/m, 'e2e_lint_scope: all');
-    write(env.repo, 'openspec/quality-policy.md', all);
+    writeIn(env.repo.dir, 'openspec/quality-policy.md', all);
     const wide = lintRepo(env.repo.dir, [change()], { phase: 'plan', base: env.base, env: {} });
     assert.ok(files(wide.enforced).includes('forbidden-locator:tests/e2e/legacy.spec.ts'));
   } finally {
@@ -334,9 +309,9 @@ test('legacy spec-driven-e2e changes default to warn and accept the environment 
 test('suppressions need a human-approved residual and only cover the next statement or test', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/quality-policy.md', shippedPolicy);
-    write(repo, 'tests/e2e/banner.spec.ts', fixture('suppress/banner.spec.ts'));
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved, unapproved]));
+    writeIn(repo.dir, 'openspec/quality-policy.md', shippedPolicy);
+    writeIn(repo.dir, 'tests/e2e/banner.spec.ts', fixture('suppress/banner.spec.ts'));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved, unapproved]));
     repo.commit('suppressions');
     const final = lintRepo(repo.dir, [change()], { phase: 'final', env: {} });
     assert.deepEqual(brief(final.exceptions), ['fixed-wait:32:効力は直後の 1 文だけ', 'missing-assertion:24:テスト単位の抑止', 'weak-assertion:3:承認済みの例外']);
@@ -369,7 +344,7 @@ test('suppressions need a human-approved residual and only cover the next statem
 test('an unused suppression without a residual still fails in both phases', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/unused.spec.ts', `import { expect, test } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/unused.spec.ts', `import { expect, test } from '@playwright/test';
 
 test('理由だけの抑止', { tag: ['@demo', '@TP-001'] }, async ({ page }) => {
   // e2e-lint-allow weak-assertion: 理由だけ
@@ -389,8 +364,8 @@ test('理由だけの抑止', { tag: ['@demo', '@TP-001'] }, async ({ page }) =>
 test('an unparseable file in scope fails closed', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/broken.spec.ts', fixture('rules/unterminated.bad.spec.ts'));
-    write(repo, 'tests/e2e/flow.feature', 'Feature: @demo\n');
+    writeIn(repo.dir, 'tests/e2e/broken.spec.ts', fixture('rules/unterminated.bad.spec.ts'));
+    writeIn(repo.dir, 'tests/e2e/flow.feature', 'Feature: @demo\n');
     repo.commit('broken');
     const result = lintRepo(repo.dir, [change()], { phase: 'plan', env: {} });
     assert.deepEqual(files(result.enforced), ['unparseable:tests/e2e/broken.spec.ts']);
@@ -403,7 +378,7 @@ test('an unparseable file in scope fails closed', () => {
 test('excluded tests do not implement a planned TP at test level', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/skip.spec.ts', fixture('rules/excluded.bad.spec.ts'));
+    writeIn(repo.dir, 'tests/e2e/skip.spec.ts', fixture('rules/excluded.bad.spec.ts'));
     repo.commit('skip');
     const result = lintChange(repo.dir, change(), { phase: 'plan', env: {}, tpIds: ['TP-001', 'TP-003'] });
     const text = result.failures.join('\n');
@@ -416,8 +391,8 @@ test('excluded tests do not implement a planned TP at test level', () => {
 
 function gateRepo() {
   const { repo, base } = scopeRepo();
-  write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
-  write(repo, 'openspec/changes/demo/test-plan.md', `---
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: required
 ---
 ## E2E観点一覧
@@ -425,8 +400,8 @@ e2e: required
 |-------|-------------|----------|------|--------|---------|--------|----------|
 | TP-001 | r | s | R1 | O1 | none | i | e |
 `);
-  write(repo, 'openspec/changes/na/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
-  write(repo, 'openspec/changes/na/test-plan.md', '---\ne2e: not-applicable\nreason: 画面なし\n---\n');
+  writeIn(repo.dir, 'openspec/changes/na/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+  writeIn(repo.dir, 'openspec/changes/na/test-plan.md', '---\ne2e: not-applicable\nreason: 画面なし\n---\n');
   repo.commit('changes');
   return { repo, base };
 }
@@ -454,7 +429,7 @@ test('check runs the lint once per file for required changes and not for not-app
 test('testkit-gate lint separates enforced and warned findings and keeps exit codes', () => {
   const { repo, base } = gateRepo();
   try {
-    const run = args => spawnSync(process.execPath, [gate, ...args], { cwd: repo.dir, encoding: 'utf8', env: { ...process.env, QE_E2E_LINT_MODE: '' } });
+    const run = args => runGate(repo.dir, args, { env: { ...process.env, QE_E2E_LINT_MODE: '' } });
     const failed = run(['lint', '--base', base]);
     assert.equal(failed.status, 1, failed.stdout + failed.stderr);
     assert.match(failed.stdout, /強制範囲[\s\S]*✗ e2e-lint weak-assertion tests\/e2e\/tagged\.spec\.ts:3[\s\S]*警告範囲[\s\S]*! e2e-lint forbidden-locator tests\/e2e\/legacy\.spec\.ts:4/);
@@ -464,8 +439,8 @@ test('testkit-gate lint separates enforced and warned findings and keeps exit co
     assert.equal(run(['lint', '--base']).status, 2);
     assert.equal(run(['lint', '--base', 'refs/does-not-exist']).status, 2);
 
-    write(repo, 'tests/e2e/tagged.spec.ts', strongSpec('新しい TP', ['@demo', '@TP-001']));
-    write(repo, 'tests/e2e/edited.spec.ts', strongSpec('編集される古いテスト', ['@old', '@TP-010']));
+    writeIn(repo.dir, 'tests/e2e/tagged.spec.ts', strongSpec('新しい TP', ['@demo', '@TP-001']));
+    writeIn(repo.dir, 'tests/e2e/edited.spec.ts', strongSpec('編集される古いテスト', ['@old', '@TP-010']));
     repo.commit('fix');
     const clean = run(['lint', '--base', base]);
     assert.equal(clean.status, 0, clean.stdout + clean.stderr);
@@ -481,8 +456,8 @@ test('testkit-gate lint separates enforced and warned findings and keeps exit co
 test('the CI job passes the merge-base so changed files are enforced', async () => {
   const { repo, base } = gateRepo();
   try {
-    write(repo, 'package-lock.json', '{}\n');
-    write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'package-lock.json', '{}\n');
+    writeIn(repo.dir, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
     repo.commit('lock');
     const result = await runCiJob({
       WORKING_DIRECTORY: '.',
@@ -505,16 +480,17 @@ test('install ships the lint without touching package.json or an edited policy, 
   try {
     const pkg = '{\n  "name": "target",\n  "private": true\n}\n';
     const policy = shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, '').replace('# AI Quality Policy', '# AI Quality Policy (edited)');
-    write(repo, 'package.json', pkg);
-    write(repo, 'openspec/quality-policy.md', policy);
-  write(repo, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    writeIn(repo.dir, 'package.json', pkg);
+    writeIn(repo.dir, 'openspec/quality-policy.md', policy);
+  writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/.openspec.yaml', 'schema: spec-driven-e2e\n');
     const installed = await capture(main, ['install', '--force', '--target', repo.dir]);
     assert.equal(installed.code, 0, installed.text);
     assert.equal(readFileSync(join(repo.dir, 'package.json'), 'utf8'), pkg);
     assert.equal(readFileSync(join(repo.dir, 'openspec/quality-policy.md'), 'utf8'), policy);
-    assert.match(readFileSync(join(repo.dir, 'scripts/lib/e2e-lint.mjs'), 'utf8'), /export function lintRepo/);
+    assert.match(readFileSync(join(repo.dir, 'scripts/lib/e2e-lint/repo.mjs'), 'utf8'), /export function lintRepo/);
     const stamp = JSON.parse(readFileSync(join(repo.dir, '.openspec-custom-testkit.json'), 'utf8'));
     assert.ok(stamp.files['scripts/lib/e2e-lint.mjs']);
+    assert.ok(stamp.files['scripts/lib/e2e-lint/repo.mjs']);
     const result = doctor(repo.dir);
     assert.match(result.notes.join('\n'), /e2e_lint_mode \/ e2e_lint_scope がありません/);
     assert.equal(result.notes.filter(line => line.includes('e2e_lint_mode')).length, 1);
@@ -541,14 +517,14 @@ test('review regressions: TS non-null division, control regex, TSX generics, and
 test('fixture-injected Page Objects resolve through test imports, aliases, and chained extend', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/pages/checkout.ts', `import { expect } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/pages/checkout.ts', `import { expect } from '@playwright/test';
 export class CheckoutPage {
   verifyTotal() { expect(10).toBe(10); }
   verifyVisible() { expect(true).toBeTruthy(); }
   submit() { this.page.getByRole('button').click(); }
 }
 `);
-    write(repo, 'tests/e2e/fixtures/base.ts', `import { test as base } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/fixtures/base.ts', `import { test as base } from '@playwright/test';
 import { CheckoutPage as PageObject } from '../pages/checkout';
 export const test = base.extend<{ checkoutPage: PageObject }>({
   checkoutPage: async ({ page }, use) => {
@@ -558,7 +534,7 @@ export const test = base.extend<{ checkoutPage: PageObject }>({
   directPage: async ({ page }, use) => { await use(new PageObject(page)); },
 });
 `);
-    write(repo, 'tests/e2e/injected.spec.ts', `import { test as it2 } from './fixtures/base';
+    writeIn(repo.dir, 'tests/e2e/injected.spec.ts', `import { test as it2 } from './fixtures/base';
 const extended = it2.extend({ value: 1 });
 it2('strong @demo @TP-001', async ({ checkoutPage }) => checkoutPage.verifyTotal());
 extended('alias @demo @TP-002', async ({ directPage: checkout }) => checkout.verifyTotal());
@@ -581,13 +557,13 @@ overridden('override @demo @TP-006', async ({ checkoutPage }) => checkoutPage.ve
 test('trailing suppressions never apply to the following statement', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/trailing.spec.ts', `test('trailing @demo @TP-001', async ({ page }) => {
+    writeIn(repo.dir, 'tests/e2e/trailing.spec.ts', `test('trailing @demo @TP-001', async ({ page }) => {
   await page.waitForTimeout(1); // e2e-lint-allow fixed-wait RES-1: trailing
   await page.waitForTimeout(2);
   expect(1).toBe(1);
 });
 `);
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved]));
     const result = lintRepo(repo.dir, [change()], { env: {} });
     assert.equal(result.exceptions.length, 0);
     assert.deepEqual(result.enforced.map(entry => entry.rule), ['fixed-wait', 'fixed-wait', 'invalid-suppression']);
@@ -598,7 +574,7 @@ test('trailing suppressions never apply to the following statement', () => {
 test('invalid suppressions fail outside enforced scope and in legacy warn mode', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/outside.spec.ts', `test('outside @old @TP-001', async ({ page }) => {
+    writeIn(repo.dir, 'tests/e2e/outside.spec.ts', `test('outside @old @TP-001', async ({ page }) => {
   // e2e-lint-allow fixed-wait RES-404: unknown
   await page.waitForTimeout(1);
   // e2e-lint-allow weak-assertion: missing
@@ -620,18 +596,18 @@ test('invalid suppressions fail outside enforced scope and in legacy warn mode',
 test('partial weak suppressions and incomplete approval never bypass final enforcement', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/weak.spec.ts', `test('weak @demo @TP-001', () => {
+    writeIn(repo.dir, 'tests/e2e/weak.spec.ts', `test('weak @demo @TP-001', () => {
   // e2e-lint-allow weak-assertion RES-1: first only
   expect(1).not.toBeUndefined();
   expect(true).toBeTruthy();
 });
 `);
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved]));
     assert.equal(lintRepo(repo.dir, [change()], { phase: 'final', env: {} }).failed, 1);
-    write(repo, 'tests/e2e/weak.spec.ts', `// e2e-lint-allow weak-assertion RES-1: test
+    writeIn(repo.dir, 'tests/e2e/weak.spec.ts', `// e2e-lint-allow weak-assertion RES-1: test
  test('weak @demo @TP-001', () => expect(1).not.toBeUndefined());`);
     for (const residual of [{ ...approved, impact: '' }, { ...approved, approved_at: '2026-02-30' }]) {
-      write(repo, 'openspec/changes/demo/evidence.md', evidence([residual]));
+      writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([residual]));
       assert.equal(lintRepo(repo.dir, [change()], { phase: 'plan', env: {} }).pending.length, 1);
       assert.equal(lintRepo(repo.dir, [change()], { phase: 'final', env: {} }).failed, 1);
     }
@@ -641,10 +617,10 @@ test('partial weak suppressions and incomplete approval never bypass final enfor
 test('invalid environment and policy keys are visible, and all scope has an accurate note', () => {
   const { repo } = scopeRepo();
   try {
-    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\ne2e_lint_scoep: all\n');
+    writeIn(repo.dir, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\ne2e_lint_scoep: all\n');
     const result = lintRepo(repo.dir, [change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e' })], { env: { QE_E2E_LINT_MODE: 'ENFORCE', QE_E2E_LINT_SCOPE: 'ALL' } });
     assert.match(result.notes.join('\n'), /e2e_lint_scope が不正[\s\S]*未知のキー[\s\S]*QE_E2E_LINT_MODE が不正[\s\S]*QE_E2E_LINT_SCOPE が不正/);
-    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: all\n');
+    writeIn(repo.dir, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: all\n');
     const all = lintRepo(repo.dir, [change()], { env: {} });
     assert.match(all.notes.join('\n'), /全ソースを強制/);
     assert.doesNotMatch(all.notes.join('\n'), /タグ範囲のみ/);
@@ -654,16 +630,16 @@ test('invalid environment and policy keys are visible, and all scope has an accu
 test('lint CLI fails on missing roots, zero source files, and unknown applicability', () => {
   const repo = gitRepo();
   try {
-    const run = () => spawnSync(process.execPath, [gate, 'lint'], { cwd: repo.dir, encoding: 'utf8' });
+    const run = () => runGate(repo.dir, ['lint']);
     assert.equal(run().status, 1);
     mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
     const empty = run();
     assert.equal(empty.status, 1);
     assert.match(empty.stdout, /analyzed 0 files/);
-    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    writeIn(repo.dir, 'tests/e2e/helper.ts', 'export const value = 1;');
     assert.equal(run().status, 0); // zero changes is valid when source inspection succeeded
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
     const unknown = run();
     assert.equal(unknown.status, 1);
     assert.match(unknown.stderr, /E2E 適用状態を判定できません/);
@@ -673,7 +649,7 @@ test('lint CLI fails on missing roots, zero source files, and unknown applicabil
 test('unreadable policy/evidence and failed diffs are reported as failures', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
+    writeIn(repo.dir, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
     repo.commit('base');
     const diff = lintRepo(repo.dir, [change()], { base: 'missing-ref', env: {} });
     assert.match(diff.enforced[0].text, /差分を取得できません/);
@@ -682,9 +658,9 @@ test('unreadable policy/evidence and failed diffs are reported as failures', () 
     const result = lintRepo(repo.dir, [change()], { env: {} });
     assert.equal(result.failed, 2);
     assert.match(result.enforced.map(entry => entry.text).join('\n'), /quality-policy.md を読み取れません[\s\S]*evidence.md を読み取れません/);
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
-    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
     repo.commit('inputs');
     const ci = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', TEST_COMMAND: 'echo ok' }, { cwd: repo.dir, execFile: () => '' });
     assert.notEqual(ci.code, 0);
@@ -695,15 +671,15 @@ test('unreadable policy/evidence and failed diffs are reported as failures', () 
 test('CLI final reports pending/approved exceptions and check returns a failure', () => {
   const { repo } = gateRepo();
   try {
-    write(repo, 'tests/e2e/banner.spec.ts', fixture('suppress/banner.spec.ts'));
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved, unapproved]));
-    const run = (command, phase) => spawnSync(process.execPath, [gate, command, '--phase', phase, 'demo'], { cwd: repo.dir, encoding: 'utf8' });
+    writeIn(repo.dir, 'tests/e2e/banner.spec.ts', fixture('suppress/banner.spec.ts'));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved, unapproved]));
+    const run = (command, phase) => runGate(repo.dir, [command, '--phase', phase, 'demo']);
     assert.match(run('lint', 'plan').stdout, /承認待ち RES-2/);
     const final = run('lint', 'final');
     assert.equal(final.status, 1);
     assert.match(final.stdout, /承認済みの例外 RES-1/);
     assert.match(final.stdout, /抑止は無効.*approved_by/);
-    write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 plan\n');
     const check = run('check', 'plan');
     assert.equal(check.status, 1);
     assert.match(check.stdout, /✗ e2e-lint/);
@@ -714,8 +690,8 @@ test('CLI final reports pending/approved exceptions and check returns a failure'
 test('approved archived exceptions remain valid when linting a different change', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
-    write(repo, 'tests/e2e/old.spec.ts', `test('old @old @TP-001', async ({ page }) => {
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'tests/e2e/old.spec.ts', `test('old @old @TP-001', async ({ page }) => {
   // e2e-lint-allow fixed-wait RES-1: approved previously
   await page.waitForTimeout(1);
   expect(1).toBe(1);
@@ -778,12 +754,12 @@ test('CommonJS, namespace, direct aliases and exported extensions retain test ru
 test('fixture shorthand, re-exports, named custom tests and function callbacks resolve Page Objects', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/pages/checkout.ts', 'export class CheckoutPage { verifyTotal() { expect(10).toBe(10); } submit() {} }');
-    write(repo, 'tests/e2e/base.ts', `import { test as base } from '@playwright/test';
+    writeIn(repo.dir, 'tests/e2e/pages/checkout.ts', 'export class CheckoutPage { verifyTotal() { expect(10).toBe(10); } submit() {} }');
+    writeIn(repo.dir, 'tests/e2e/base.ts', `import { test as base } from '@playwright/test';
 import { CheckoutPage } from './pages/checkout';
 export const myTest = base.extend({ async checkoutPage({ page }, use) { await use(new CheckoutPage(page)); } });`);
-    write(repo, 'tests/e2e/barrel.ts', "export { myTest as test } from './base';");
-    write(repo, 'tests/e2e/good.spec.ts', `import { test } from './barrel';
+    writeIn(repo.dir, 'tests/e2e/barrel.ts', "export { myTest as test } from './base';");
+    writeIn(repo.dir, 'tests/e2e/good.spec.ts', `import { test } from './barrel';
 import { myTest } from './base';
 const alias = test;
 test('@demo @TP-001', async function ({ checkoutPage }) { checkoutPage.verifyTotal(); });
@@ -798,29 +774,29 @@ myTest('@demo @TP-004', async function ({ checkoutPage }) { checkoutPage.submit(
 test('residual lookup ignores comment tags and includes selected approvals for historical test tags', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([{ ...unapproved, id: 'RES-1' }, { ...approved, id: 'RES-NEW' }]));
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([{ ...unapproved, id: 'RES-1' }, { ...approved, id: 'RES-NEW' }]));
     const source = tag => `// related: @old
 // e2e-lint-allow weak-assertion RES-1: display
  test('${tag} @TP-001', () => expect(true).toBeTruthy());`;
-    write(repo, 'tests/e2e/test.spec.ts', source('@demo'));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', source('@demo'));
     let result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.exceptions.length, 0);
     assert.match(result.enforced[0].text, /人間の承認がありません/);
-    write(repo, 'tests/e2e/test.spec.ts', source('@old'));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', source('@old'));
     result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.exceptions.length, 0);
     assert.match(result.warned[0].text, /人間の承認がありません/);
-    write(repo, 'tests/e2e/test.spec.ts', source('@demo'));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', source('@demo'));
     // A comment cannot borrow an archived ID even when selected evidence lacks that ID.
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([{ ...approved, id: 'RES-NEW' }]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([{ ...approved, id: 'RES-NEW' }]));
     result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.exceptions.length, 0);
     assert.match(result.enforced[0].text, /residuals にありません/);
-    write(repo, 'tests/e2e/test.spec.ts', source('@demo') + strongSpec('unrelated historical test', ['@old', '@TP-002']));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', source('@demo') + strongSpec('unrelated historical test', ['@old', '@TP-002']));
     result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.exceptions.length, 0); // Another test in the file cannot grant approval either.
-    write(repo, 'tests/e2e/test.spec.ts', source('@old').replace('RES-1', 'RES-NEW'));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', source('@old').replace('RES-1', 'RES-NEW'));
     result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
     assert.equal(result.failed, 0);
     assert.equal(result.exceptions.length, 1);
@@ -830,8 +806,8 @@ test('residual lookup ignores comment tags and includes selected approvals for h
 test('untagged helper exceptions survive later changes and no-change lint, but ambiguous IDs fail', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
-    write(repo, 'tests/e2e/pages/old.ts', `export async function wait(page) {
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'tests/e2e/pages/old.ts', `export async function wait(page) {
 // e2e-lint-allow fixed-wait RES-1: inherited exception
 await page.waitForTimeout(1);
 }`);
@@ -840,7 +816,7 @@ await page.waitForTimeout(1);
       assert.equal(result.failed, 0);
       assert.equal(result.exceptions.length, 1);
     }
-    write(repo, 'openspec/changes/archive/2026-02-01-other/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/archive/2026-02-01-other/evidence.md', evidence([approved]));
     const ambiguous = lintRepo(repo.dir, [], { env: {} });
     assert.equal(ambiguous.failed, 1);
     assert.match(ambiguous.enforced[0].text, /参照先が複数/);
@@ -850,8 +826,8 @@ await page.waitForTimeout(1);
 test('malformed evidence reports JSON errors and cached evidence failures stay scoped to consulted changes', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
-    write(repo, 'openspec/changes/demo/evidence.md', '## Execution Records\n```json\n{ broken\n```\n');
+    writeIn(repo.dir, 'tests/e2e/good.spec.ts', strongSpec('good', ['@demo', '@TP-001']));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', '## Execution Records\n```json\n{ broken\n```\n');
     const cache = {};
     const broken = lintRepo(repo.dir, [change()], { env: {}, cache });
     assert.match(broken.enforced.map(item => item.text).join('\n'), /JSON が不正/);
@@ -863,8 +839,8 @@ test('malformed evidence reports JSON errors and cached evidence failures stay s
 test('block suppressions must occupy an independent line', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
-    write(repo, 'tests/e2e/inline.ts', `/* e2e-lint-allow fixed-wait RES-1: same line */ await page.waitForTimeout(1);`);
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'tests/e2e/inline.ts', `/* e2e-lint-allow fixed-wait RES-1: same line */ await page.waitForTimeout(1);`);
     const result = lintRepo(repo.dir, [change()], { env: {} });
     assert.equal(result.exceptions.length, 0);
     assert.match(result.enforced.map(item => item.text).join('\n'), /独立した行/);
@@ -874,15 +850,15 @@ test('block suppressions must occupy an independent line', () => {
 test('invalid lint settings fail clean source lint while an absent policy is quiet', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
-    const run = env => spawnSync(process.execPath, [gate, 'lint', 'demo'], { cwd: repo.dir, encoding: 'utf8', env: { ...process.env, ...env } });
+    writeIn(repo.dir, 'tests/e2e/helper.ts', 'export const value = 1;');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    const run = env => runGate(repo.dir, ['lint', 'demo'], { env: { ...process.env, ...env } });
     const noPolicy = lintRepo(repo.dir, [], { env: {} });
     assert.doesNotMatch(noPolicy.notes.join('\n'), /e2e_lint_mode.*ありません/);
     for (const env of [{ QE_E2E_LINT_MODE: 'ENFORCE' }, { QE_E2E_LINT_SCOPE: 'ALL' }]) {
       assert.equal(run(env).status, 1);
     }
-    write(repo, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\n');
+    writeIn(repo.dir, 'openspec/quality-policy.md', 'e2e_lint_mode: enforce\ne2e_lint_scope: ALL\n');
     assert.equal(run({}).status, 1);
   } finally { repo.cleanup(); }
 });
@@ -890,11 +866,11 @@ test('invalid lint settings fail clean source lint while an absent policy is qui
 test('lint permits pending plans and reports unknown applicability once', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    const run = command => spawnSync(process.execPath, [gate, command, 'demo'], { cwd: repo.dir, encoding: 'utf8' });
+    writeIn(repo.dir, 'tests/e2e/helper.ts', 'export const value = 1;');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    const run = command => runGate(repo.dir, [command, 'demo']);
     for (const command of ['select', 'check', 'lint']) assert.equal(run(command).status, 0, command);
-    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '---\ne2e: typo\n---\n');
     const unknown = run('lint');
     assert.equal(unknown.status, 1);
     assert.equal(unknown.stderr.trim().split('\n').length, 1);
@@ -905,7 +881,7 @@ test('lint permits pending plans and reports unknown applicability once', () => 
 test('CI writes a failure summary and unknown risk when quality.md cannot be read', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
     mkdirSync(join(repo.dir, 'openspec/changes/demo/quality.md'));
     repo.commit('change');
     const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') }, { cwd: repo.dir });
@@ -920,8 +896,8 @@ test('CI reports unknown risk instead of none when quality.md frontmatter is mal
   for (const quality of ['---\nrisk_level: high\n', '---\nrisk_level: high\nfoo: [\n---\n', '---\nrisk_level: HIGH\n---\n', '---\ntitle: x\n---\n']) {
     const repo = gitRepo();
     try {
-      write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
-      write(repo, 'openspec/changes/demo/quality.md', quality);
+      writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n');
+      writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality);
       repo.commit('change');
       const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') }, { cwd: repo.dir });
       assert.equal(result.code, 1, quality);
@@ -934,7 +910,7 @@ test('CI reports unknown risk instead of none when quality.md frontmatter is mal
 test('gate preserves known risk on filesystem failures and rethrows internal type errors', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', '---\nrisk_level: high\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', '---\nrisk_level: high\n---\n');
     mkdirSync(join(repo.dir, 'openspec/changes/demo/evidence.md'));
     const result = evaluateChange(repo.dir, change(), { phase: 'final', plan: false });
     assert.equal(result.level, 'high');
@@ -948,7 +924,7 @@ test('gate preserves known risk on filesystem failures and rethrows internal typ
 test('describe hooks and file-level functions cannot borrow unrelated archived approvals', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
     const wait = `// e2e-lint-allow fixed-wait RES-1: exception
 await page.waitForTimeout(500);`;
     const sources = [
@@ -968,15 +944,15 @@ ${wait}
 test('untagged spec', () => expect(1).toBe(1));`,
     ];
     for (const source of sources) {
-      write(repo, 'tests/e2e/test.spec.ts', source);
+      writeIn(repo.dir, 'tests/e2e/test.spec.ts', source);
       const result = lintRepo(repo.dir, [change()], { env: {}, phase: 'final' });
       assert.equal(result.exceptions.length, 0, source);
       assert.match(result.enforced.map(item => item.text).join('\n'), /RES-1 が evidence の residuals にありません/, source);
     }
     // An unrelated test must not widen a tagged describe's ownership either.
-    write(repo, 'tests/e2e/test.spec.ts', sources[0] + strongSpec('old', ['@old', '@TP-002']));
+    writeIn(repo.dir, 'tests/e2e/test.spec.ts', sources[0] + strongSpec('old', ['@old', '@TP-002']));
     assert.equal(lintRepo(repo.dir, [change()], { env: {} }).exceptions.length, 0);
-    write(repo, 'openspec/changes/demo/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', evidence([approved]));
     assert.equal(lintRepo(repo.dir, [change()], { env: {}, phase: 'final' }).exceptions.length, 1);
   } finally { repo.cleanup(); }
 });
@@ -1009,9 +985,9 @@ test('historical evidence without Execution Records is empty, but selected or ma
   const repo = gitRepo();
   try {
     const legacy = change({ id: 'legacy', path: 'openspec/changes/archive/2026-01-01-legacy' });
-    write(repo, `${legacy.path}/evidence.md`, '# Evidence\n## Test Results\nLegacy evidence\n');
-    write(repo, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
-    write(repo, 'tests/e2e/helper.ts', `export async function wait(page) {
+    writeIn(repo.dir, `${legacy.path}/evidence.md`, '# Evidence\n## Test Results\nLegacy evidence\n');
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-01-old/evidence.md', evidence([approved]));
+    writeIn(repo.dir, 'tests/e2e/helper.ts', `export async function wait(page) {
 // e2e-lint-allow fixed-wait RES-1: inherited
 await page.waitForTimeout(500);
 }`);
@@ -1025,12 +1001,12 @@ await page.waitForTimeout(500);
       }
     }
     // A near-miss heading must not hide a duplicate Residual ID as if the evidence were legacy.
-    write(repo, 'openspec/changes/archive/2026-01-02-other/evidence.md', evidence([{ id: 'RES-1' }]).replace('## Execution Records', '## Execution Records (CI)'));
+    writeIn(repo.dir, 'openspec/changes/archive/2026-01-02-other/evidence.md', evidence([{ id: 'RES-1' }]).replace('## Execution Records', '## Execution Records (CI)'));
     const variant = lintRepo(repo.dir, [], { env: {} });
     assert.equal(variant.failed, 1);
     assert.match(variant.enforced[0].text, /見出しが不正/);
     rmSync(join(repo.dir, 'openspec/changes/archive/2026-01-02-other'), { recursive: true });
-    write(repo, `${legacy.path}/evidence.md`, '## Execution Records\n```json\n{ broken\n```\n');
+    writeIn(repo.dir, `${legacy.path}/evidence.md`, '## Execution Records\n```json\n{ broken\n```\n');
     const malformed = lintRepo(repo.dir, [], { env: {} });
     assert.equal(malformed.failed, 1);
     assert.match(malformed.enforced[0].text, /JSON が不正/);
@@ -1041,7 +1017,7 @@ test('doctor rejects invalid lint policy values and unknown keys', () => {
   const repo = gitRepo();
   try {
     for (const setting of ['e2e_lint_mode: ENFORCE', 'e2e_lint_scope: ALL', 'e2e_lint_scop: all']) {
-      write(repo, 'openspec/quality-policy.md', shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, '') + `\n${setting}\n`);
+      writeIn(repo.dir, 'openspec/quality-policy.md', shippedPolicy.replace(/^e2e_lint_(mode|scope):.*\n/gm, '') + `\n${setting}\n`);
       const result = doctor(repo.dir);
       assert.equal(result.ok, false);
       assert.match(result.failures.join('\n'), /e2e_lint_.*(?:不正|未知)|未知.*e2e_lint_/);
@@ -1053,7 +1029,7 @@ test('doctor rejects invalid lint policy values and unknown keys', () => {
 test('invalid environment settings are diagnosed even when no changes are selected', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/helper.ts', 'export const value = 1;');
+    writeIn(repo.dir, 'tests/e2e/helper.ts', 'export const value = 1;');
     for (const env of [{ QE_E2E_LINT_MODE: 'ENFORCE' }, { QE_E2E_LINT_SCOPE: 'ALL' }]) {
       const result = lintRepo(repo.dir, [], { env });
       assert.equal(result.failed, 1);
@@ -1078,8 +1054,8 @@ test('CI catches internal evaluator errors, evaluates remaining changes, and wri
   const repo = gitRepo();
   try {
     for (const id of ['a', 'b']) {
-      write(repo, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
-      write(repo, `openspec/changes/${id}/quality.md`, '---\nrisk_level: low\n---\n');
+      writeIn(repo.dir, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
+      writeIn(repo.dir, `openspec/changes/${id}/quality.md`, '---\nrisk_level: low\n---\n');
     }
     repo.commit('changes');
     const evaluated = [];
@@ -1104,10 +1080,10 @@ test('known high risk survives unknown changes and still requires and runs mutat
   assert.equal(maxLevel(['low', 'unknown']), 'unknown');
   const repo = gitRepo();
   try {
-    for (const id of ['a', 'b']) write(repo, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/a/quality.md', '---\nrisk_level: high\n---\n');
+    for (const id of ['a', 'b']) writeIn(repo.dir, `openspec/changes/${id}/.openspec.yaml`, 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/a/quality.md', '---\nrisk_level: high\n---\n');
     // A committed file keeps b selected while its working-tree input becomes unreadable.
-    write(repo, 'openspec/changes/b/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'openspec/changes/b/tasks.md', '- [ ] 1.1 plan\n');
     repo.commit('changes');
     mkdirSync(join(repo.dir, 'openspec/changes/b/quality.md'));
     const env = { BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', GITHUB_OUTPUT: join(repo.dir, 'output') };

@@ -12,32 +12,9 @@ import { parseTable, section } from '../payload/scripts/lib/markdown.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
 import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { gitRepo } from './support.mjs';
+import { changeFixture, gitRepo, writeIn } from './support.mjs';
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'demo',
-    path: 'openspec/changes/demo',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'not-applicable',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    fallback: false,
-    skipSpecs: true,
-    pendingPlan: false,
-    tasksText: '- [x] 1.1 a\n- [x] 2.1 b\n- [x] 3.1 c\n- [x] 4.1 d\n- [x] 5.1 e\n',
-    ...over,
-  };
-}
+const change = (over = {}) => changeFixture({ e2e: 'not-applicable', skipSpecs: true, tasksText: '- [x] 1.1 a\n- [x] 2.1 b\n- [x] 3.1 c\n- [x] 4.1 d\n- [x] 5.1 e\n', ...over });
 
 function results(specs) {
   return {
@@ -154,8 +131,8 @@ function evidenceRepo(level) {
   writeFileSync(join(repo.dir, 'test-results/run.json'), '{}\n');
   const digest = digestForSchema(repo.dir, 'quality-driven-e2e', ['tests/oracle/demo']).digest;
   const revision = repo.git(['rev-parse', 'HEAD']).trim();
-  write(repo, 'openspec/quality-policy.md', 'mutation_threshold_high: 70\n| Oracle の seal | 必須 | 必須 | 必須 |\n| Falsification レビュー | 必須 | 必須 | 必須 |\n');
-  write(repo, 'openspec/changes/demo/quality.md', `---
+  writeIn(repo.dir, 'openspec/quality-policy.md', 'mutation_threshold_high: 70\n| Oracle の seal | 必須 | 必須 | 必須 |\n| Falsification レビュー | 必須 | 必須 | 必須 |\n');
+  writeIn(repo.dir, 'openspec/changes/demo/quality.md', `---
 risk_level: ${level}
 approved_by: "FIXTURE-DUMMY-APPROVAL"
 approved_at: "2026-09-22"
@@ -186,7 +163,7 @@ oracle_digest: "${digest}"
 ## Residual Risk
 - なし
 `);
-  write(repo, 'openspec/changes/demo/test-plan.md', `---
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: not-applicable
 reason: 画面なし
 alternative_verification:
@@ -219,7 +196,7 @@ alternative_verification:
 }
 
 function putEvidence(ctx, data, prose = '- なし') {
-  write(ctx.repo, 'openspec/changes/demo/evidence.md', `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n## Oracle Changes\n${prose}\n`);
+  writeIn(ctx.repo.dir, 'openspec/changes/demo/evidence.md', `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n## Oracle Changes\n${prose}\n`);
 }
 
 test('falsification, residual, review, and mutation fail independently', () => {
@@ -311,8 +288,8 @@ test('evidence separates structure from execution and keeps legacy risk-id check
     const stale = evaluateChange(ctx.repo.dir, change(), { phase: 'final', tags: false });
     assert.ok(stale.failures.some(line => line.includes('digest が現在の seal と一致しません')));
 
-    write(ctx.repo, 'openspec/changes/legacy/quality.md', '| R1 | low |\n| R2 | low |\n');
-    write(ctx.repo, 'openspec/changes/legacy/evidence.md', 'R1 だけを書いた\n');
+    writeIn(ctx.repo.dir, 'openspec/changes/legacy/quality.md', '| R1 | low |\n| R2 | low |\n');
+    writeIn(ctx.repo.dir, 'openspec/changes/legacy/evidence.md', 'R1 だけを書いた\n');
     const legacy = evaluateChange(ctx.repo.dir, change({
       id: 'legacy',
       path: 'openspec/changes/legacy',
@@ -334,7 +311,7 @@ test('evidence separates structure from execution and keeps legacy risk-id check
 test('archived integrated evidence is final and a non-archive rename stays a delete', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/move/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/move/.openspec.yaml', 'schema: quality-driven-e2e\n');
     repo.commit('base');
     const base = repo.git(['rev-parse', 'HEAD']).trim();
     repo.git(['mv', 'openspec/changes/move', 'openspec/changes/renamed']);
@@ -357,7 +334,7 @@ test('archived integrated evidence is final and a non-archive rename stays a del
 test('plan negatives cover layer conflict, duplicate TP, and an unassigned scenario', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', `---
 risk_level: low
 approved_by: ""
 approved_at: ""
@@ -388,8 +365,8 @@ oracle_digest: ""
 ## Residual Risk
 - なし
 `);
-    write(repo, 'openspec/changes/demo/specs/demo/spec.md', '#### Scenario: Visible\n#### Scenario: Hidden\n');
-    write(repo, 'openspec/changes/demo/test-plan.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/specs/demo/spec.md', '#### Scenario: Visible\n#### Scenario: Hidden\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: not-applicable
 reason: 画面がない
 alternative_verification:
@@ -408,7 +385,7 @@ alternative_verification:
     const conflict = checkTestPlan(repo.dir, change({ e2e: 'not-applicable', skipSpecs: false, tasksText: null }));
     assert.ok(conflict.errors.some(line => line.includes('E2E 層')));
     assert.ok(conflict.errors.some(line => line.includes('重複')));
-    write(repo, 'openspec/changes/demo/test-plan.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: required
 ---
 ## E2E観点一覧
@@ -433,12 +410,12 @@ test('ci job keeps repo selection, saves failures, and does not reuse an older r
   try {
     const base = repo.git(['rev-parse', 'HEAD']).trim();
     mkdirSync(join(repo.dir, 'packages/app'), { recursive: true });
-    write(repo, 'packages/app/package-lock.json', '{}\n');
-    write(repo, 'openspec/changes/docs/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/docs/test-plan.md', '---\ne2e: not-applicable\nreason: 画面なし\n---\n');
-    write(repo, 'openspec/changes/docs/tasks.md', '- [x] 1.1 a\n- [x] 2.1 b\n');
-    write(repo, 'openspec/changes/ship/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/ship/quality.md', `---
+    writeIn(repo.dir, 'packages/app/package-lock.json', '{}\n');
+    writeIn(repo.dir, 'openspec/changes/docs/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/docs/test-plan.md', '---\ne2e: not-applicable\nreason: 画面なし\n---\n');
+    writeIn(repo.dir, 'openspec/changes/docs/tasks.md', '- [x] 1.1 a\n- [x] 2.1 b\n');
+    writeIn(repo.dir, 'openspec/changes/ship/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/ship/quality.md', `---
 risk_level: high
 approved_by: ""
 approved_at: ""
@@ -481,8 +458,8 @@ oracle_digest: ""
 
     const fresh = gitRepo();
     const freshBase = fresh.git(['rev-parse', 'HEAD']).trim();
-    write(fresh, 'openspec/changes/ui/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(fresh, 'openspec/changes/ui/test-plan.md', `---
+    writeIn(fresh.dir, 'openspec/changes/ui/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(fresh.dir, 'openspec/changes/ui/test-plan.md', `---
 e2e: required
 ---
 ## E2E観点一覧
@@ -491,7 +468,7 @@ e2e: required
 `);
     fresh.commit('ui');
     mkdirSync(join(fresh.dir, 'test-results/testkit/old'), { recursive: true });
-    write(fresh, 'test-results/testkit/old/results.json', '{"stats":{"startTime":"2020-01-01T00:00:00.000Z"},"suites":[]}\n');
+    writeIn(fresh.dir, 'test-results/testkit/old/results.json', '{"stats":{"startTime":"2020-01-01T00:00:00.000Z"},"suites":[]}\n');
     const stale = await runCiJob({
       WORKING_DIRECTORY: '.',
       BASE_REF: freshBase,
@@ -533,7 +510,7 @@ e2e: required
 test('a dynamic Playwright config is not executed', async () => {
   const repo = gitRepo();
   try {
-    write(repo, 'playwright.config.ts', 'export default async () => ({ testDir: process.env.DIR })\n');
+    writeIn(repo.dir, 'playwright.config.ts', 'export default async () => ({ testDir: process.env.DIR })\n');
     mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
     const lines = [];
     const code = await main(['install', '--force', '--target', repo.dir], {
@@ -583,7 +560,7 @@ test('invalid approval is rejected and an unfinished plan stays a warning', () =
     }), { phase: 'plan', tags: false, plan: false });
     assert.ok(pending.warnings.some(line => line.includes('計画途中')));
     assert.equal(pending.failures.length, 0);
-    write(repo, 'openspec/changes/demo/quality.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', `---
 risk_level: low
 approved_by: "FIXTURE-DUMMY-APPROVAL"
 approved_at: "2026/09/22"
@@ -606,9 +583,9 @@ test('each ci failure is still a failed job after the summary is saved', async (
   const repo = gitRepo();
   try {
     const base = repo.git(['rev-parse', 'HEAD']).trim();
-    write(repo, 'openspec/changes/oracle/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/oracle/tasks.md', '- [x] 2.1 impl\n');
-    write(repo, 'openspec/changes/oracle/quality.md', `---
+    writeIn(repo.dir, 'openspec/changes/oracle/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/oracle/tasks.md', '- [x] 2.1 impl\n');
+    writeIn(repo.dir, 'openspec/changes/oracle/quality.md', `---
 risk_level: low
 approved_by: "FIXTURE-DUMMY-APPROVAL"
 approved_at: "2026-09-22"
@@ -634,8 +611,8 @@ oracle_digest: ""
 
     const reportRepo = gitRepo();
     const reportBase = reportRepo.git(['rev-parse', 'HEAD']).trim();
-    write(reportRepo, 'openspec/changes/ui/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(reportRepo, 'openspec/changes/ui/test-plan.md', `---
+    writeIn(reportRepo.dir, 'openspec/changes/ui/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(reportRepo.dir, 'openspec/changes/ui/test-plan.md', `---
 e2e: required
 ---
 ## E2E観点一覧
@@ -677,8 +654,8 @@ test('doctor rejects an incomplete migration and passes after force repair', asy
   const repo = gitRepo();
   try {
     const baseline = readFileSync(new URL('../upstream/baselines/qe/payload/scripts/qe-gate.sh', import.meta.url));
-    write(repo, 'scripts/qe-gate.sh', baseline);
-    write(repo, '.openspec-quality-kit.json', JSON.stringify({ version: '9.9.9' }));
+    writeIn(repo.dir, 'scripts/qe-gate.sh', baseline);
+    writeIn(repo.dir, '.openspec-quality-kit.json', JSON.stringify({ version: '9.9.9' }));
     const lines = [];
     const first = await main(['install', '--target', repo.dir], {
       log: message => lines.push(String(message)),
@@ -711,7 +688,7 @@ test('committed evidence accepts the tested ancestor but rejects subsequent code
     putEvidence(ctx, ctx.data);
     ctx.repo.commit('record evidence');
     assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
-    write(ctx.repo, 'implementation.mjs', 'export const changed = true;');
+    writeIn(ctx.repo.dir, 'implementation.mjs', 'export const changed = true;');
     ctx.repo.commit('change implementation');
     assert.match(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n'), /revision/);
   } finally { ctx.repo.cleanup(); }
@@ -733,8 +710,8 @@ test('CI verifies the recorded command and exit code and leaves other commands u
   const ctx = evidenceRepo('low');
   try {
     const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
-    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
-    write(ctx.repo, 'openspec/changes/demo/tasks.md', change().tasksText);
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/tasks.md', change().tasksText);
     ctx.data.runs[0].command = 'printf "{}\\n"';
     ctx.repo.commit('tested inputs');
     ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
@@ -758,9 +735,9 @@ test('CI verifies a real node test rerun whose output bytes differ from the reco
   const ctx = evidenceRepo('low');
   try {
     const base = ctx.repo.git(['rev-parse', 'HEAD']).trim();
-    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
-    write(ctx.repo, 'openspec/changes/demo/tasks.md', change().tasksText);
-    write(ctx.repo, 'runner.test.mjs', "import test from 'node:test'; test('works', () => {});\n");
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/tasks.md', change().tasksText);
+    writeIn(ctx.repo.dir, 'runner.test.mjs', "import test from 'node:test'; test('works', () => {});\n");
     ctx.data.runs[0].command = 'node --test runner.test.mjs';
     ctx.repo.commit('inputs');
     ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
@@ -774,7 +751,7 @@ test('CI verifies a real node test rerun whose output bytes differ from the reco
     const manifest = JSON.parse(readFileSync(join(first.runDir, 'manifest.json'), 'utf8'));
     assert.notEqual(manifest.runs[0].source_sha256, ctx.data.runs[0].source_sha256);
     assert.match(first.lines.join('\n'), /execution: verified/);
-    write(ctx.repo, ctx.data.runs[0].source, readFileSync(join(first.runDir, 'test.log')));
+    writeIn(ctx.repo.dir, ctx.data.runs[0].source, readFileSync(join(first.runDir, 'test.log')));
     ctx.data.runs[0].source_sha256 = sha256File(join(ctx.repo.dir, ctx.data.runs[0].source));
     // Source artifacts are recorded with the evidence, after the tested inputs.
     putEvidence(ctx, ctx.data);
@@ -812,7 +789,7 @@ test('manifest coverage is separate from structure errors and requires full run 
 test('content-preserving archive moves do not invalidate a verified revision', () => {
   const ctx = evidenceRepo('low');
   try {
-    write(ctx.repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\nskip_specs: true\n');
     ctx.repo.commit('tested inputs');
     ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
     putEvidence(ctx, ctx.data);
@@ -826,7 +803,7 @@ test('content-preserving archive moves do not invalidate a verified revision', (
     });
     assert.deepEqual(evaluateChange(ctx.repo.dir, archived, { phase: 'final' }).failures, []);
     const qualityPath = 'openspec/changes/archive/2026-09-23-demo/quality.md';
-    write(ctx.repo, qualityPath, `${readFileSync(join(ctx.repo.dir, qualityPath), 'utf8')}\nchanged\n`);
+    writeIn(ctx.repo.dir, qualityPath, `${readFileSync(join(ctx.repo.dir, qualityPath), 'utf8')}\nchanged\n`);
     ctx.repo.commit('edit archived quality');
     assert.match(evaluateChange(ctx.repo.dir, archived, { phase: 'final' }).failures.join('\n'), /revision/);
   } finally { ctx.repo.cleanup(); }
@@ -838,15 +815,15 @@ test('revision validation accepts multiple evidence files and unrelated merge do
     ctx.repo.commit('inputs');
     ctx.data.runs[0].revision = ctx.repo.git(['rev-parse', 'HEAD']).trim();
     ctx.repo.git(['checkout', '-b', 'base-docs']);
-    write(ctx.repo, 'docs/unrelated.md', 'base documentation');
+    writeIn(ctx.repo.dir, 'docs/unrelated.md', 'base documentation');
     ctx.repo.commit('base changes');
     ctx.repo.git(['checkout', 'main']);
     putEvidence(ctx, ctx.data);
-    write(ctx.repo, 'openspec/changes/other/evidence.md', '# Other evidence');
+    writeIn(ctx.repo.dir, 'openspec/changes/other/evidence.md', '# Other evidence');
     ctx.repo.commit('two evidence records');
     ctx.repo.git(['-c', 'user.email=t@t', '-c', 'user.name=t', 'merge', '--no-ff', 'base-docs', '-m', 'PR merge']);
     assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
-    write(ctx.repo, 'openspec/changes/demo/test-plan.md', readFileSync(join(ctx.repo.dir, 'openspec/changes/demo/test-plan.md'), 'utf8') + '\nchanged inputs');
+    writeIn(ctx.repo.dir, 'openspec/changes/demo/test-plan.md', readFileSync(join(ctx.repo.dir, 'openspec/changes/demo/test-plan.md'), 'utf8') + '\nchanged inputs');
     ctx.repo.commit('change plan');
     assert.match(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures.join('\n'), /revision/);
   } finally { ctx.repo.cleanup(); }
@@ -870,14 +847,14 @@ test('revision failures name missing objects, non-ancestors, a broken stamp and 
     assert.doesNotMatch(missing, /検証対象と一致しません/);
 
     ctx.repo.git(['checkout', '-b', 'side']);
-    write(ctx.repo, 'side.txt', 'side');
+    writeIn(ctx.repo.dir, 'side.txt', 'side');
     ctx.repo.commit('side');
     const side = ctx.repo.git(['rev-parse', 'HEAD']).trim();
     ctx.repo.git(['checkout', 'main']);
     record(side, 'side evidence');
     assert.match(failures(), /HEAD の祖先ではありません/);
 
-    write(ctx.repo, '.openspec-custom-testkit.json', '{broken');
+    writeIn(ctx.repo.dir, '.openspec-custom-testkit.json', '{broken');
     record(tested, 'broken stamp');
     const stamp = failures();
     assert.match(stamp, /\.openspec-custom-testkit\.json が壊れています/);

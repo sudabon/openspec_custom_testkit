@@ -4,8 +4,8 @@ import { asString, validDate } from './frontmatter.mjs';
 import { markdownProse, planTables } from './markdown.mjs';
 import { qualityModel, tpRows } from './plan-check.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
-import { RISK_LEVELS } from './policy.mjs';
-import { SCHEMA_INTEGRATED } from './critical.mjs';
+import { readPolicyText, RISK_LEVELS } from './policy.mjs';
+import { isIntegratedChange } from './critical.mjs';
 
 const RANK = Object.fromEntries(RISK_LEVELS.map((level, index) => [level, index + 1]));
 
@@ -44,10 +44,6 @@ export function flakyVerdict(ids, levels, failLevels) {
 }
 
 const QUARANTINE_COLUMNS = ['TP-ID', 'Change', '理由', '担当', '期限', '代替'];
-
-export function utcDate(now) {
-  return new Date(now).toISOString().slice(0, 10);
-}
 
 function quarantineCell(row, column) {
   const value = asString(row[column]);
@@ -105,7 +101,7 @@ function readOptional(repo, rel) {
 
 // Reporter inputs beyond test-plan and results. Read errors propagate for integrated changes: the caller
 // reports them as input errors (exit 2). Legacy changes only read the quarantine list, to warn that it does not apply.
-export function reportInputs(repo, { path, schema, scope, integrated = schema === SCHEMA_INTEGRATED || scope === 'integrated' }) {
+export function reportInputs(repo, { path, schema, scope, integrated = isIntegratedChange({ schema, scope }) }) {
   if (!integrated) {
     try {
       const quarantinePath = `${installedE2eRoot(repo)}/quarantine.md`;
@@ -117,7 +113,7 @@ export function reportInputs(repo, { path, schema, scope, integrated = schema ==
   const quarantinePath = `${installedE2eRoot(repo)}/quarantine.md`;
   return {
     integrated: true,
-    policyText: readOptional(repo, 'openspec/quality-policy.md') ?? '',
+    policyText: readPolicyText(repo) ?? '',
     qualityText: readOptional(repo, `${path}/quality.md`),
     quarantineText: readOptional(repo, quarantinePath),
     quarantinePath,

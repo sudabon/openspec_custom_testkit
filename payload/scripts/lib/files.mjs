@@ -2,6 +2,16 @@ import { lstatSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { byteCompare } from './hash.mjs';
 
+// The errno code of a file-system error, or the message for anything else.
+export function errorCode(err) {
+  return err.code ?? err.message;
+}
+
+// Errors raised by node:fs carry both a code and a numeric errno.
+export function isFsError(err) {
+  return Boolean(err?.code) && Number.isInteger(err.errno);
+}
+
 export function fileError(error, path) {
   return { error: error.code === 'ENOENT' ? 'MISSING' : 'UNREADABLE', path, code: error.code ?? 'UNKNOWN' };
 }

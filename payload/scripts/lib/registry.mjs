@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E } from './critical.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
-import { asString, validDate } from './frontmatter.mjs';
+import { asString, utcDate, validDate } from './frontmatter.mjs';
 import { hasBoundedToken, markdownProse, parseTable, section } from './markdown.mjs';
 
 export const FIXTURE_REGISTRY = 'fixtures/README.md';
@@ -83,10 +83,6 @@ export function parseMockRegistry(text) {
   return registry;
 }
 
-export function utcDay(now) {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 function daysBetween(from, to) {
   return Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / DAY_MS);
 }
@@ -117,18 +113,8 @@ export function mockRowProblems(row, today) {
 // legacy spec-driven-e2e changes only warn so that their exit code stays the same.
 export function checkRegistry(repo, change, rows, { now = Date.now() } = {}) {
   const legacy = change.schema === SCHEMA_E2E;
-  const column = legacy ? '前提(fixture)' : 'Fixture';
-  const problems = [];
-  const used = { fixtures: new Map(), mocks: new Map() };
-  for (const row of rows) {
-    const tp = row['TP-ID'];
-    const cell = asString(row[column]);
-    if (!cell) continue;
-    const elements = fixtureElements(cell);
-    for (const error of elements.errors) problems.push(`${tp} の ${column} 列: ${error}`);
-    for (const name of elements.fixtures) used.fixtures.set(name, [...(used.fixtures.get(name) ?? []), tp]);
-    for (const name of elements.mocks) used.mocks.set(name, [...(used.mocks.get(name) ?? []), tp]);
-  }
+  const used = usedRegistrations(rows, legacy ? '前提(fixture)' : 'Fixture');
+  const problems = [...used.problems];
   let root = null;
   if (used.fixtures.size || used.mocks.size) {
     try {
@@ -137,54 +123,83 @@ export function checkRegistry(repo, change, rows, { now = Date.now() } = {}) {
       problems.push(`E2E ルートを特定できないため fixture・モックの登録を検査できません (${err.message})`);
     }
   }
-  if (root && used.fixtures.size) {
-    const { path, missing, registry, error } = readRegistry(repo, root, FIXTURE_REGISTRY, parseFixtureRegistry);
-    if (error) problems.push(error);
-    else if (missing) problems.push(`${path} がありません。${[...used.fixtures.keys()].join('・')} を登録する README を作成してください`);
-    else if (!registry) problems.push(`${path} に ${FIXTURE_HEADING} の表がありません`);
-    else {
-      for (const [name, tps] of used.fixtures) {
-        const listed = registry.get(name);
-        for (const tp of tps) {
-          const id = qualifiedTp(change.id, tp);
-          if (!listed) problems.push(`${tp} の fixture ${name} が ${path} に登録されていません`);
-          else if (!listed.includes(id)) {
-            const bare = listed.includes(tp) ? `（${tp} は change id を含まないため数えません）` : '';
-            problems.push(`${tp} の fixture ${name} は ${path} の「使用する TP-ID」に ${id} がありません。登録行に追記してください${bare}`);
-          }
-        }
-      }
-    }
-  }
-  const mocks = [];
-  if (root && used.mocks.size) {
-    const { path, missing, registry, error } = readRegistry(repo, root, MOCK_REGISTRY, parseMockRegistry);
-    if (error) problems.push(error);
-    else if (missing) problems.push(`${path} がありません。${[...used.mocks.keys()].join('・')} を登録する README を作成してください`);
-    else if (!registry) problems.push(`${path} に ${MOCK_HEADING} の表がありません`);
-    else {
-      const today = utcDay(now);
-      for (const [name, tps] of used.mocks) {
-        const row = registry.get(name);
-        if (!row) {
-          problems.push(`${tps.join('・')} のモック ${name} が ${path} に登録されていません`);
-          continue;
-        }
-        const rowProblems = mockRowProblems(row, today);
-        for (const problem of rowProblems) problems.push(`${path} のモック ${name}: ${problem}`);
-        if (!rowProblems.length) mocks.push({ name, verified: row['最終確認日'], path });
-      }
-    }
-  }
+  if (root && used.fixtures.size) problems.push(...fixtureProblems(repo, root, change, used.fixtures));
+  const mocks = root && used.mocks.size ? mockRegistrations(repo, root, used.mocks, now) : { problems: [], mocks: [] };
+  problems.push(...mocks.problems);
   const lines = problems.map(problem => `${change.id}: ${problem}`);
-  if (legacy) return { errors: [], warnings: lines.map(line => `${line}（旧 spec-driven-e2e のため警告のみ）`), mocks };
-  return { errors: lines, warnings: [], mocks };
+  if (legacy) return { errors: [], warnings: lines.map(line => `${line}（旧 spec-driven-e2e のため警告のみ）`), mocks: mocks.mocks };
+  return { errors: lines, warnings: [], mocks: mocks.mocks };
+}
+
+// The fixtures and mocks each TP row names, as name → TP-IDs, plus cell syntax problems.
+function usedRegistrations(rows, column) {
+  const problems = [];
+  const fixtures = new Map();
+  const mocks = new Map();
+  for (const row of rows) {
+    const tp = row['TP-ID'];
+    const cell = asString(row[column]);
+    if (!cell) continue;
+    const elements = fixtureElements(cell);
+    for (const error of elements.errors) problems.push(`${tp} の ${column} 列: ${error}`);
+    for (const name of elements.fixtures) fixtures.set(name, [...(fixtures.get(name) ?? []), tp]);
+    for (const name of elements.mocks) mocks.set(name, [...(mocks.get(name) ?? []), tp]);
+  }
+  return { problems, fixtures, mocks };
+}
+
+// A registry README that cannot be used at all: unreadable, absent, or without its table.
+function unusableRegistry({ path, missing, registry, error }, names, heading) {
+  if (error) return error;
+  if (missing) return `${path} がありません。${[...names].join('・')} を登録する README を作成してください`;
+  if (!registry) return `${path} に ${heading} の表がありません`;
+  return null;
+}
+
+function fixtureProblems(repo, root, change, fixtures) {
+  const read = readRegistry(repo, root, FIXTURE_REGISTRY, parseFixtureRegistry);
+  const unusable = unusableRegistry(read, fixtures.keys(), FIXTURE_HEADING);
+  if (unusable) return [unusable];
+  const problems = [];
+  for (const [name, tps] of fixtures) {
+    const listed = read.registry.get(name);
+    for (const tp of tps) {
+      const id = qualifiedTp(change.id, tp);
+      if (!listed) problems.push(`${tp} の fixture ${name} が ${read.path} に登録されていません`);
+      else if (!listed.includes(id)) {
+        const bare = listed.includes(tp) ? `（${tp} は change id を含まないため数えません）` : '';
+        problems.push(`${tp} の fixture ${name} は ${read.path} の「使用する TP-ID」に ${id} がありません。登録行に追記してください${bare}`);
+      }
+    }
+  }
+  return problems;
+}
+
+// Registry problems of the mocks in use, and the correctly registered mocks whose freshness the final gate judges.
+function mockRegistrations(repo, root, used, now) {
+  const read = readRegistry(repo, root, MOCK_REGISTRY, parseMockRegistry);
+  const unusable = unusableRegistry(read, used.keys(), MOCK_HEADING);
+  if (unusable) return { problems: [unusable], mocks: [] };
+  const problems = [];
+  const mocks = [];
+  const today = utcDate(now);
+  for (const [name, tps] of used) {
+    const row = read.registry.get(name);
+    if (!row) {
+      problems.push(`${tps.join('・')} のモック ${name} が ${read.path} に登録されていません`);
+      continue;
+    }
+    const rowProblems = mockRowProblems(row, today);
+    for (const problem of rowProblems) problems.push(`${read.path} のモック ${name}: ${problem}`);
+    if (!rowProblems.length) mocks.push({ name, verified: row['最終確認日'], path: read.path });
+  }
+  return { problems, mocks };
 }
 
 // Final-gate freshness of the mocks a change uses. A stale mock passes only with an approved Residual
 // (approver and YYYY-MM-DD date) whose text names the mock.
 export function mockFreshnessErrors(mocks, { maxAgeDays, residuals = [], now = Date.now() }) {
-  const today = utcDay(now);
+  const today = utcDate(now);
   const errors = [];
   for (const mock of mocks) {
     const age = daysBetween(mock.verified, today);

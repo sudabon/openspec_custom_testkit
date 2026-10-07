@@ -1,38 +1,26 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
-import { readConfigDocument } from './environment.mjs';
-import { asString, parseYamlText, splitFrontmatter } from './frontmatter.mjs';
+import { readChangeMetadata, readDefaultSchema } from './change-metadata.mjs';
+import { listActiveChanges, parseArchiveFolder } from './changes.mjs';
+import { asString, splitFrontmatter } from './frontmatter.mjs';
 import { git, gitShow, parseNameStatus } from './git.mjs';
 
 function stripArchiveId(folder) {
-  const match = folder.match(/^\d{4}-\d{2}-\d{2}-(.+)$/);
-  return match ? match[1] : folder;
+  return parseArchiveFolder(folder).id ?? folder;
 }
 
-function readSchemaText(repo, dir, rev) {
-  const rel = `${dir}/.openspec.yaml`;
-  if (rev) return gitShow(repo, rev, rel);
-  const abs = join(repo, rel);
-  return existsSync(abs) ? readFileSync(abs, 'utf8') : null;
-}
-
-function interpretSchema(text) {
-  if (text == null) return { schema: null, missing: true, broken: false };
-  const parsed = parseYamlText(text);
-  if (parsed.errors.length || parsed.alias || parsed.tagged) {
-    return { schema: null, missing: false, broken: true, error: parsed.errors[0] || 'metadata を解釈できません' };
-  }
-  const schema = asString(parsed.data?.schema);
-  const skipSpecs = parsed.data?.skip_specs === true;
+function interpretSchema(repo, dir, rev) {
+  const metadata = readChangeMetadata(repo, dir, { rev, strict: false });
+  if (metadata.missing) return { schema: null, missing: true, broken: false };
+  if (metadata.problem) return { schema: null, missing: false, broken: true, error: metadata.errors[0] || 'metadata を解釈できません' };
+  const { schema, skipSpecs } = metadata;
   if (!schema) return { schema: null, missing: true, broken: false, skipSpecs };
   return { schema, missing: false, broken: false, skipSpecs };
 }
 
 function configSchema(repo) {
-  const config = readConfigDocument(repo);
-  if (!config.text || config.parsed?.errors?.length) return null;
-  return asString(config.parsed?.data?.schema) || null;
+  return readDefaultSchema(repo, { strict: false }).schema;
 }
 
 function applicability(repo, dir, schema) {
@@ -58,14 +46,45 @@ function applicability(repo, dir, schema) {
 function decorate(repo, record, baseRef, env) {
   const head = record.lifecycle === 'deleted'
     ? { schema: null, missing: true, broken: false }
-    : interpretSchema(readSchemaText(repo, record.dir, null));
-  const base = baseRef ? interpretSchema(readSchemaText(repo, record.baseDir ?? record.dir, baseRef)) : { schema: null, missing: true, broken: false };
+    : interpretSchema(repo, record.dir, null);
+  const base = baseRef ? interpretSchema(repo, record.baseDir ?? record.dir, baseRef) : { schema: null, missing: true, broken: false };
+  const resolved = resolveSchema(repo, record, head, base);
+  const { schema, forcedIntegrated, unknown, fallback } = resolved;
+  const errors = [...resolved.errors, ...deletionErrors(record, resolved, base)];
+  const described = finalizeApplicability(repo, record, resolved, errors);
+  errors.push(...described.errors);
+
+  const filter = env.QE_SCHEMA ?? SCHEMA_QE;
+  const qe = forcedIntegrated || schema === SCHEMA_INTEGRATED || unknown || schema === filter;
+  const tasks = existsSync(join(repo, record.dir, 'tasks.md'))
+    ? readFileSync(join(repo, record.dir, 'tasks.md'), 'utf8')
+    : null;
+
+  return {
+    id: record.id,
+    path: record.dir,
+    schema: schema || null,
+    lifecycle: record.lifecycle,
+    qe,
+    e2e: described.e2e,
+    scope: described.scope,
+    reason: described.reason,
+    errors,
+    fallback,
+    skipSpecs: head.skipSpecs === true,
+    pendingPlan: described.pendingPlan === true,
+    tasksText: tasks,
+  };
+}
+
+// The schema to gate with. Broken or lost metadata of a change that was integrated at the base stays integrated;
+// otherwise it is unknown, and only a change that never declared a schema falls back to the config.
+function resolveSchema(repo, record, head, base) {
   const errors = [];
   let schema = head.schema;
   let forcedIntegrated = false;
   let unknown = false;
   let fallback = false;
-
   if (head.broken) {
     errors.push(head.error || 'metadata が破損しています');
     unknown = true;
@@ -92,14 +111,20 @@ function decorate(repo, record, baseRef, env) {
       }
     }
   }
+  return { schema, forcedIntegrated, unknown, fallback, errors };
+}
 
-  if (record.lifecycle === 'deleted') {
-    const shown = schema || base.schema || 'unknown';
-    if (shown === SCHEMA_INTEGRATED || shown === SCHEMA_QE || shown === SCHEMA_E2E || unknown || forcedIntegrated) {
-      errors.push(`archive せず削除されています (比較元 schema: ${base.schema || shown})`);
-    }
+function deletionErrors(record, { schema, unknown, forcedIntegrated }, base) {
+  if (record.lifecycle !== 'deleted') return [];
+  const shown = schema || base.schema || 'unknown';
+  if (shown === SCHEMA_INTEGRATED || shown === SCHEMA_QE || shown === SCHEMA_E2E || unknown || forcedIntegrated) {
+    return [`archive せず削除されています (比較元 schema: ${base.schema || shown})`];
   }
+  return [];
+}
 
+// E2E applicability after the schema is known. `errors` are those found so far; the returned `errors` are new ones.
+function finalizeApplicability(repo, record, { schema, forcedIntegrated, unknown }, errors) {
   const described = applicability(repo, record.lifecycle === 'deleted' ? (record.baseDir ?? record.dir) : record.dir, forcedIntegrated ? SCHEMA_INTEGRATED : schema);
   if (record.lifecycle === 'deleted' && !existsSync(join(repo, record.dir))) {
     described.e2e = unknown || forcedIntegrated ? 'unknown' : described.e2e;
@@ -110,32 +135,12 @@ function decorate(repo, record, baseRef, env) {
     described.reason = errors[0] || '判定不能';
     described.pendingPlan = false;
   }
+  const added = [];
   if (described.e2e === 'unknown' && !described.pendingPlan && !errors.includes(described.reason)) {
-    errors.push(described.reason || 'e2e を判定できません');
+    added.push(described.reason || 'e2e を判定できません');
   }
   if (forcedIntegrated) described.scope = 'integrated';
-
-  const filter = env.QE_SCHEMA ?? SCHEMA_QE;
-  const qe = forcedIntegrated || schema === SCHEMA_INTEGRATED || unknown || schema === filter;
-  const tasks = existsSync(join(repo, record.dir, 'tasks.md'))
-    ? readFileSync(join(repo, record.dir, 'tasks.md'), 'utf8')
-    : null;
-
-  return {
-    id: record.id,
-    path: record.dir,
-    schema: schema || null,
-    lifecycle: record.lifecycle,
-    qe,
-    e2e: described.e2e,
-    scope: described.scope,
-    reason: described.reason,
-    errors,
-    fallback,
-    skipSpecs: head.skipSpecs === true,
-    pendingPlan: described.pendingPlan === true,
-    tasksText: tasks,
-  };
+  return { ...described, errors: added };
 }
 
 function recordsFromDiff(repo, baseRef, diffText) {
@@ -184,17 +189,14 @@ function gitOptionalName(repo, rev, dir) {
 }
 
 function allActive(repo) {
-  const root = join(repo, 'openspec/changes');
-  if (!existsSync(root)) return [];
-  return readdirSync(root, { withFileTypes: true })
-    .filter(entry => entry.isDirectory() && entry.name !== 'archive')
-    .map(entry => ({ id: entry.name, lifecycle: 'active', dir: `openspec/changes/${entry.name}`, baseDir: `openspec/changes/${entry.name}` }))
+  return listActiveChanges(repo)
+    .map(({ id, dir }) => ({ id, lifecycle: 'active', dir, baseDir: dir }))
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 // Schema of one named change as the gates read it. Broken metadata is an error, never a legacy change.
 export function changeSchema(repo, dir) {
-  const head = interpretSchema(readSchemaText(repo, dir, null));
+  const head = interpretSchema(repo, dir, null);
   if (head.broken) return { error: `${dir}/.openspec.yaml を解釈できません: ${head.error}` };
   return { schema: head.schema || configSchema(repo) || 'spec-driven' };
 }

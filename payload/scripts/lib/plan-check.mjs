@@ -1,9 +1,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
-import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section, tpReferences } from './markdown.mjs';
+import { isIntegratedChange, SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
+import { readChangeMetadata } from './change-metadata.mjs';
+import { asString, isPlainMapping, splitFrontmatter, validDate } from './frontmatter.mjs';
+import {
+  DELEGATED_SECTION, delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section, TP_SECTION, tpReferences,
+} from './markdown.mjs';
 import { listFiles } from './files.mjs';
+import { TP_ID, TP_ID_IN_TEXT } from './ids.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 import { checkRegistry } from './registry.mjs';
 
@@ -85,9 +89,6 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
-const TP_SECTION = '## E2E観点一覧';
-const DELEGATED_SECTION = '## 対象外シナリオ';
-
 // Same prose and sections as the coverage map. Only `## E2E観点一覧` holds TP rows;
 // a TP-ID table anywhere else, or a TP reference under another E2E観点一覧 / 対象外
 // heading, fails instead of being dropped.
@@ -127,13 +128,13 @@ function testPlanStructure(planText) {
 }
 
 export function tpRows(planText) {
-  return testPlanStructure(planText).tables.flatMap(table => table.rows).filter(row => /^TP-\d{3}$/.test(row['TP-ID']));
+  return testPlanStructure(planText).tables.flatMap(table => table.rows).filter(row => TP_ID.test(row['TP-ID']));
 }
 
 export function testPlanRowErrors(planText) {
   const { tables, errors } = testPlanStructure(planText);
   return [...errors, ...tables.flatMap(table => table.rows)
-    .filter(row => !/^TP-\d{3}$/.test(row['TP-ID']))
+    .filter(row => !TP_ID.test(row['TP-ID']))
     .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`)];
 }
 
@@ -219,13 +220,13 @@ function viewpointErrors(id, text, e2e) {
 }
 
 function createdOf(repo, dir) {
-  const path = join(repo, dir, '.openspec.yaml');
-  if (!existsSync(path)) return { error: '.openspec.yaml がありません' };
-  const parsed = parseYamlText(readFileSync(path, 'utf8'));
-  if (parsed.errors.length || parsed.alias || parsed.tagged || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
-    return { error: `.openspec.yaml が不正です: ${parsed.errors[0] || 'alias・独自 tag のない YAML mapping が必要です'}` };
+  const metadata = readChangeMetadata(repo, dir, { strict: true });
+  if (metadata.missing) return { error: '.openspec.yaml がありません' };
+  // A non-string schema does not matter here; only `created` is read.
+  if (metadata.problem === 'yaml' || metadata.problem === 'mapping') {
+    return { error: `.openspec.yaml が不正です: ${metadata.errors[0] || 'alias・独自 tag のない YAML mapping が必要です'}` };
   }
-  const value = parsed.data?.created;
+  const value = metadata.data.created;
   const created = value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString().slice(0, 10) : asString(value);
   if (!created) return { error: '.openspec.yaml の created がありません' };
   if (!validDate(created)) return { error: `.openspec.yaml の created が不正です: ${created}（YYYY-MM-DD が必要です）` };
@@ -241,130 +242,166 @@ function missingViewpoints(repo, change) {
   const { created } = metadata;
   const stamp = readJsonIfExists(join(repo, STAMP_FILE));
   if (!stamp.exists) return { error: `${label}（${STAMP_FILE} がありません。導入前の change として扱えません）` };
-  if (stamp.broken || !stamp.data || typeof stamp.data !== 'object' || Array.isArray(stamp.data)) return { error: `${label}（${STAMP_FILE} が不正です。導入前の change として扱えません）` };
+  if (stamp.broken || !isPlainMapping(stamp.data)) return { error: `${label}（${STAMP_FILE} が不正です。導入前の change として扱えません）` };
   const since = asString(stamp.data?.features?.nonfunctionalViewpoints?.since);
   if (!validDate(since)) return { error: `${label}（${STAMP_FILE} の features.nonfunctionalViewpoints.since が${since ? `不正です: ${since}（YYYY-MM-DD が必要です）` : 'ありません'}。導入前の change として扱えません）` };
   if (created < since) return { warning: `${label}（${created} 作成で導入日 ${since} より前のため警告のみ）` };
   return { error: `${label}（${created} 作成で導入日 ${since} 以降です）` };
 }
 
+function emptyPlanResult() {
+  return { errors: [], notes: [], warnings: [], projects: {}, requiredTags: [] };
+}
+
 export function checkTestPlan(repo, change, { now } = {}) {
-  const errors = [];
-  const notes = [];
-  const warnings = [];
-  const projects = {};
-  if (![SCHEMA_INTEGRATED, SCHEMA_E2E].includes(change.schema) && change.scope !== 'integrated') {
-    return { errors, notes, warnings, projects, requiredTags: [] };
-  }
+  if (!(isIntegratedChange(change) || change.schema === SCHEMA_E2E)) return emptyPlanResult();
   const planPath = join(repo, change.path, 'test-plan.md');
-  if (!existsSync(planPath)) {
-    errors.push(`${change.id}: test-plan.md がありません`);
-    return { errors, notes, warnings, projects, requiredTags: [] };
-  }
+  if (!existsSync(planPath)) return { ...emptyPlanResult(), errors: [`${change.id}: test-plan.md がありません`] };
   const text = readFileSync(planPath, 'utf8');
-  const frontmatter = splitFrontmatter(text);
-  if (change.schema === SCHEMA_INTEGRATED) {
-    if (frontmatter.error || change.e2e === 'unknown') errors.push(`${change.id}: ${change.reason || frontmatter.error || 'e2e を判定できません'}`);
-    if (change.e2e === 'not-applicable') {
-      const reason = asString(frontmatter.data?.reason);
-      const alternatives = Array.isArray(frontmatter.data?.alternative_verification) ? frontmatter.data.alternative_verification : [];
-      if (!reason) errors.push(`${change.id}: not-applicable の reason が空です`);
-      if (!alternatives.length || alternatives.some(item => !asString(item?.oracle) || !asString(item?.layer) || !asString(item?.method))) {
-        errors.push(`${change.id}: alternative_verification に Oracle・層・方法が必要です`);
-      }
-    }
-  }
-
   const tp = tpRows(text);
-  const delegated = parseTable(section(text, '## 対象外シナリオ')).rows.filter(row => asString(row.Scenario));
-  const tpIds = tp.map(row => row['TP-ID']);
-  if (new Set(tpIds).size !== tpIds.length) errors.push(`${change.id}: TP-ID が重複しています`);
-  if (change.schema === SCHEMA_INTEGRATED) {
-    errors.push(...testPlanHeaderErrors(text).map(error => `${change.id}: ${error}`));
-    errors.push(...testPlanRowErrors(text).map(error => `${change.id}: ${error}`));
-    for (const row of tp) {
-      const declared = projectsOf(row);
-      if (declared.blank) errors.push(`${change.id}: ${row['TP-ID']} の Projects に空の要素があります`);
-      if (declared.projects.length) projects[row['TP-ID']] = declared.projects;
-    }
-  }
+  const plan = { repo, change, now, text, tp, tpIds: tp.map(row => row['TP-ID']) };
+  return change.schema === SCHEMA_INTEGRATED ? checkIntegratedPlan(plan) : checkLegacyPlan(plan);
+}
 
-  if (change.schema === SCHEMA_INTEGRATED && change.e2e === 'required' && tp.length === 0) {
-    errors.push(`${change.id}: required なのに TP が 0 件です`);
-  }
-  if (change.schema === SCHEMA_INTEGRATED && change.e2e === 'not-applicable' && tp.length > 0) {
-    errors.push(`${change.id}: not-applicable なのに TP があります`);
-  }
+// spec-driven-e2e plans name their TP-IDs anywhere in the text and get registry warnings only.
+function checkLegacyPlan(plan) {
+  const { change, text, tpIds } = plan;
+  const registry = checkRegistryIfNeeded(plan);
+  const requiredTags = change.schema === SCHEMA_E2E ? [...text.matchAll(TP_ID_IN_TEXT)].map(match => match[0]) : tpIds;
+  return {
+    errors: [...duplicateTpErrors(plan), ...registry.errors],
+    notes: [],
+    warnings: registry.warnings,
+    projects: {},
+    registryChecked: registry.checked,
+    requiredTags: [...new Set(requiredTags)],
+  };
+}
 
+function checkIntegratedPlan(plan) {
+  const { text, tpIds } = plan;
+  const rows = checkTpRows(plan);
+  const quality = checkQualityLinks(plan);
+  const registry = checkRegistryIfNeeded(plan);
+  return {
+    errors: [
+      ...checkNotApplicableFrontmatter(plan, splitFrontmatter(text)),
+      ...duplicateTpErrors(plan),
+      ...rows.errors,
+      ...quality.errors,
+      ...checkScenarioAssignment(plan),
+      ...registry.errors,
+    ],
+    notes: quality.model ? oracleLayerNotes(plan, quality.model) : [],
+    warnings: [...quality.warnings, ...registry.warnings],
+    projects: rows.projects,
+    registryChecked: registry.checked,
+    requiredTags: [...new Set(tpIds)],
+  };
+}
+
+function duplicateTpErrors({ change, tpIds }) {
+  return new Set(tpIds).size !== tpIds.length ? [`${change.id}: TP-ID が重複しています`] : [];
+}
+
+function checkNotApplicableFrontmatter({ change }, frontmatter) {
+  const errors = [];
+  if (frontmatter.error || change.e2e === 'unknown') errors.push(`${change.id}: ${change.reason || frontmatter.error || 'e2e を判定できません'}`);
+  if (change.e2e !== 'not-applicable') return errors;
+  const reason = asString(frontmatter.data?.reason);
+  const alternatives = Array.isArray(frontmatter.data?.alternative_verification) ? frontmatter.data.alternative_verification : [];
+  if (!reason) errors.push(`${change.id}: not-applicable の reason が空です`);
+  if (!alternatives.length || alternatives.some(item => !asString(item?.oracle) || !asString(item?.layer) || !asString(item?.method))) {
+    errors.push(`${change.id}: alternative_verification に Oracle・層・方法が必要です`);
+  }
+  return errors;
+}
+
+function checkTpRows({ change, text, tp }) {
+  const errors = [
+    ...testPlanHeaderErrors(text).map(error => `${change.id}: ${error}`),
+    ...testPlanRowErrors(text).map(error => `${change.id}: ${error}`),
+  ];
+  const projects = {};
+  for (const row of tp) {
+    const declared = projectsOf(row);
+    if (declared.blank) errors.push(`${change.id}: ${row['TP-ID']} の Projects に空の要素があります`);
+    if (declared.projects.length) projects[row['TP-ID']] = declared.projects;
+  }
+  if (change.e2e === 'required' && tp.length === 0) errors.push(`${change.id}: required なのに TP が 0 件です`);
+  if (change.e2e === 'not-applicable' && tp.length > 0) errors.push(`${change.id}: not-applicable なのに TP があります`);
+  return { errors, projects };
+}
+
+// The viewpoint register and the Risk / Oracle references from the TP rows into quality.md.
+function checkQualityLinks({ repo, change, tp }) {
+  const errors = [];
+  const warnings = [];
   const qualityPath = join(repo, change.path, 'quality.md');
-  let model = null;
-  if (change.schema === SCHEMA_INTEGRATED && !existsSync(qualityPath)) {
+  if (!existsSync(qualityPath)) {
     errors.push(`${change.id}: quality.md がありません（Non-functional Viewpoints と Risk / Oracle の参照を検査できません）`);
+    return { errors, warnings, model: null };
   }
-  if (change.schema === SCHEMA_INTEGRATED && existsSync(qualityPath)) {
-    const qualityText = readFileSync(qualityPath, 'utf8');
-    model = qualityModel(qualityText);
-    // Examples in code fences cannot satisfy the viewpoint register.
-    const qualityProse = markdownProse(qualityText);
-    if (qualityProse.unclosedFence) errors.push(`${change.id}: quality.md のコードフェンスが閉じられていません（閉じていないフェンス以降の ${VIEWPOINT_HEADING} を読めません）`);
-    if (section(qualityProse.text, VIEWPOINT_HEADING) == null) {
-      const missing = missingViewpoints(repo, change);
-      if (missing.error) errors.push(missing.error);
-      else warnings.push(missing.warning);
-    } else errors.push(...viewpointErrors(change.id, qualityProse.text, change.e2e));
-    const riskIds = new Set(model.risks.map(row => row.ID));
-    const oracleIds = new Set(model.oracles.map(row => row.ID));
-    for (const row of tp) {
-      for (const key of ['Requirement', 'Scenario', 'Risk', 'Oracle', 'Fixture', 'Intent', 'Expected']) {
-        if (!asString(row[key])) errors.push(`${change.id}: ${row['TP-ID']} の ${key} が空です`);
-      }
-      if (row.Risk && !riskIds.has(row.Risk)) errors.push(`${change.id}: ${row.Risk} は Risk Register にありません`);
-      if (row.Oracle && !oracleIds.has(row.Oracle)) errors.push(`${change.id}: ${row.Oracle} は Test Oracles にありません`);
+  const qualityText = readFileSync(qualityPath, 'utf8');
+  const model = qualityModel(qualityText);
+  // Examples in code fences cannot satisfy the viewpoint register.
+  const qualityProse = markdownProse(qualityText);
+  if (qualityProse.unclosedFence) errors.push(`${change.id}: quality.md のコードフェンスが閉じられていません（閉じていないフェンス以降の ${VIEWPOINT_HEADING} を読めません）`);
+  if (section(qualityProse.text, VIEWPOINT_HEADING) == null) {
+    const missing = missingViewpoints(repo, change);
+    if (missing.error) errors.push(missing.error);
+    else warnings.push(missing.warning);
+  } else errors.push(...viewpointErrors(change.id, qualityProse.text, change.e2e));
+  const riskIds = new Set(model.risks.map(row => row.ID));
+  const oracleIds = new Set(model.oracles.map(row => row.ID));
+  for (const row of tp) {
+    for (const key of ['Requirement', 'Scenario', 'Risk', 'Oracle', 'Fixture', 'Intent', 'Expected']) {
+      if (!asString(row[key])) errors.push(`${change.id}: ${row['TP-ID']} の ${key} が空です`);
     }
-    if (change.e2e === 'not-applicable' && model.e2eLayer) errors.push(`${change.id}: quality が E2E 層を要求しているのに test-plan は not-applicable です`);
-    if (change.e2e === 'required' && !model.e2eLayer) errors.push(`${change.id}: required なのに quality の層選択に E2E がありません`);
+    if (row.Risk && !riskIds.has(row.Risk)) errors.push(`${change.id}: ${row.Risk} は Risk Register にありません`);
+    if (row.Oracle && !oracleIds.has(row.Oracle)) errors.push(`${change.id}: ${row.Oracle} は Test Oracles にありません`);
   }
+  if (change.e2e === 'not-applicable' && model.e2eLayer) errors.push(`${change.id}: quality が E2E 層を要求しているのに test-plan は not-applicable です`);
+  if (change.e2e === 'required' && !model.e2eLayer) errors.push(`${change.id}: required なのに quality の層選択に E2E がありません`);
+  return { errors, warnings, model };
+}
 
-  if (change.schema === SCHEMA_INTEGRATED) {
-    let scenarios = [];
-    try {
-      scenarios = change.skipSpecs ? [] : scenariosOf(repo, change.path);
-    } catch (err) {
-      errors.push(err.message);
-    }
-    const assigned = new Set([...ids(tp, 'Scenario'), ...delegated.map(row => asString(row.Scenario))]);
-    for (const scenario of scenarios) {
-      if (!assigned.has(scenario)) errors.push(`${change.id}: シナリオ未割当: ${scenario}`);
-    }
-    for (const row of delegated) {
-      if (!asString(row.Reason) || !asString(row.Oracle) || !asString(row.Layer) || !asString(row.Method)) {
-        errors.push(`${change.id}: 対象外シナリオ ${row.Scenario} の理由・Oracle・層・方法が不足しています`);
-      }
-    }
-    if (model) {
-      for (const oracle of model.oracles) {
-        const layerText = model.layers.map(row => Object.values(row).join(' ')).join('\n');
-        const oracleIsE2E = new RegExp(`${oracle.ID}[\\s\\S]{0,80}E2E`).test(layerText);
-        if (!oracleIsE2E && tp.some(row => row.Oracle === oracle.ID) && change.e2e === 'not-applicable') {
-          notes.push(`${oracle.ID} は TP 不要の層です`);
-        }
-      }
+function checkScenarioAssignment({ repo, change, text, tp }) {
+  const errors = [];
+  const delegated = parseTable(section(text, DELEGATED_SECTION)).rows.filter(row => asString(row.Scenario));
+  let scenarios = [];
+  try {
+    scenarios = change.skipSpecs ? [] : scenariosOf(repo, change.path);
+  } catch (err) {
+    errors.push(err.message);
+  }
+  const assigned = new Set([...ids(tp, 'Scenario'), ...delegated.map(row => asString(row.Scenario))]);
+  for (const scenario of scenarios) {
+    if (!assigned.has(scenario)) errors.push(`${change.id}: シナリオ未割当: ${scenario}`);
+  }
+  for (const row of delegated) {
+    if (!asString(row.Reason) || !asString(row.Oracle) || !asString(row.Layer) || !asString(row.Method)) {
+      errors.push(`${change.id}: 対象外シナリオ ${row.Scenario} の理由・Oracle・層・方法が不足しています`);
     }
   }
+  return errors;
+}
 
-  // Fixture and mock registration; legacy spec-driven-e2e changes get warnings only.
-  let registryChecked = false;
-  if ((change.schema === SCHEMA_INTEGRATED && change.e2e === 'required') || change.schema === SCHEMA_E2E) {
-    const registry = checkRegistry(repo, change, tp, { now });
-    errors.push(...registry.errors);
-    warnings.push(...registry.warnings);
-    registryChecked = tp.length > 0;
+function oracleLayerNotes({ change, tp }, model) {
+  if (change.e2e !== 'not-applicable') return [];
+  const layerText = model.layers.map(row => Object.values(row).join(' ')).join('\n');
+  return model.oracles
+    .filter(oracle => !new RegExp(`${oracle.ID}[\\s\\S]{0,80}E2E`).test(layerText) && tp.some(row => row.Oracle === oracle.ID))
+    .map(oracle => `${oracle.ID} は TP 不要の層です`);
+}
+
+// Fixture and mock registration; legacy spec-driven-e2e changes get warnings only.
+function checkRegistryIfNeeded({ repo, change, tp, now }) {
+  if (!((change.schema === SCHEMA_INTEGRATED && change.e2e === 'required') || change.schema === SCHEMA_E2E)) {
+    return { errors: [], warnings: [], checked: false };
   }
-
-  const legacyIds = change.schema === SCHEMA_E2E
-    ? [...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0])
-    : tpIds;
-  return { errors, notes, warnings, projects, registryChecked, requiredTags: [...new Set(legacyIds)] };
+  const registry = checkRegistry(repo, change, tp, { now });
+  return { errors: registry.errors, warnings: registry.warnings, checked: tp.length > 0 };
 }
 
 function loadTagCorpus(repo) {

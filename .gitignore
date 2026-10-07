@@ -13,6 +13,7 @@
 # `.claude/` rule excludes the directory itself, so a later `!` cannot
 # bring the files back.
 **/.claude/**
+!.claude/settings.json
 !payload/.claude/
 !payload/.claude/**
 !upstream/baselines/**/.claude/

@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
 
-export function git(repo, args) {
+export function git(repo, args, { maxBuffer = 20 * 1024 * 1024 } = {}) {
   try {
     return execFileSync('git', ['-C', repo, ...args], {
       encoding: 'utf8',
-      maxBuffer: 20 * 1024 * 1024,
+      maxBuffer,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
@@ -15,9 +15,9 @@ export function git(repo, args) {
   }
 }
 
-export function gitOptional(repo, args) {
+export function gitOptional(repo, args, options) {
   try {
-    return git(repo, args);
+    return git(repo, args, options);
   } catch {
     return null;
   }
@@ -31,16 +31,9 @@ export function headRevision(repo) {
   return git(repo, ['rev-parse', 'HEAD']).trim();
 }
 
+// File contents at a revision, or null when it cannot be shown. Keeps its smaller 10 MiB buffer.
 export function gitShow(repo, rev, filePath) {
-  try {
-    return execFileSync('git', ['-C', repo, 'show', `${rev}:${filePath}`], {
-      encoding: 'utf8',
-      maxBuffer: 10 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch {
-    return null;
-  }
+  return gitOptional(repo, ['show', `${rev}:${filePath}`], { maxBuffer: 10 * 1024 * 1024 });
 }
 
 export function parseNameStatus(text) {

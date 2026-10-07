@@ -2,19 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, statSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync, symlinkSync, existsSync, statSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
-import { main, transformBytes } from '../lib/cli.mjs';
+import { PathError, UsageError, decideAction, exitCodeFor, loadLegacyIndex, main, transformBytes } from '../lib/cli.mjs';
 import { mergeConfig } from '../lib/config-merge.mjs';
-import { capture } from './support.mjs';
+import { capture, tempDir } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
-
-function tempDir() {
-  return mkdtempSync(join(tmpdir(), 'tk-install-'));
-}
 
 test('dry-run does not create a missing target', async () => {
   const target = join(tmpdir(), `tk-missing-${process.pid}-${Date.now()}`);
@@ -26,7 +22,7 @@ test('dry-run does not create a missing target', async () => {
 });
 
 test('repeat install keeps bytes, mode, and installedAt', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   const first = await capture(main, ['install', '--force', '--target', target, '--language', 'Japanese']);
   assert.equal(first.code, 0, first.text);
   const stamp = readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8');
@@ -45,7 +41,7 @@ test('repeat install keeps bytes, mode, and installedAt', async () => {
 });
 
 test('custom schema and in-flight metadata stay', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   mkdirSync(join(target, 'openspec/changes/old-change'), { recursive: true });
   const config = 'schema: my-schema\ncontext: |\n  Language: Japanese\n  利用者メモ\nrules:\n  proposal:\n    - keep\n';
   const meta = 'schema: quality-driven\n';
@@ -106,7 +102,7 @@ test('quoted schema keys and flow mappings are kept', () => {
 });
 
 test('unsafe yaml is kept', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   mkdirSync(join(target, 'openspec'), { recursive: true });
   const config = 'schema: spec-driven\nschema: other\n';
   writeFileSync(join(target, 'openspec/config.yaml'), config);
@@ -118,7 +114,7 @@ test('unsafe yaml is kept', async () => {
 });
 
 test('force keeps policy and real playwright config', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   assert.equal((await capture(main, ['install', '--force', '--target', target])).code, 0);
   const policy = 'project policy stays\n';
   const playwright = 'export default { testDir: "./tests/e2e" };\n';
@@ -136,7 +132,7 @@ test('force keeps policy and real playwright config', async () => {
 
 test('known legacy file migrates and unknown or edited files stay', async () => {
   const baseline = readFileSync(new URL('./upstream/baselines/qe/payload/scripts/qe-gate.sh', root));
-  const known = tempDir();
+  const known = tempDir('tk-install-');
   mkdirSync(join(known, 'scripts'), { recursive: true });
   writeFileSync(join(known, 'scripts/qe-gate.sh'), baseline);
   writeFileSync(join(known, '.openspec-quality-kit.json'), JSON.stringify({ version: '0.1.2', installedAt: '2000-01-01T00:00:00.000Z' }));
@@ -147,7 +143,7 @@ test('known legacy file migrates and unknown or edited files stay', async () => 
   assert.match(readFileSync(join(known, 'scripts/qe-gate.sh'), 'utf8'), /exec node/);
   assert.equal(Buffer.compare(readFileSync(join(known, '.openspec-quality-kit.json')), beforeStamp), 0);
 
-  const edited = tempDir();
+  const edited = tempDir('tk-install-');
   mkdirSync(join(edited, 'scripts'), { recursive: true });
   writeFileSync(join(edited, 'scripts/qe-gate.sh'), `${baseline.toString('utf8')}\n# user edit\n`);
   writeFileSync(join(edited, '.openspec-quality-kit.json'), JSON.stringify({ version: '0.1.2' }));
@@ -158,7 +154,7 @@ test('known legacy file migrates and unknown or edited files stay', async () => 
   assert.match(kept.text, /移行状態: incomplete/);
   assert.match(kept.text, /統合完了ではありません/);
 
-  const unknown = tempDir();
+  const unknown = tempDir('tk-install-');
   mkdirSync(join(unknown, 'scripts'), { recursive: true });
   writeFileSync(join(unknown, 'scripts/qe-gate.sh'), baseline);
   writeFileSync(join(unknown, '.openspec-quality-kit.json'), JSON.stringify({ version: '9.9.9' }));
@@ -175,7 +171,7 @@ test('known legacy file migrates and unknown or edited files stay', async () => 
 test('e2e-only and combined legacy stamps migrate known files only', async () => {
   const e2eBaseline = readFileSync(new URL('./upstream/baselines/e2e/payload/scripts/check-test-plan.sh', root));
   const qeBaseline = readFileSync(new URL('./upstream/baselines/qe/payload/scripts/qe-gate.sh', root));
-  const e2eOnly = tempDir();
+  const e2eOnly = tempDir('tk-install-');
   mkdirSync(join(e2eOnly, 'scripts'), { recursive: true });
   writeFileSync(join(e2eOnly, 'scripts/check-test-plan.sh'), e2eBaseline);
   writeFileSync(join(e2eOnly, '.openspec-e2e-kit.json'), JSON.stringify({ version: '0.2.0', e2eRoot: 'tests/e2e' }));
@@ -186,7 +182,7 @@ test('e2e-only and combined legacy stamps migrate known files only', async () =>
   assert.match(readFileSync(join(e2eOnly, 'scripts/check-test-plan.sh'), 'utf8'), /exec node/);
   assert.equal(Buffer.compare(readFileSync(join(e2eOnly, '.openspec-e2e-kit.json')), e2eStamp), 0);
 
-  const both = tempDir();
+  const both = tempDir('tk-install-');
   mkdirSync(join(both, 'scripts'), { recursive: true });
   writeFileSync(join(both, 'scripts/qe-gate.sh'), qeBaseline);
   writeFileSync(join(both, 'scripts/check-test-plan.sh'), e2eBaseline);
@@ -206,7 +202,7 @@ test('e2e-only and combined legacy stamps migrate known files only', async () =>
 });
 
 test('recorded e2e root wins and old files are not deleted', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   const first = await capture(main, ['install', '--force', '--target', target, '--e2e-root', 'frontend/e2e']);
   assert.equal(first.code, 0, first.text);
   mkdirSync(join(target, 'tests/e2e'), { recursive: true });
@@ -221,8 +217,8 @@ test('recorded e2e root wins and old files are not deleted', async () => {
 });
 
 test('symlink escape writes nothing outside the target', async () => {
-  const target = tempDir();
-  const outside = tempDir();
+  const target = tempDir('tk-install-');
+  const outside = tempDir('tk-install-');
   symlinkSync(outside, join(target, 'escape'));
   const before = existsSync(join(outside, 'scripts'));
   const result = await capture(main, ['install', '--force', '--target', target, '--e2e-root', 'escape/tests']);
@@ -234,7 +230,7 @@ test('symlink escape writes nothing outside the target', async () => {
 });
 
 test('store declaration writes neither store nor local payload', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   mkdirSync(join(target, 'openspec'), { recursive: true });
   writeFileSync(join(target, 'openspec/config.yaml'), 'schema: spec-driven\nstore: team-store\n');
   const result = await capture(main, ['install', '--force', '--target', target]);
@@ -246,7 +242,7 @@ test('store declaration writes neither store nor local payload', async () => {
 });
 
 test('multiple playwright configs are reported and not overwritten', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   mkdirSync(join(target, 'frontend'), { recursive: true });
   writeFileSync(join(target, 'playwright.config.ts'), 'export default { testDir: "./tests/e2e" }\n');
   writeFileSync(join(target, 'frontend/playwright.config.ts'), 'export default { testDir: "./e2e" }\n');
@@ -259,7 +255,7 @@ test('multiple playwright configs are reported and not overwritten', async () =>
 });
 
 test('missing OpenSpec CLI is not reported ready', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   const result = await capture(main, ['install', '--force', '--target', target]);
   const missing = await main(['install', '--force', '--target', target], {
     log: () => {},
@@ -284,8 +280,13 @@ test('payload claude files are not gitignored', () => {
     () => execFileSync('git', ['check-ignore', '--', 'payload/.claude/agents/qe-oracle-writer.md'], { cwd: repo, encoding: 'utf8' }),
     err => err.status === 1,
   );
-  const rootClaude = execFileSync('git', ['check-ignore', '--', '.claude/settings.json'], { cwd: repo, encoding: 'utf8' }).trim();
-  assert.equal(rootClaude, '.claude/settings.json');
+  // The shared project settings are tracked; every other root agent file stays local.
+  assert.throws(
+    () => execFileSync('git', ['check-ignore', '--', '.claude/settings.json'], { cwd: repo, encoding: 'utf8' }),
+    err => err.status === 1,
+  );
+  const rootClaude = execFileSync('git', ['check-ignore', '--', '.claude/settings.local.json'], { cwd: repo, encoding: 'utf8' }).trim();
+  assert.equal(rootClaude, '.claude/settings.local.json');
 });
 
 
@@ -298,7 +299,7 @@ test('legacy transform option preserves non-transformable paths and remaps E2E f
 });
 
 test('update overwrites files the stamp recorded as unmodified and keeps user edits', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
   const first = await capture(main, ['install', '--force', '--target', target]);
   assert.equal(first.code, 0, first.text);
@@ -320,7 +321,7 @@ test('update overwrites files the stamp recorded as unmodified and keeps user ed
 });
 
 test('switching --e2e-root leaves critical scripts untouched and migration complete', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
   const first = await capture(main, ['install', '--force', '--target', target]);
   assert.equal(first.code, 0, first.text);
@@ -335,6 +336,26 @@ test('switching --e2e-root leaves critical scripts untouched and migration compl
   rmSync(target, { recursive: true, force: true });
 });
 
+test('install places nested scripts/lib modules and records them in the stamp', async () => {
+  const target = tempDir('tk-install-');
+  execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+  const result = await capture(main, ['install', '--force', '--target', target]);
+  assert.equal(result.code, 0, result.text);
+  const stamp = JSON.parse(readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8'));
+  const lib = new URL('./payload/scripts/lib/', root);
+  const nested = readdirSync(lib, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name !== '.DS_Store')
+    .map(entry => relative(fileURLToPath(lib), join(entry.parentPath ?? entry.path, entry.name)).split(sep).join('/'))
+    .filter(rel => rel.includes('/'));
+  assert.ok(nested.length > 0, 'payload/scripts/lib has no subdirectory files');
+  for (const rel of nested.map(name => `scripts/lib/${name}`)) {
+    const bytes = readFileSync(new URL(`./payload/${rel}`, root));
+    assert.equal(Buffer.compare(readFileSync(join(target, rel)), bytes), 0, rel);
+    assert.equal(stamp.files[rel], createHash('sha256').update(bytes).digest('hex'), rel);
+  }
+  rmSync(target, { recursive: true, force: true });
+});
+
 test('critical scripts are never rewritten for a custom E2E root', () => {
   const bytes = Buffer.from("export const E2E_ROOT_DEFAULT = 'tests/e2e';");
   assert.equal(transformBytes('scripts/lib/critical.mjs', bytes, 'custom/e2e').toString(), bytes.toString());
@@ -343,7 +364,7 @@ test('critical scripts are never rewritten for a custom E2E root', () => {
 });
 
 test('install ships the screenshot and axe conventions without adding dependencies or touching a real config', async () => {
-  const target = tempDir();
+  const target = tempDir('tk-install-');
   const pkg = '{\n  "name": "app",\n  "devDependencies": { "@playwright/test": "1.55.1" }\n}\n';
   const playwright = 'export default { testDir: "./tests/e2e" };\n';
   writeFileSync(join(target, 'package.json'), pkg);
@@ -362,4 +383,57 @@ test('install ships the screenshot and axe conventions without adding dependenci
   assert.match(skill, /mask/);
   assert.match(skill, /npm install -D @axe-core\/playwright/);
   rmSync(target, { recursive: true, force: true });
+});
+
+test('decideAction: protected beats force, the stamp record and legacy baselines migrate, and force only overwrites what is left', () => {
+  const base = { exists: true, same: false, protectedFile: false, recorded: false, legacyMatch: false, force: false };
+  assert.equal(decideAction({ ...base, exists: false, force: true }), 'create');
+  assert.equal(decideAction({ ...base, same: true, protectedFile: true }), 'same');
+  for (const force of [false, true]) {
+    assert.equal(decideAction({ ...base, protectedFile: true, recorded: true, legacyMatch: true, force }), 'keep');
+    assert.equal(decideAction({ ...base, recorded: true, force }), 'migrate');
+    assert.equal(decideAction({ ...base, legacyMatch: true, force }), 'migrate');
+  }
+  assert.equal(decideAction(base), 'skip');
+  assert.equal(decideAction({ ...base, force: true }), 'overwrite');
+  // The baseline comparison runs only when nothing earlier decided.
+  let compared = 0;
+  const legacyMatch = () => { compared += 1; return true; };
+  assert.equal(decideAction({ ...base, recorded: true, legacyMatch }), 'migrate');
+  assert.equal(decideAction({ ...base, protectedFile: true, legacyMatch }), 'keep');
+  assert.equal(compared, 0);
+  assert.equal(decideAction({ ...base, legacyMatch }), 'migrate');
+  assert.equal(compared, 1);
+});
+
+test('exitCodeFor maps usage to 2, path and stamp problems to 1, and leaves other errors to the caller', () => {
+  assert.equal(exitCodeFor(new UsageError('x')), 2);
+  assert.equal(exitCodeFor(new PathError('x')), 1);
+  assert.equal(exitCodeFor(Object.assign(new Error('x'), { code: 'BROKEN_STAMP' })), 1);
+  assert.equal(exitCodeFor(Object.assign(new Error('x'), { code: 'PATH' })), 1);
+  assert.equal(exitCodeFor(new Error('bug')), null);
+  assert.equal(exitCodeFor('thrown string'), null);
+});
+
+test('loadLegacyIndex rejects a baseline that drifted from the manifest', t => {
+  const copy = tempDir('tk-baselines-');
+  t.after(() => rmSync(copy, { recursive: true, force: true }));
+  cpSync(fileURLToPath(new URL('upstream', root)), join(copy, 'upstream'), { recursive: true });
+  const manifest = JSON.parse(readFileSync(join(copy, 'upstream/manifest.json'), 'utf8'));
+  const [source] = manifest.sources;
+  const [file] = source.files;
+  assert.ok(loadLegacyIndex(copy).byPath.get(file.path).length >= 1);
+  writeFileSync(join(copy, 'upstream/baselines', source.id, 'payload', file.path), 'drifted\n');
+  assert.throws(() => loadLegacyIndex(copy), new RegExp(`baseline drift: ${source.id}/${file.path}`));
+});
+
+test('io.now stamps installedAt and the viewpoint date', async t => {
+  const target = tempDir('tk-install-');
+  t.after(() => rmSync(target, { recursive: true, force: true }));
+  const now = () => new Date(2026, 0, 2, 3, 4, 5);
+  const code = await main(['install', '--force', '--target', target], { log: () => {}, error: () => {}, stdin: { isTTY: false }, now });
+  assert.equal(code, 0);
+  const stamp = JSON.parse(readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8'));
+  assert.equal(stamp.installedAt, now().toISOString());
+  assert.equal(stamp.features.nonfunctionalViewpoints.since, '2026-01-02');
 });
