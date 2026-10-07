@@ -108,6 +108,58 @@ test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。
 
 project を増やすと CI の時間も増える。クロスブラウザや端末差の確認が必要な TP だけに `Projects` を付ける。見た目の回帰（`toHaveScreenshot`）とアクセシビリティ（`@axe-core/playwright`）のテストの書き方は `e2e-conventions` SKILL にある。kit は導入先の `package.json` に依存を追加しない。
 
+## E2E 結果の公開
+
+CI の E2E 結果は、PR の Checks 画面から辿れる形で公開する。公開は表示のための処理で、ゲートの判定には使わない。
+
+### summary の読み方
+
+`e2e-report.mjs <change-id> [results.json] --format summary` は、人向けの Markdown 要約を出す。`--format` を省略した出力（`text`）と終了コード 0/1/2/3 は従来と同じで、`summary` も同じ分類から描画するため終了コードは一致する。`text` と `summary` 以外の値は終了コード 2 になる。出力例（行と添付の一部を省略）:
+
+```text
+### demo
+
+実行開始: 2026-10-06T00:00:00.000Z (10分前) / 所要 12.3s
+合計 5 件: pass 3 / fail 1 / skip 1 / フレーク 1
+⚠ カバレッジ欠落: TP-002, TP-004, TP-005 に対応するテストが未実装/未実行
+
+| TP-ID | テスト | project | 結果 | フレーク | 添付 |
+|-------|--------|---------|------|----------|------|
+| TP-002 | 保存に失敗する | chromium | fail |  | screenshot: <code>test-results/save-chromium/test-failed-1.png</code><br>trace: <code>test-results/save-chromium/trace.zip</code><br>video: 公開対象外 |
+```
+
+- 表の前に、実行開始時刻、所要時間、件数、カバレッジ欠落の TP-ID を置く。欠落が無いときは「カバレッジ欠落: なし」と出る。
+- project 列は、単一 project でも Playwright JSON の project 名を出す。test-plan の `Projects` 列との照合結果は欠落の行に出る。
+- 添付列は、失敗した attempt と最後の attempt の添付（trace / screenshot / video と `testInfo.attach` の添付）を、公開 root からの相対パスで示す。公開 root は CI では実行ごとの directory（`test-results/testkit/<run>/`）、CLI では results.json の directory である。
+  - 公開 root の外にある添付は「公開対象外」と示し、パスは出さない。
+  - 公開 root の内側を指すがファイルが無い添付は、相対パスに「（ファイルなし）」を付ける。
+  - `body` で埋め込まれた添付は名前だけを示し、中身は出さない。
+  - 添付が1つも無い行は「添付なし」と示す。
+- テスト名などの表のセルは、`|`、改行、HTML の記号をエスケープする。
+
+### CI での公開
+
+reusable workflow の gate は、E2E required の change ごとに次を行う。
+
+- 実行 directory に `<change-id>.summary.md`（全行）を書き、step summary に追記する。step summary は change あたり 200 行までで、超えた分は artifact 内の `<change-id>.summary.md` を参照する行になる。全体が 900 KiB を超える change は、要約の代わりに参照の行だけを出す。
+- E2E を実行しなかったときは、表を出さずに理由（e2e-command が空、E2E required の change が無いなど）だけを出す。
+- artifact `testkit-playwright-report` に今回の実行 directory（HTML レポート、添付、results.json、要約）を保存する。前回の実行の directory は含めない。既存の `testkit-results` も従来どおり保存する。
+- step summary の末尾に、ワークフロー実行と artifact へのリンクを追記する。
+
+公開系の step は、ゲートやテストが失敗しても実行し、`continue-on-error` で job の結果を変えない。step summary に書けない、artifact を保存できない、PR コメントを投稿できない、といった公開の失敗は警告として出る。job の成否は、公開の成否に関係なくゲートの結果で決まる。
+
+添付と HTML レポートを今回の artifact に入れるには、Playwright の `outputDir` と HTML reporter の出力先を `TESTKIT_RUN_DIR` の配下にする。同梱の `playwright.config.example.ts` がその設定例である。独自の config で別の場所に出している場合、添付は「公開対象外」と表示されるだけで、ゲートには影響しない。
+
+### PR コメント、権限、保持期間
+
+PR コメントは入力 `publish-pr-comment: true` のときだけ投稿する。既定は投稿しない。マーカー `<!-- openspec-custom-testkit -->` の付いた github-actions のコメントを 1 件だけ作り、以後の実行では同じコメントを更新する。投稿には呼び出し側 workflow の `pull-requests: write` 権限が必要で、reusable workflow は権限を引き上げない。fork からの PR など書き込み権限が無い場合は警告だけを出す。
+
+artifact の保持日数は入力 `artifact-retention-days` で指定する。空なら GitHub の既定に従う。正の整数以外（`0`、負数、文字列など）はゲートの前に入力エラーで止まり、ゲートを成功と報告しない。
+
+### 添付の機微情報
+
+screenshot、video、trace には、画面に表示された個人情報、トークン、内部 URL が写ることがある。private リポジトリでも、artifact はリポジトリを閲覧できる全員がダウンロードできる。kit は添付や HTML レポートの中身を検査も、マスキングもしない。テストデータには合成データを使い、保持日数は必要な期間に絞る。
+
 ## E2E 規約 lint
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。

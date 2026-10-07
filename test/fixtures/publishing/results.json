@@ -1,0 +1,83 @@
+{
+  "stats": { "startTime": "2026-10-06T00:00:00.000Z", "duration": 12345 },
+  "suites": [
+    {
+      "title": "publishing.spec.ts",
+      "specs": [
+        {
+          "title": "一覧を表示する",
+          "tags": ["@demo", "@TP-001"],
+          "tests": [
+            { "projectName": "chromium", "status": "expected", "results": [{ "status": "passed", "attachments": [] }] },
+            { "projectName": "webkit", "status": "expected", "results": [{ "status": "passed" }] }
+          ]
+        },
+        {
+          "title": "保存に失敗する",
+          "tags": ["@demo", "@TP-002"],
+          "tests": [
+            {
+              "projectName": "chromium",
+              "status": "unexpected",
+              "results": [
+                {
+                  "status": "failed",
+                  "attachments": [
+                    { "name": "screenshot", "contentType": "image/png", "path": "__ROOT__/test-results/save-chromium/test-failed-1.png" },
+                    { "name": "trace", "contentType": "application/zip", "path": "__ROOT__/test-results/save-chromium/trace.zip" }
+                  ]
+                },
+                {
+                  "status": "failed",
+                  "attachments": [
+                    { "name": "screenshot", "contentType": "image/png", "path": "__ROOT__/test-results/save-chromium-retry1/test-failed-1.png" },
+                    { "name": "trace", "contentType": "application/zip", "path": "__ROOT__/test-results/save-chromium-retry1/missing-trace.zip" },
+                    { "name": "video", "contentType": "video/webm", "path": "__OUTSIDE__/video.webm" }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "再試行で通る",
+          "tags": ["@demo", "@TP-003"],
+          "tests": [
+            {
+              "projectName": "chromium",
+              "status": "flaky",
+              "results": [
+                {
+                  "status": "failed",
+                  "attachments": [
+                    { "name": "screenshot", "contentType": "image/png", "path": "__ROOT__/test-results/retry-chromium/test-failed-1.png" }
+                  ]
+                },
+                {
+                  "status": "passed",
+                  "attachments": [
+                    { "name": "server-log", "contentType": "text/plain", "body": "U0VDUkVULVRPS0VOLTEyMzQ=" }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "条件付きで省略する",
+          "tags": ["@demo", "@TP-004"],
+          "tests": [
+            { "projectName": "chromium", "status": "skipped", "results": [{ "status": "skipped" }] }
+          ]
+        },
+        {
+          "title": "他の change のテスト",
+          "tags": ["@other", "@TP-001"],
+          "tests": [
+            { "projectName": "chromium", "status": "expected", "results": [{ "status": "passed" }] }
+          ]
+        }
+      ]
+    }
+  ]
+}

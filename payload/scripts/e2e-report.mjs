@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { toplevel } from './lib/git.mjs';
 import { buildReport, parseReporterArgs } from './lib/report.mjs';
 import { resolveNamed } from './lib/select.mjs';
 
-const USAGE = `usage: e2e-report.mjs <change-id> [results.json] [--max-age <seconds>]
+const USAGE = `usage: e2e-report.mjs <change-id> [results.json] [--max-age <seconds>] [--format text|summary]
+
+--format summary: 人向けの Markdown 要約。添付は results.json のディレクトリからの相対パスで示す
 
 exit code: 0=問題なし / 1=カバレッジ欠落 / 2=引数・入力エラー / 3=失敗テストあり`;
 
@@ -51,7 +53,14 @@ try {
   console.error('Playwright JSON が不正です');
   process.exit(2);
 }
-const report = buildReport({ changeId: change.id, planText, results, maxAge: parsed.maxAge });
+const report = buildReport({
+  changeId: change.id,
+  planText,
+  results,
+  maxAge: parsed.maxAge,
+  format: parsed.format,
+  publishRoot: dirname(resolve(parsed.resultsPath)),
+});
 if (report.stderr) console.error(report.stderr.trimEnd());
 if (report.stdout) process.stdout.write(report.stdout);
 process.exit(report.exitCode);

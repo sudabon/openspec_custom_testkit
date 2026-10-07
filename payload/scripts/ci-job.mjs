@@ -16,6 +16,11 @@ import { parseTasks, taskState } from './lib/tasks.mjs';
 import { pathToFileURL } from 'node:url';
 
 const MAX_OUTPUT_MIB = 64;
+// GitHub caps one step's summary at 1 MiB. Rows beyond the count limit and sections beyond the byte budget
+// point at <change-id>.summary.md in the run artifact instead.
+export const STEP_SUMMARY_MAX_ROWS = 200;
+export const STEP_SUMMARY_MAX_BYTES = 900 * 1024;
+const STEP_SUMMARY_TITLE = '## openspec-custom-testkit E2E';
 
 export function runCiJob(env = process.env, deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
@@ -110,6 +115,7 @@ export function runCiJob(env = process.env, deps = {}) {
     if (mutation.code) code = code || mutation.code;
   }
   const required = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
+  const summaries = [];
   if (required.length && !env.E2E_COMMAND) fail(1, 'E2E required の change がありますが e2e-command がありません');
   if (env.E2E_COMMAND) {
     mkdirSync(runDir, { recursive: true });
@@ -133,6 +139,7 @@ export function runCiJob(env = process.env, deps = {}) {
     for (const change of required) {
       if (!existsSync(resultsPath)) {
         fail(2, `${change.id}: 今回の results.json がありません。前回の結果は使いません`);
+        summaries.push({ id: change.id, text: `### ${change.id}\n\n今回の results.json がありません。E2E コマンドの出力を job ログで確認してください。\n` });
         continue;
       }
       let plan;
@@ -141,18 +148,24 @@ export function runCiJob(env = process.env, deps = {}) {
         plan = readFileSync(join(repo, change.path, 'test-plan.md'), 'utf8');
       } catch (err) {
         fail(2, `${change.id}: レポートを読めません (${err.message})`);
+        summaries.push({ id: change.id, text: unreadable(change.id) });
         continue;
       }
-      const report = buildReport({
-        changeId: change.id,
-        planText: plan,
-        results,
-        maxAge,
-      });
+      const input = { changeId: change.id, planText: plan, results, maxAge };
+      const report = buildReport(input);
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
       lines.push(...[report.stdout.trimEnd(), report.stderr.trimEnd()].filter(Boolean));
       if (report.exitCode) code = code || report.exitCode;
+      summaries.push({ id: change.id, text: publishSummary(input, runDir, lines) ?? unreadable(change.id) });
     }
+  }
+  let e2eNote = null;
+  if (!env.E2E_COMMAND) {
+    e2eNote = required.length
+      ? `E2E は実行していません。E2E required の change (${required.map(change => change.id).join(', ')}) がありますが、e2e-command が空です。`
+      : 'E2E は実行していません。E2E required の change がなく、e2e-command も空です。';
+  } else if (!required.length) {
+    e2eNote = 'E2E を実行しましたが、E2E required の change はありません。結果は job ログと artifact を参照してください。';
   }
   const coverageStrict = env.COVERAGE_STRICT === 'true' || env.COVERAGE_STRICT === '1';
   if (env.REGRESSION_COMMAND || coverageStrict) {
@@ -228,7 +241,47 @@ export function runCiJob(env = process.env, deps = {}) {
     for (const failure of result.failures) lines.push(`✗ ${failure}`);
     if (result.failures.length) code = code || 1;
   }
-  return finish(repo, code, lines, { riskLevel: level, phase, runDir: existsSync(runDir) ? runDir : null }, env);
+  return finish(repo, code, lines, {
+    riskLevel: level,
+    phase,
+    runDir: existsSync(runDir) ? runDir : null,
+    e2eRan: Boolean(env.E2E_COMMAND),
+    stepSummary: stepSummaryText(summaries, e2eNote),
+  }, env);
+}
+
+function unreadable(id) {
+  return `### ${id}\n\nレポートを作れません（入力エラー）。詳細は job ログと artifact 内の <code>${id}.report.txt</code> を参照してください。\n`;
+}
+
+// Writes the full summary next to the results and returns the row-limited text for the step summary.
+// Publishing problems are warnings only; the gate verdict comes from the text report above.
+function publishSummary(input, runDir, lines) {
+  const overflowRef = `${input.changeId}.summary.md`;
+  const full = buildReport({ ...input, format: 'summary', publishRoot: runDir });
+  if (full.exitCode === 2) return null;
+  try {
+    writeFileSync(join(runDir, overflowRef), full.stdout);
+  } catch (err) {
+    lines.push(`::warning::${overflowRef} を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+  }
+  return buildReport({ ...input, format: 'summary', publishRoot: runDir, maxRows: STEP_SUMMARY_MAX_ROWS, overflowRef }).stdout;
+}
+
+function stepSummaryText(summaries, note) {
+  const parts = [`${STEP_SUMMARY_TITLE}\n`];
+  if (note) parts.push(`${note}\n`);
+  let bytes = Buffer.byteLength(parts.join('\n'));
+  for (const { id, text } of summaries) {
+    let section = text;
+    if (bytes + Buffer.byteLength(section) + 1 > STEP_SUMMARY_MAX_BYTES) {
+      section = `### ${id}\n\n要約が step summary の上限を超えるため省略しました。artifact 内の <code>${id}.summary.md</code> を参照してください。\n`;
+    }
+    if (bytes + Buffer.byteLength(section) + 1 > STEP_SUMMARY_MAX_BYTES) break;
+    parts.push(section);
+    bytes += Buffer.byteLength(section) + 1;
+  }
+  return parts.join('\n');
 }
 
 function run(execFile, file, args, cwd, env) {
@@ -249,6 +302,24 @@ function run(execFile, file, args, cwd, env) {
 function finish(repo, code, lines, meta, env) {
   const id = `${Date.now().toString(36)}-summary`;
   const dir = join(repo, 'test-results/testkit', id);
+  // The step summary and its copy for the PR comment are publishing only: failures warn and never change `code`.
+  let summaryFile = '';
+  if (meta?.stepSummary != null) {
+    try {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'step-summary.md'), meta.stepSummary);
+      summaryFile = join(dir, 'step-summary.md');
+    } catch (err) {
+      lines.push(`::warning::E2E の要約を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+    }
+    if (env.GITHUB_STEP_SUMMARY) {
+      try {
+        appendFileSync(env.GITHUB_STEP_SUMMARY, meta.stepSummary);
+      } catch (err) {
+        lines.push(`::warning::step summary に書き込めません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+      }
+    }
+  }
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'summary.txt'), `${lines.join('\n')}\nexit ${code}\n`);
@@ -257,7 +328,9 @@ function finish(repo, code, lines, meta, env) {
   }
   if (env.GITHUB_OUTPUT && meta?.riskLevel) {
     try {
-      appendFileSync(env.GITHUB_OUTPUT, `risk_level=${meta.riskLevel}\n`);
+      const outputs = [`risk_level=${meta.riskLevel}`];
+      if ('stepSummary' in meta) outputs.push(`run_dir=${meta.runDir ?? ''}`, `e2e_ran=${meta.e2eRan}`, `summary_file=${summaryFile}`);
+      appendFileSync(env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`);
     } catch { /* ignore */ }
   }
   return { code, lines, ...meta, summaryDir: dir };

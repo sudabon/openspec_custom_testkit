@@ -138,3 +138,25 @@ OpenSpec CLI はローカルの 1.13.1 で、三 schema の validate、`quality-
 | `git diff --check` | 成功 |
 
 観点表の欠落行、未知の F-ID、理由の無い「該当なし」、F-ID と理由の両方記入、`e2e: required` での「全観点」1行、不明・重複した観点名を負例として固定した。表の無い統合 change は、導入日より前の `created` で警告、`created` の欠落・不正、stamp の導入日の欠落、導入日以降の作成で失敗することを確認した。stamp の導入日は初回に記録され、同一内容の再実行で stamp が変わらず、旧 stamp からの update で既存項目が保持される。reporter は宣言 project の未実行で終了コード 1、fail で 3、全 project の pass で 0 を返し、`TP-002 (mobile-safari 未実行)` の形で欠落を表示する。既存の統合 quality fixture には観点表を追加した（表の無い fixture は fail closed の対象になるため）。
+
+## add-e2e-result-publishing
+
+記録日: 2026-10-07 JST。ホストは Darwin、Node v26.2.0。push、npm 公開、hosted GitHub Actions の実行はしていない。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 333 pass / 0 fail / 0 skipped（追加の `test/publishing.test.mjs` 15 件と `test/workflow-publishing.test.mjs` 8 件を含む） |
+| `npm run lint` | 成功。264 files scanned |
+| `npm run test:smoke` | 成功（exit 0）。同梱 example config を `TESTKIT_RUN_DIR` 付きで実行し、添付が summary に相対パスで出ること、HTML レポートが実行 directory の配下に出ることを確認 |
+| `npm pack --dry-run` | 成功。変更した payload・docs・examples が一覧に含まれる |
+| `actionlint` v1.7.7（`go run`、`-shellcheck=`） | `openspec-custom-testkit-gate.yml` で指摘 0 件 |
+
+workflow の公開系 step は local harness で確認した。保持日数の検証、リンクの追記、PR コメントの作成・更新・権限不足（fake `gh` で 403 を注入）を、workflow ファイルの `run` を bash（`-eo pipefail`）で実行して確かめた。ゲートと公開の成否の組み合わせは、`continue-on-error` と `if: always()` の配置から job の結論を計算して確かめた。
+
+### 未実施
+
+| 項目 | 理由 |
+|---|---|
+| hosted GitHub Actions での artifact 保存・artifact URL・step summary・PR コメント | 実 CI を実行していない。`actions/upload-artifact@v4` の `artifact-url` 出力と空の `retention-days` の扱いは、実 CI で未確認 |
+| fork PR での権限不足 | 実 CI を実行していない。fake `gh` の 403 で代替した |
+| shellcheck | ローカルに無いため、actionlint の shellcheck 連携を無効にした |
