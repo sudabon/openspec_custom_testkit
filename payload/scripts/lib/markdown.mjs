@@ -70,6 +70,7 @@ export function planSections(prose) {
     .filter(match => planSectionHeading(match[0].trim()));
   return headings.map((match, index) => ({
     heading: match[0].trim(),
+    start: match.index,
     body: prose.slice(match.index + match[0].length, headings[index + 1]?.index ?? prose.length),
   }));
 }
@@ -107,6 +108,11 @@ export function parseTable(text, { strictSeparator = false } = {}) {
     rows.push(row);
   }
   return { headers, rows };
+}
+
+// Only uppercase standalone IDs are references; paths, filename stems and words like HTTP-2 are not.
+export function tpReferences(text) {
+  return [...new Set([...String(text).matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))];
 }
 
 export function hasBoundedToken(text, token) {

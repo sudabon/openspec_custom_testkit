@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
 import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section } from './markdown.mjs';
+import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section, tpReferences } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 
@@ -88,7 +88,8 @@ const TP_SECTION = '## E2E観点一覧';
 const DELEGATED_SECTION = '## 対象外シナリオ';
 
 // Same prose and sections as the coverage map. Only `## E2E観点一覧` holds TP rows;
-// TP content under any other E2E観点一覧 / 対象外 heading fails instead of being dropped.
+// a TP-ID table anywhere else, or a TP reference under another E2E観点一覧 / 対象外
+// heading, fails instead of being dropped.
 function testPlanStructure(planText) {
   const prose = markdownProse(planText, { tables: true });
   const sections = planSections(prose.text);
@@ -99,11 +100,21 @@ function testPlanStructure(planText) {
   if (prose.unclosedFence) errors.push('test-plan のコードフェンスが閉じられていません（閉じていないフェンス以降の TP 行を読めません）');
   // Tables without a delimiter row stay accepted when they start with the TP-ID header.
   const tpTable = table => table.firstCells.includes('TP-ID');
+  const preamble = prose.text.slice(0, sections[0]?.start ?? prose.text.length);
+  if (planTables(preamble).some(tpTable)) errors.push(`最初の見出しより前に TP-ID 列の表があります（TP 行は ${TP_SECTION} の節に置いてください）`);
   for (const { heading, body } of sections) {
-    if (heading === TP_SECTION || heading === DELEGATED_SECTION) continue;
-    if (!/^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading) && !delegatedHeading(heading)) continue;
-    if (planTables(body).some(tpTable) || /TP-\d+/.test(body)) {
-      errors.push(`見出し ${heading} の下に TP があります（TP は ${TP_SECTION} の節に置き、小見出しは E2E観点一覧・対象外 で始めないでください）`);
+    if (heading === TP_SECTION) continue;
+    if (planTables(body).some(tpTable)) {
+      errors.push(`見出し ${heading} の下に TP があります（TP-ID 列の表は ${TP_SECTION} の節に置いてください）`);
+      continue;
+    }
+    if (heading === DELEGATED_SECTION) continue;
+    const refs = tpReferences(body);
+    if (!refs.length) continue;
+    if (delegatedHeading(heading)) {
+      errors.push(`見出し ${heading} は対象外の表として読めません（${DELEGATED_SECTION} の見出しが必要です。この節は TP を読まないため、${refs.join('・')} の参照があると失敗します）`);
+    } else if (/^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading)) {
+      errors.push(`見出し ${heading} の下に TP があります（${refs.join('・')} の参照があります。E2E観点一覧 で始まる見出しは TP を読まない別の節になるため、参照だけでも失敗します。補足は ${TP_SECTION} の中に別の名前の小見出しで書いてください）`);
     }
   }
   for (const table of tables) {

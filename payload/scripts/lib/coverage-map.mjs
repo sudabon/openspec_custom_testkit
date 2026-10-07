@@ -5,7 +5,7 @@ import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { readConfigDocument } from './environment.mjs';
 import { byteCompare } from './hash.mjs';
-import { delegatedHeading, markdownProse, planSections, planTables } from './markdown.mjs';
+import { delegatedHeading, markdownProse, planSections, planTables, tpReferences } from './markdown.mjs';
 import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
@@ -219,9 +219,7 @@ export function planRows(text, { legacy }) {
     })));
   }
   const tableIds = new Set(tp.map(row => row.id));
-  // Only uppercase standalone IDs are references; paths and filename stems are not.
-  const textOnly = [...new Set([...prose.matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))]
-    .filter(id => !tableIds.has(id));
+  const textOnly = tpReferences(prose).filter(id => !tableIds.has(id));
   const hasSections = sections.some(item => item.heading === '## E2E観点一覧' || item.heading === '## 対象外シナリオ');
   return { rows: [...tp, ...delegated], textOnly, hasSections };
 }

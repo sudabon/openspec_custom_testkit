@@ -478,14 +478,23 @@ test('only the line after the header is a delimiter row', () => {
   assert.match(report.stderr, /TP-ID - は不正/);
 });
 
-test('a top-level heading ends E2E観点一覧 for the gate, the reporter and coverage alike', () => {
-  const plan = requiredPlan() + '\n# Appendix\n| TP-ID | Requirement |\n|---|---|\n| TP-009 | demo |\n';
-  const checked = check({ viewpoints: table(fullRows), plan });
-  assert.deepEqual(checked.errors, []);
-  assert.deepEqual(checked.requiredTags, ['TP-001']);
-  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
-  assert.equal(report.exitCode, 0, report.stderr || report.stdout);
-  assert.deepEqual(planRows(plan, { legacy: false }).rows.filter(row => row.kind === 'tp').map(row => row.id), ['TP-001']);
+test('a TP-ID table outside E2E観点一覧 fails instead of disappearing', () => {
+  const tpTable = `| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |\n|---|---|---|---|---|---|---|---|\n${hiddenRow}`;
+  const delegated = '\n## 対象外シナリオ\n| Scenario | Reason | Oracle | Layer | Method |\n|---|---|---|---|---|\n| Other | TP-001 で代替 | O1 | Unit | node --test |\n';
+  for (const [name, plan, pattern] of [
+    ['top-level heading', requiredPlan() + '\n# Appendix\n' + tpTable, /見出し # Appendix の下に TP があります/],
+    ['ordinary section', requiredPlan() + '\n## 補足\n' + tpTable, /見出し ## 補足 の下に TP があります/],
+    ['subheading after the delegated section', requiredPlan() + delegated + '\n### 追加\n' + tpTable, /見出し ## 対象外シナリオ の下に TP があります/],
+    ['before the first heading', requiredPlan().replace('## E2E観点一覧\n', tpTable + '\n## E2E観点一覧\n'), /最初の見出しより前に TP-ID 列の表があります/],
+    ['header-only table', requiredPlan() + '\n## 補足\n| TP-ID | Requirement |\n|---|---|\n', /見出し ## 補足 の下に TP があります/],
+  ]) {
+    const checked = check({ viewpoints: table(fullRows), plan });
+    assert.ok(checked.errors.some(line => pattern.test(line)), `${name}: ${checked.errors.join(' / ')}`);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+    assert.equal(report.exitCode, 2, `${name}: ${report.stdout}`);
+    assert.match(report.stderr, pattern, name);
+    assert.deepEqual(planRows(plan, { legacy: false }).rows.filter(row => row.kind === 'tp').map(row => row.id), ['TP-001'], name);
+  }
 });
 
 test('TP under a nested E2E観点一覧 or 対象外 heading fails instead of disappearing', () => {
@@ -511,12 +520,28 @@ test('nested plan headings without TP content and the delegated section stay acc
   assert.equal(report.exitCode, 0, report.stderr || report.stdout);
 });
 
+test('notes under a nested plan heading may mention words that only look like TP-IDs', () => {
+  const plan = requiredPlan() + '\n### E2E観点一覧の補足\nHTTP-2 環境のみ。実装は tests/e2e/TP-001.spec.ts と STP-3 を参照\n';
+  assert.deepEqual(check({ viewpoints: table(fullRows), plan }).errors, []);
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+  assert.equal(report.exitCode, 0, report.stderr || report.stdout);
+});
+
+test('a delegated table under the wrong heading level names the heading', () => {
+  const plan = requiredPlan() + '\n### 対象外シナリオ\n| Scenario | Reason | Oracle | Layer | Method |\n|---|---|---|---|---|\n| Other | TP-001 で代替 | O1 | Unit | node --test |\n';
+  const checked = check({ viewpoints: table(fullRows), plan });
+  assert.ok(checked.errors.includes('demo: 見出し ### 対象外シナリオ は対象外の表として読めません（## 対象外シナリオ の見出しが必要です。この節は TP を読まないため、TP-001 の参照があると失敗します）'), checked.errors.join(' / '));
+  assert.ok(!checked.errors.some(line => /の下に TP があります/.test(line)), checked.errors.join(' / '));
+});
+
 test('a viewpoint register inside a code fence does not satisfy quality.md', () => {
   const fenced = '```md\n' + table(fullRows) + '```\n';
   const checked = check({ viewpoints: fenced });
   assert.ok(checked.errors.some(line => /quality\.md に ## Non-functional Viewpoints がありません/.test(line)), checked.errors.join(' / '));
   const unclosed = check({ viewpoints: table(fullRows).replace('## Non-functional Viewpoints\n', '```\n## Non-functional Viewpoints\n') });
   assert.ok(unclosed.errors.some(line => /quality\.md のコードフェンスが閉じられていません/.test(line)), unclosed.errors.join(' / '));
+  const exampleFirst = check({ viewpoints: fenced + table(fullRows.slice(0, 5)) });
+  assert.ok(exampleFirst.errors.some(line => /Non-functional Viewpoints に 入力系セキュリティ の行がありません/.test(line)), exampleFirst.errors.join(' / '));
 });
 
 test('report TP-ID validation follows frontmatter even for legacy schemas', () => {
