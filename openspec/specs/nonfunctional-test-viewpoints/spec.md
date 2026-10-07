@@ -35,7 +35,7 @@ test-plan が `e2e: required` の統合 change は、UI に触れる change と�
 
 #### Scenario: Backend-only change
 
-- **WHEN** `e2e: not-applicable` の change が「全観点 / 該当なし(UI 変更なし)」の1行だけを持つ
+- **WHEN** `e2e: not-applicable` の change が `| 全観点 | | UI 変更なし |` の1行だけを持つ
 - **THEN** 計画ゲートは通過し、各観点の行を要求しない
 
 ### Requirement: Legacy changes are not retroactively blocked

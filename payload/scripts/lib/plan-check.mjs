@@ -88,7 +88,21 @@ export function tpRows(planText) {
   return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
 }
 
-// Optional `Projects` cell: comma-separated Playwright project names. Duplicates collapse;
+const PLAN_HEADERS = ['TP-ID', 'Requirement', 'Scenario', 'Risk', 'Oracle', 'Fixture', 'Intent', 'Expected', 'Projects'];
+
+export function testPlanHeaderErrors(planText) {
+  const { headers } = parseTable(section(planText, '## E2E観点一覧'));
+  const errors = [];
+  const seen = new Set();
+  for (const header of headers) {
+    if (!PLAN_HEADERS.includes(header)) errors.push(`E2E観点一覧 の列 ${header || '(空)'} は不明です（使用できる列: ${PLAN_HEADERS.join(', ')}）`);
+    if (seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
+    seen.add(header);
+  }
+  return errors;
+}
+
+// Optional `Projects` cell: Playwright project names separated by `,` or `、`. Duplicates collapse;
 // `blank` reports an empty element such as `chromium, , webkit`.
 export function projectsOf(row) {
   const raw = asString(row.Projects);
@@ -106,9 +120,10 @@ function viewpointName(cell) {
   return asString(cell).replace(/\s+/g, '').replaceAll('/', '／');
 }
 
-// "該当なし(理由)" and "該当なし" alone both count as a reason only when text remains after the marker.
+// Strip the optional "該当なし" marker and parentheses; the remaining text must be a concrete reason.
 function reasonText(cell) {
-  return asString(cell).replace(/^該当なし/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
+  const reason = asString(cell).replace(/^該当なし\s*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
+  return /^(<[^>]*>|[-–—]|tbd|n\/?a|\.{3}|…)$/i.test(reason) ? '' : reason;
 }
 
 function viewpointErrors(id, text, e2e) {
@@ -139,7 +154,7 @@ function viewpointErrors(id, text, e2e) {
     }
   }
   if (names.includes(ALL_VIEWPOINTS)) {
-    if (e2e !== 'not-applicable') errors.push(`${id}: e2e: required の change は ${ALL_VIEWPOINTS} の1行で済ませられません（6観点すべての行が必要です）`);
+    if (e2e !== 'not-applicable') errors.push(`${id}: ${ALL_VIEWPOINTS} の1行にできるのは e2e: not-applicable の change だけです（現在: ${e2e || '未指定'}。それ以外は6観点すべての行が必要です）`);
     else if (names.length > 1) errors.push(`${id}: ${ALL_VIEWPOINTS} の行は他の観点の行と併用できません`);
     return errors;
   }
@@ -151,22 +166,30 @@ function viewpointErrors(id, text, e2e) {
 
 function createdOf(repo, dir) {
   const path = join(repo, dir, '.openspec.yaml');
-  if (!existsSync(path)) return '';
+  if (!existsSync(path)) return { error: '.openspec.yaml がありません' };
   const parsed = parseYamlText(readFileSync(path, 'utf8'));
+  if (parsed.errors.length || parsed.alias || parsed.tagged || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
+    return { error: `.openspec.yaml が不正です: ${parsed.errors[0] || 'alias・独自 tag のない YAML mapping が必要です'}` };
+  }
   const value = parsed.data?.created;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
-  return asString(value);
+  const created = value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString().slice(0, 10) : asString(value);
+  if (!created) return { error: '.openspec.yaml の created がありません' };
+  if (!validDate(created)) return { error: `.openspec.yaml の created が不正です: ${created}（YYYY-MM-DD が必要です）` };
+  return { created };
 }
 
 // A quality.md without the register is tolerated (warning) only for changes created before the kit
 // recorded the feature. Missing or unreadable dates fail closed.
 function missingViewpoints(repo, change) {
   const label = `${change.id}: quality.md に ${VIEWPOINT_HEADING} がありません`;
-  const created = createdOf(repo, change.path);
-  if (!validDate(created)) return { error: `${label}（.openspec.yaml の created が無いか YYYY-MM-DD ではないため、導入前の change として扱えません）` };
+  const metadata = createdOf(repo, change.path);
+  if (metadata.error) return { error: `${label}（${metadata.error}。導入前の change として扱えません）` };
+  const { created } = metadata;
   const stamp = readJsonIfExists(join(repo, STAMP_FILE));
+  if (!stamp.exists) return { error: `${label}（${STAMP_FILE} がありません。導入前の change として扱えません）` };
+  if (stamp.broken || !stamp.data || typeof stamp.data !== 'object' || Array.isArray(stamp.data)) return { error: `${label}（${STAMP_FILE} が不正です。導入前の change として扱えません）` };
   const since = asString(stamp.data?.features?.nonfunctionalViewpoints?.since);
-  if (!validDate(since)) return { error: `${label}（${STAMP_FILE} に features.nonfunctionalViewpoints.since が無いため、導入前の change として扱えません）` };
+  if (!validDate(since)) return { error: `${label}（${STAMP_FILE} の features.nonfunctionalViewpoints.since が${since ? `不正です: ${since}（YYYY-MM-DD が必要です）` : 'ありません'}。導入前の change として扱えません）` };
   if (created < since) return { warning: `${label}（${created} 作成で導入日 ${since} より前のため警告のみ）` };
   return { error: `${label}（${created} 作成で導入日 ${since} 以降です）` };
 }
@@ -203,6 +226,7 @@ export function checkTestPlan(repo, change) {
   const tpIds = tp.map(row => row['TP-ID']);
   if (new Set(tpIds).size !== tpIds.length) errors.push(`${change.id}: TP-ID が重複しています`);
   if (change.schema === SCHEMA_INTEGRATED) {
+    errors.push(...testPlanHeaderErrors(text).map(error => `${change.id}: ${error}`));
     for (const row of tp) {
       const declared = projectsOf(row);
       if (declared.blank) errors.push(`${change.id}: ${row['TP-ID']} の Projects に空の要素があります`);
@@ -219,6 +243,9 @@ export function checkTestPlan(repo, change) {
 
   const qualityPath = join(repo, change.path, 'quality.md');
   let model = null;
+  if (change.schema === SCHEMA_INTEGRATED && !existsSync(qualityPath)) {
+    errors.push(`${change.id}: quality.md がありません（Non-functional Viewpoints と Risk / Oracle の参照を検査できません）`);
+  }
   if (change.schema === SCHEMA_INTEGRATED && existsSync(qualityPath)) {
     const qualityText = readFileSync(qualityPath, 'utf8');
     model = qualityModel(qualityText);

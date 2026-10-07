@@ -65,12 +65,15 @@ Residual を書くと handoff が必要になる。小さな change で QA に�
 - 性能
 - 入力系セキュリティ
 
-各行には、割り当てた Failure Mode の ID（`F1, F2` のようにカンマ区切りで複数可）か、該当なし理由のどちらか一方だけを書く。計画ゲートは次の場合に失敗する。
+各行には、割り当てた Failure Mode の ID（`F1, F2` のように `,`・`、`・空白区切りで複数可）か、該当なし理由のどちらか一方だけを書く。計画ゲートは次の場合に失敗する。
 
 - 観点の行が欠けている、知らない観点名がある、同じ観点が重複している
 - Failure Mode に、同じ quality.md の Failure Modes に無い ID がある（例: 性能行が存在しない `F9` を参照）
 - Failure Mode も理由も空、または Failure Mode 欄が `該当なし` だけで理由が空（`該当なし()` のように中身の無い理由も空とみなす）
+- 理由が `<理由>`・`-`・`–`・`—`・`TBD`・`N/A`・`NA`・`...`・`…` だけである（英字の大小は問わない）。`該当なし（理由）` の括弧内も同じ規則で検査する
 - Failure Mode と理由の両方が書かれている
+
+計画検査の対象となる統合 change で `quality.md` 自体が無い場合も失敗する。`check-test-plan.mjs` は観点表の移行警告を `::warning::` として出力する。その他の評価・lint の警告は従来どおり `testkit-gate.mjs check` で確認する。
 
 割り当てた Failure Mode は、Test Layer Mapping で E2E などの層に割り当てる。ゲートが確認するのは ID が Failure Modes にあることまでで、割り当てた層が観点に合っているかは見ない。自動化できない観点（主観的な見た目の評価など）は、その Failure Mode を `Manual` 層にし、QA handoff の手動確認範囲に載せる。
 
@@ -89,19 +92,19 @@ kit の install / update は、観点表を初めて配置したときに stamp�
 | `.openspec.yaml` の `created` が導入日より前 | 警告のみ（進行中の change を update だけで壊さない） |
 | `created` が導入日以降 | 失敗 |
 | `created` が無い、または YYYY-MM-DD として読めない | 失敗（導入前と確認できないため対象外にしない） |
-| stamp に導入日が無い | 失敗 |
+| stamp に導入日が無い・不正、または metadata / stamp が破損している | 失敗（欠落・破損・不正な日付を区別して報告） |
 
 表がある change は、作成日にかかわらず上の規則で検査する。旧 `quality-driven` と `spec-driven-e2e` の change には観点表を要求しない。
 
 ### Projects 列（project 単位の実行照合）
 
-test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名のカンマ区切り（例: `chromium, mobile-safari`）で、同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。
+test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名を `,` または `、` で区切る（例: `chromium, mobile-safari`）。同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。統合 plan の見出しは `TP-ID` / `Requirement` / `Scenario` / `Risk` / `Oracle` / `Fixture` / `Intent` / `Expected` / `Projects` を使う。不明な列名（`Project`・`projects`・`Projects（任意）` など）や重複列は計画ゲートで失敗し、reporter 単体でも入力エラー（終了コード 2）になる。
 
 - 値がある TP は、書いた全 project で、`@<change-id>` と `@TP-NNN` を持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に数える。
-- 結果に1行も無い project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。実行されたが pass しなかった project は `未pass` と表示する。
+- 対象 change・TP に対応する結果行が無い、またはすべての行で attempt 記録が0件の project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。skip でも attempt 記録が0件なら `未実行`、1件以上あって pass が無ければ `未pass` と表示する。
 - いずれかの project で fail があれば、欠落より失敗を優先して終了コード 3 を返す。終了コードの意味（0/1/2/3）は変わらない。
 - 列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。列の無い既存 plan の判定と出力は変わらない。
-- 空の要素（`chromium, , chromium`）は計画ゲートが失敗する。重複は1つにまとめる。project 名が Playwright 設定に存在するかは検査しない（動的な設定を実行しないため）。設定に無い名前を書くと、reporter が未実行として欠落を報告する。
+- 空の要素（`chromium, , chromium`）は計画ゲートが失敗し、reporter 単体では入力エラーになる。重複は1つにまとめる。project 名が Playwright 設定に存在するかは検査しない（動的な設定を実行しないため）。設定に無い名前を書くと、reporter が未実行として欠落を報告し、`Projects` の指定と Playwright の project 名・実行対象・skip 条件の確認を促す。
 
 project を増やすと CI の時間も増える。クロスブラウザや端末差の確認が必要な TP だけに `Projects` を付ける。見た目の回帰（`toHaveScreenshot`）とアクセシビリティ（`@axe-core/playwright`）のテストの書き方は `e2e-conventions` SKILL にある。kit は導入先の `package.json` に依存を追加しない。
 

@@ -1,6 +1,6 @@
 import { hasBoundedToken } from './markdown.mjs';
 import { splitFrontmatter } from './frontmatter.mjs';
-import { projectsOf, tpRows } from './plan-check.mjs';
+import { projectsOf, testPlanHeaderErrors, tpRows } from './plan-check.mjs';
 import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export { formatAge };
@@ -13,11 +13,14 @@ export function plannedIds(planText) {
     if (value !== 'required' && value !== 'not-applicable') {
       return { error: `e2e の値が不正です: ${value}`, ids: [], applicability: 'unknown' };
     }
+    const headerErrors = testPlanHeaderErrors(planText);
+    if (headerErrors.length) return { error: headerErrors.join('\n'), ids: [], applicability: value };
     if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable', projects: {} };
     const rows = tpRows(planText);
     const projects = {};
     for (const row of rows) {
-      const declared = projectsOf(row).projects;
+      const { projects: declared, blank } = projectsOf(row);
+      if (blank) return { error: `${row['TP-ID']} の Projects に空の要素があります`, ids: [], applicability: value };
       if (declared.length) projects[row['TP-ID']] = [...new Set([...(projects[row['TP-ID']] ?? []), ...declared])];
     }
     return { ids: [...new Set(rows.map(row => row['TP-ID']))], applicability: 'required', projects };
@@ -58,6 +61,7 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
   }
   // A TP with declared Projects is covered only when every declared project has a passing attempt.
   const gaps = [];
+  const projectHints = [];
   if (planned.applicability !== 'not-applicable') {
     for (const id of planned.ids) {
       const declared = planned.projects[id] ?? [];
@@ -70,6 +74,7 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
       const lacking = declared.filter(project => !passed.has(project));
       if (!lacking.length) continue;
       const notRun = lacking.filter(project => !ran.has(project));
+      if (notRun.length) projectHints.push(`${id}: Projects の指定 (${notRun.join(', ')}) と Playwright の project 名・実行対象・skip 条件を確認してください`);
       const notPassed = lacking.filter(project => ran.has(project));
       const detail = [notPassed.length ? `${notPassed.join(', ')} 未pass` : '', notRun.length ? `${notRun.join(', ')} 未実行` : ''].filter(Boolean).join(', ');
       gaps.push(`${id} (${detail})`);
@@ -92,6 +97,7 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
   lines.push('');
   lines.push(`合計 ${rows.length} 件: pass ${count('pass')} / fail ${failed} / skip ${count('skip')} / フレーク ${rows.filter(row => row.flaky).length}`);
   if (missing.length) lines.push('', `⚠ カバレッジ欠落: ${missing.join(', ')} に対応するテストが未実装/未実行`);
+  for (const hint of projectHints) lines.push(`  ${hint}`);
   if (planned.applicability === 'required' && planned.ids.length === 0) {
     lines.push('', '⚠ カバレッジ欠落: required の TP が 0 件です');
   }

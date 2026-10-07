@@ -65,10 +65,11 @@ kit の update で、quality テンプレートの `## Non-functional Viewpoints
 update は stamp に `features.nonfunctionalViewpoints.since`（その日の日付）を書く。既に日付がある stamp では書き換えないので、同じ内容で update を繰り返しても stamp は変わらない。stamp のほかの項目は保持する。
 
 - 導入日より前に作られた統合 change（`.openspec.yaml` の `created` で判定）は、観点表が無くても警告だけで通る。そのまま進めてよいが、表を足せば通常の検査になる。
-- 導入日以降に作る統合 change は観点表が必須になる。`e2e: required` の change は6観点すべての行を、`e2e: not-applicable` の change は6行か `| 全観点 | | <理由> |` の1行を書く。
+- 導入日以降に作る統合 change は観点表が必須になる。`e2e: required` の change は6観点すべての行を、`e2e: not-applicable` の change は6行か `| 全観点 | | UI 変更なし |` のような具体的な理由付きの1行を書く。`<理由>`・`TBD` などのプレースホルダだけでは失敗する。
 - `.openspec.yaml` に `created` が無い統合 change で観点表が無いものは失敗する。`created: YYYY-MM-DD` を足すか、観点表を書く。
 - 旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
 - `Projects` 列が無い test-plan の判定は変わらない。
+- 統合 test-plan の不明な列名と重複列は失敗する。`Project`・`projects`・`Projects（任意）` は `Projects` に直す。許可される列名は test-plan テンプレートを参照する。
 - 既存の `playwright.config.ts` は上書きしない。projects の例は `playwright.config.example.ts` として置くだけなので、必要な project を自分の設定へ写す。`@axe-core/playwright` を使うときは `npm install -D @axe-core/playwright` を実行する。
 
 戻すときは kit を前の版へ update する。stamp の `features` は旧版では読まれない。

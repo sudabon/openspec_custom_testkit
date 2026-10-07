@@ -32,7 +32,7 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
-  const progress = { level: 'unknown', failures: [], warnings: [], oks: [] };
+  const progress = { level: 'unknown', failures: [], warnings: [], planWarnings: [], oks: [] };
   try {
     return evaluateReadableChange(repo, change, options, progress);
   } catch (err) {
@@ -46,13 +46,13 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
-  const { failures, warnings, oks } = progress;
+  const { failures, warnings, planWarnings, oks } = progress;
   let level = 'none';
 
   const selectedCustomQe = change.qe === true && change.scope === 'out-of-scope' && change.lifecycle !== 'deleted';
   if (change.scope === 'out-of-scope' && !selectedCustomQe && change.errors.length === 0 && change.e2e !== 'unknown') {
     warnings.push(change.reason);
-    return { failures, warnings, oks, level, phase };
+    return { failures, warnings, planWarnings, oks, level, phase };
   }
   failures.push(...change.errors);
 
@@ -142,6 +142,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
     const plan = checkTestPlan(repo, change);
     failures.push(...plan.errors);
     warnings.push(...plan.warnings);
+    planWarnings.push(...plan.warnings);
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');
@@ -153,7 +154,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
       }
     }
   }
-  return { failures, warnings, oks, level, phase };
+  return { failures, warnings, planWarnings, oks, level, phase };
 }
 
 export function maxLevel(levels) {
