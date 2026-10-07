@@ -58,6 +58,13 @@ CI が同じ `command` を実行して同じ `exit_code` を得た run を再現
 
 `result` は実行後に `pass` または `fail` だけを書きます。空のままは未実行です。
 
+`reviews` は人間のレビュー記録です（medium 以上で必須）。E2E の fixture を追加・変更した change では、レビュー担当は次も確認します。ゲートはこれらを検査せず、gate の成功は冪等性を保証しません。
+
+- fixture が各テストの前に状態をべき等に作り直すこと（同じ fixture を2回実行しても同じ状態になる）
+- テスト間で状態を共有しないこと（実行順を入れ替えても、単独で実行しても結果が変わらない）
+
+最終確認日が `mock_contract_max_age_days` を超えたモックを照合し直さずに受け入れる場合は、`residuals` にモック名を含む Residual を書き、人間が `approved_by` と `approved_at` を記入します。
+
 ## Oracle Changes
 
 seal 後に Oracle を変えたときだけ、変更理由、再承認、再seal を本文と JSON の両方に残します。変更がなければ「なし」と書きます。

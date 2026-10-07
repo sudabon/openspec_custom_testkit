@@ -91,7 +91,7 @@ e2e: required
 ## E2E観点一覧
 | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |${projects == null ? '' : ' Projects |'}
 |-------|-------------|----------|------|--------|---------|--------|----------|${projects == null ? '' : '----------|'}
-| TP-001 | demo | Visible | R1 | O1 | app | click | 1 |${projects == null ? '' : ` ${projects} |`}
+| TP-001 | demo | Visible | R1 | O1 | なし | click | 1 |${projects == null ? '' : ` ${projects} |`}
 `;
 
 const naPlan = `---
@@ -389,7 +389,7 @@ test('two empty headers report two empty-column errors without a duplicate error
 
 test('malformed TP IDs cannot disappear behind a passing TP', () => {
   for (const id of ['TP-01', 'tp-003', '`TP-002`', '', 'TP-0001']) {
-    const plan = requiredPlan() + `| ${id} | demo | Hidden | R1 | O1 | app | click | 2 |\n`;
+    const plan = requiredPlan() + `| ${id} | demo | Hidden | R1 | O1 | なし | click | 2 |\n`;
     const checked = check({ viewpoints: table(fullRows), plan });
     assert.ok(checked.errors.some(line => /TP-ID.*不正/.test(line)), `${id}: ${checked.errors.join(' / ')}`);
     const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
@@ -402,7 +402,7 @@ test('malformed TP IDs cannot disappear behind a passing TP', () => {
 const secondPlanTable = `### 異常系
 | Projects | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |
 |---|---|---|---|---|---|---|---|---|
-| chromium, webkit | TP-002 | demo | Hidden | R1 | O1 | app | click | 2 |
+| chromium, webkit | TP-002 | demo | Hidden | R1 | O1 | なし | click | 2 |
 `;
 
 for (const [name, plan] of [
@@ -439,12 +439,12 @@ test('later tables still validate their own headers and TP IDs', () => {
   }
 });
 
-const hiddenRow = '| TP-002 | demo | Hidden | R1 | O1 | app | click | 2 |\n';
+const hiddenRow = '| TP-002 | demo | Hidden | R1 | O1 | なし | click | 2 |\n';
 
 test('TP rows cut off from their table header cannot disappear', () => {
   const naRequired = plan => plan.replace('e2e: required', 'e2e: not-applicable');
   for (const [name, plan, pattern] of [
-    ['unclosed fence between rows', requiredPlan() + '```text\n' + hiddenRow + '| TP-X | demo | Bad | R1 | O1 | app | click | 3 |\n', /コードフェンスが閉じられていません/],
+    ['unclosed fence between rows', requiredPlan() + '```text\n' + hiddenRow + '| TP-X | demo | Bad | R1 | O1 | なし | click | 3 |\n', /コードフェンスが閉じられていません/],
     ['unclosed tilde fence before a misspelled header', requiredPlan() + '~~~\n| TP-ID | Project |\n|-|-|\n| TP-002 | chromium |\n', /コードフェンスが閉じられていません/],
     ['unclosed fence hiding rows under not-applicable', naRequired(requiredPlan()).replace('## E2E観点一覧\n', '```\n## E2E観点一覧\n'), /コードフェンスが閉じられていません/],
     ['blank line before a single row', requiredPlan() + '\n' + hiddenRow, /TP-ID の見出し行で始まらない表があります: \| TP-002/],
@@ -545,7 +545,7 @@ test('a viewpoint register inside a code fence does not satisfy quality.md', () 
 });
 
 test('report TP-ID validation follows frontmatter even for legacy schemas', () => {
-  const body = requiredPlan().replace(/^---\ne2e: required\n---\n/, '') + '| TP-01 | demo | Hidden | R1 | O1 | app | click | 2 |\n';
+  const body = requiredPlan().replace(/^---\ne2e: required\n---\n/, '') + '| TP-01 | demo | Hidden | R1 | O1 | なし | click | 2 |\n';
   const run = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]);
   for (const prefix of ['', '---\ne2e: required\n---\n']) {
     const plan = prefix + body;
@@ -569,7 +569,7 @@ test('standalone reporter rejects TP rows under not-applicable', () => {
 test('custom plan columns preserve coverage with and without Projects', () => {
   for (const projects of [null, 'chromium, mobile-safari']) {
     for (const header of ['備考', 'Notes', '優先度']) {
-      const plan = requiredPlan(projects).replace(' Expected |', ` Expected | ${header} |`).replace('| app | click | 1 |', '| app | click | 1 | memo |');
+      const plan = requiredPlan(projects).replace(' Expected |', ` Expected | ${header} |`).replace('| なし | click | 1 |', '| なし | click | 1 | memo |');
       const checked = check({ viewpoints: table(fullRows), plan });
       assert.deepEqual(checked.errors, [], header);
       assert.deepEqual(checked.projects, projects ? { 'TP-001': ['chromium', 'mobile-safari'] } : {});
@@ -625,8 +625,8 @@ e2e: required
 ## E2E観点一覧
 | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected | Projects |
 |-------|-------------|----------|------|--------|---------|--------|----------|----------|
-| TP-001 | demo | A | R1 | O1 | app | a | 1 | |
-| TP-002 | demo | B | R1 | O1 | app | b | 2 | chromium, mobile-safari |
+| TP-001 | demo | A | R1 | O1 | なし | a | 1 | |
+| TP-002 | demo | B | R1 | O1 | なし | b | 2 | chromium, mobile-safari |
 `;
 
 function report(rows) {

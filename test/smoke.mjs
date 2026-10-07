@@ -57,7 +57,7 @@ e2e: required
 ## E2E観点一覧
 | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |
 |-------|-------------|----------|------|--------|---------|--------|----------|
-| TP-001 | counter | Visible | R1 | O1 | none | 増やす | 1 |
+| TP-001 | counter | Visible | R1 | O1 | なし | 増やす | 1 |
 `;
 let results;
 try {
@@ -124,7 +124,7 @@ e2e: required
 ## E2E観点一覧
 | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected | Projects |
 |-------|-------------|----------|------|--------|---------|--------|----------|----------|
-| TP-001 | example | Visible | R1 | O1 | none | 動く | 2 | ${projects} |
+| TP-001 | example | Visible | R1 | O1 | なし | 動く | 2 | ${projects} |
 `;
   const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium'), results: exampleResults });
   if (allProjects.exitCode !== 0) {

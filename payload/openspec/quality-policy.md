@@ -41,6 +41,7 @@ integrated_minimum:
 mutation_threshold_high: 70
 e2e_lint_mode: enforce
 e2e_lint_scope: changed
+mock_contract_max_age_days: 90
 
 統合 schema `quality-driven-e2e` では low を含む全 Risk で、人間の承認、Oracle seal、独立反証が必須です。`QE_SEAL_REQUIRED_LEVELS` と `QE_SCHEMA` ではこの条件を外せません。上の表で low が「任意」のままの旧 policy は、統合 schema の doctor を通しません。
 
@@ -57,6 +58,16 @@ e2e_lint_scope: changed
 - `warn` では、差分と全体範囲の指摘を警告だけにする。
 - 導入時は `changed` で始め、`node scripts/testkit-gate.mjs lint` の警告が 0 件になってから `all` に上げる。
 - 環境変数 `QE_E2E_LINT_MODE` / `QE_E2E_LINT_SCOPE` は旧 `spec-driven-e2e` の change にだけ効く（既定は `warn`）。統合 schema では無視する。
+
+### fixture とモックの登録
+
+統合 schema の `e2e: required` の change では、test-plan の `Fixture` 列にある fixture 名が E2E ルートの `fixtures/README.md` に登録され、その行の「使用する TP-ID」に `<change-id>:TP-NNN` があることを計画ゲートで検査する。`mock:<name>` と書いたモックは `mocks/README.md` の `## モック一覧` に全列（モック名・対象サービス・契約の出典・整合の確認方法・最終確認日）が必要になる。
+
+- モックの最終確認日から検査日までに許す日数（正の整数）は `mock_contract_max_age_days` で設定する。欠落時は 90 日。不正値と書式違いは doctor と最終検証ゲートの失敗になる。
+- 最終検証ゲートは上限を超えたモックを失敗にする。照合し直して最終確認日を更新するか、モック名を含む人間承認済みの Residual（approved_by と approved_at）を evidence に記録する。鮮度は検査日に依存する。
+- 最終確認日は人間が実物と照合して更新する。CI の `contract-command` の成功でも自動更新しない。
+- fixture の冪等性とテスト間の状態非共有は機械検査しない。medium 以上の Human Code Review の確認項目とする（§5）。
+- 旧 `spec-driven-e2e` の change では登録の不整合を警告だけにする。旧 `quality-driven` と `e2e: not-applicable` には適用しない。
 
 ### フレーク方針
 
@@ -79,6 +90,11 @@ e2e_lint_scope: changed
 - risk_level が medium 以上の change
 - seal 後の Oracle 変更、Residual Risk の追加
 - 認証・認可・課金・個人情報に触れる変更(risk_level に関わらず)
+
+medium 以上の Human Code Review で、E2E の fixture を追加・変更した change は次も確認する(ゲートは検査しない):
+
+- fixture が各テストの前に状態をべき等に作り直すこと(同じ fixture を2回実行しても同じ状態になる)
+- テスト間で状態を共有しないこと(実行順を入れ替えても、単独で実行しても結果が変わらない)
 
 ## 6. 禁止パターン(Reward Hacking)
 

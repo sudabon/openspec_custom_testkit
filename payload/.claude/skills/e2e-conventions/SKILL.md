@@ -16,8 +16,14 @@ description: Playwright E2Eテストの実装規約。openspec change の apply 
 ## 構造
 - Page Object Model: セレクタとページ操作は tests/e2e/pages/ に分離
 - fixture は tests/e2e/fixtures/ に置き、fixture 名と作られる状態の対応を
-  同ディレクトリの README.md に記録する
-- 外部依存のモックは tests/e2e/mocks/ に置く。テストファイル内に直接書かない
+  同ディレクトリの README.md に記録する。「使用する TP-ID」には `<change-id>:TP-NNN` を書く
+- 外部依存のモックは tests/e2e/mocks/ に置く。テストファイル内に直接書かない。
+  モック名・対象サービス・契約の出典・整合の確認方法・最終確認日を tests/e2e/mocks/README.md に登録する
+- test-plan の `Fixture` 列には fixture 名と `mock:<name>` を `,` 区切りで書き、前提状態が無い TP は `なし` と書く。
+  未登録は計画ゲートで失敗する（手順は openspec-custom-testkit の docs/workflow.md「fixture とモックの登録」）
+- fixture は各テストの前に状態をべき等に作り直し、テスト間で状態を共有しない。ゲートはこれを検査しないので、
+  Human Code Review の確認項目として扱う。gate の成功を冪等性の保証とみなさない
+- モックの最終確認日は人間が実物と照合して更新する。Agent は日付を書き換えない。鮮度は最終検証の検査日で判定される
 - セットアップ/テアダウンは fixture で行う。テスト本体でのログイン操作の繰り返しは禁止
 - 1テスト = 1検証意図。テスト間の順序依存は禁止(各テストが独立して実行可能であること)
 
@@ -99,7 +105,7 @@ gate（`node scripts/testkit-gate.mjs check` / `lint`）は E2E ルート配下�
 | page.locator() / page.$() / page.$$() と XPath の禁止、CSS・要素名だけの指定の禁止 | `forbidden-locator` | `locator()` / `$` / `$$` / `$eval` / `$$eval` の呼出しと、セレクタ引数の XPath 文字列（`fill()` 等は受け手が `page` / `frame` / `popup` などの名前のときだけ検査） |
 | getByRole / getByLabel / getByText を最優先、次点 getByTestId | lint 対象外 | どれが最適かは画面の意味で決まり、構文から判定できない |
 | UI 文言の変更を test-plan に反映してから行う | lint 対象外 | 仕様変更の判断で、ソースからは判定できない |
-| Page Object Model、fixture、mocks の配置と README | lint 対象外 | fixture と mock の登録検査は別 change（add-fixture-and-mock-registry-checks）が扱う |
+| Page Object Model、fixture、mocks の配置と README | lint 対象外 | fixture と mock の登録は計画ゲートが README の表で検査する。冪等性は検査しない |
 | テスト本体でのログイン操作の繰り返し禁止、1 テスト = 1 検証意図、順序依存の禁止 | lint 対象外 | 意図と実行時の依存は構文から決定的に判定できない |
 | page.waitForTimeout / sleep の禁止 | `fixed-wait` | `waitForTimeout()` と `setTimeout` を使う sleep。別名に代入した `setTimeout` は追跡しない |
 | 外部 SaaS のモック | lint 対象外 | 通信先の判定に実行時情報が要る |

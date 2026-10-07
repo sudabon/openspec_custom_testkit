@@ -230,6 +230,32 @@ reporter は有効な隔離中の TP を coverage にも欠落にも数えず、
 - 同梱の `playwright.config.example.ts` の `retries` の既定値は変えない。利用者の Playwright 設定は保護ファイルである。
 - シナリオ対応表（`coverage-map`）は隔離リストをまだ読まない。隔離中の TP を「保護なし（隔離中）」として扱うのは別 change である。
 
+## fixture とモックの登録
+
+統合 schema の `e2e: required` の change では、計画ゲートが test-plan の `Fixture` 列を検査する。目的は、E2E が Green のときに前提データやモックの妥当性を QA が手作業で確かめ直さなくて済むよう、その根拠を登録表に残すことである。
+
+### 登録の手順
+
+1. test-plan の `Fixture` 列に前提状態を `,` または `、` で区切って書く。`mock:<name>` は外部サービスのモック、それ以外は fixture 名。前提状態が無い TP は `なし` とだけ書く。空欄は失敗する。
+2. fixture 名は E2E ルートの `fixtures/README.md` の `## fixture 名 → 作られる状態` に行を置き、「使用する TP-ID」に `<change-id>:TP-NNN` を書く。TP-ID は change ごとに採番されるため、`TP-002` だけの記載は数えない。
+3. モックは E2E ルートの `mocks/README.md` の `## モック一覧` に、モック名・対象サービス・契約の出典・整合の確認方法・最終確認日（YYYY-MM-DD）をそろえて登録する。将来の日付は失敗する。モックの表には TP-ID 列を置かない（使用箇所は test-plan から逆引きできる）。
+4. README が無いのに fixture 名・モックを参照すると、README のパスを示して失敗する。
+
+旧 `spec-driven-e2e` の change（列名 `前提(fixture)`）は同じ不整合を警告だけにし、終了コードを変えない。旧 `quality-driven` と `e2e: not-applicable` の change は対象外である。
+
+### モック契約の鮮度
+
+最終検証ゲートは、使用モックの最終確認日から**検査を実行した日**（UTC）までの日数が `quality-policy.md` の `mock_contract_max_age_days`（既定 90）以下であることを検査する。鮮度は検査日に依存するので、同じコミットでも日をまたぐと結果が変わる。これは意図した挙動で、古い照合結果のまま archive しないためである。超過したモックは、実物と照合し直して最終確認日を更新するか、モック名を含む人間承認済み（`approved_by` と `approved_at`）の Residual を evidence の `residuals` に書く。
+
+最終確認日は人間が照合内容を確かめて更新する欄で、Agent は書き換えない。CI の任意入力 `contract-command` は契約テストを実行して run 記録に残すが、成功しても最終確認日は更新しない。`contract-command` が空なら、kit は外部サービスへ何も送らない。
+
+### 冪等性はレビュー観点
+
+kit は fixture の冪等性とテスト間の状態非共有を機械的に検査しない。実装方式（シード API・DB 直接）ごとに確かめ方が違い、静的検査では誤検知が多いためである。計画ゲートは「fixture の冪等性・テスト間の状態非共有は検査していません」と表示し、gate の成功を冪等性の保証として扱わない。medium 以上の Human Code Review では、fixture を追加・変更した change について次を確認する（policy の §5 と evidence テンプレートの review 欄の説明に同じ項目がある）。
+
+- fixture が各テストの前に状態をべき等に作り直すこと
+- テスト間で状態を共有しないこと（実行順の入れ替えや単独実行で結果が変わらない）
+
 ## E2E 規約 lint
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。
@@ -238,7 +264,7 @@ E2E required の change が検査対象にある場合、強制範囲は「検�
 
 強制範囲内で読めない、または字句解析できないソースは失敗にする。指摘なしとしては扱わない。
 
-フレークの隔離は lint の例外ではない。隔離を理由にした `test.skip` / `test.fixme` も lint は除外の指摘として残す。fixture と mock の登録検査はこの lint では扱わない。`fixed-wait` は別名に代入した `setTimeout` を追跡しない。`missing-tag` は active / archive の change ID と照合し、`@smoke` などの一般タグだけでは通さない。
+フレークの隔離は lint の例外ではない。隔離を理由にした `test.skip` / `test.fixme` も lint は除外の指摘として残す。fixture と mock の登録検査はこの lint では扱わず、計画ゲートが行う（「fixture とモックの登録」）。`fixed-wait` は別名に代入した `setTimeout` を追跡しない。`missing-tag` は active / archive の change ID と照合し、`@smoke` などの一般タグだけでは通さない。
 
 `node scripts/testkit-gate.mjs lint [--phase plan|final] [--base <ref>] [<change>...]` は E2E ルート全体の指摘を強制範囲と警告範囲に分けて表示する。`--phase` の既定値は `plan`。検査ファイル数も表示する。終了コードは強制範囲の失敗、不正な抑止・設定、入力の読み取り失敗、検査ソース 0 件、change 選択・適用状態の判定失敗があれば 1、引数の誤りは 2、それ以外は 0 である。test-plan 未作成の計画途中の change は、適用状態の判定失敗に含めない。対象 change が 0 件でもソースを検査できれば警告一覧を表示する。`check` の終了コードの意味は変わらない。
 

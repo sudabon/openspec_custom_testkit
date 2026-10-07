@@ -12,6 +12,8 @@ mutation_threshold_high: 70
 
 統合 schema の low は、旧 quality-driven policy の「任意」より厳しく、環境変数では弱められません。
 
+任意: モック契約の鮮度の上限日数を変える場合は、\`mock_contract_max_age_days: 90\` を同じ書式の独立した行として書きます（正の整数。書かなければ 90 日）。
+
 任意: Risk 別にフレークを不合格にする場合は、\`flaky_fail_levels: [high]\` をインデント・箇条書き記号・バッククォートの無い独立した行として追記します（low / medium / high を列挙。書かなければ従来どおり flaky を pass として数えます）。`;
 
 function gateRow(text, label) {
@@ -85,4 +87,21 @@ export function e2eLintPolicy(policyText) {
   result.errors = [...result.invalid];
   if (text.trim() && result.missing.length) result.invalid.push(`quality-policy.md に ${result.missing.join(' / ')} がありません。既定値で動かします`);
   return result;
+}
+
+export const MOCK_CONTRACT_MAX_AGE_DEFAULT = 90;
+
+// `mock_contract_max_age_days: 90` at the start of a line. Missing means the default; a value that cannot
+// be read is an input error instead of silently falling back to a looser or stricter limit.
+export function mockContractMaxAgeDays(policyText) {
+  const invalid = detail => ({ days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: `quality-policy.md の mock_contract_max_age_days が不正です (${detail})。mock_contract_max_age_days: 90 のように正の整数の日数を独立した行に書いてください` });
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock_contract_max_age\w*\b/.test(line));
+  if (candidates.some(line => !/^mock_contract_max_age_days:/.test(line))) {
+    return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けないでください');
+  }
+  if (!candidates.length) return { days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: null };
+  if (candidates.length > 1) return invalid('複数の行があります');
+  const value = candidates[0].slice('mock_contract_max_age_days:'.length).replace(/[ \t]+#.*$/, '').trim();
+  if (!/^[1-9]\d*$/.test(value)) return invalid(value || '空');
+  return { days: Number(value), error: null };
 }

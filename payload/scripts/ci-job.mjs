@@ -116,6 +116,14 @@ export function runCiJob(env = process.env, deps = {}) {
     lines.push(...mutation.lines);
     if (mutation.code) code = code || mutation.code;
   }
+  // Optional contract tests against the real services' contracts. Unset means nothing runs and nothing is sent;
+  // a pass never updates the verification dates in the mock registry.
+  if (env.CONTRACT_COMMAND) {
+    const contract = run(execFile, 'bash', ['-c', env.CONTRACT_COMMAND], work, env);
+    record('contract', env.CONTRACT_COMMAND, contract);
+    lines.push(...contract.lines);
+    if (contract.code) code = code || contract.code;
+  }
   const required = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
   const summaries = [];
   if (required.length && !env.E2E_COMMAND) fail(1, 'E2E required の change がありますが e2e-command がありません');
