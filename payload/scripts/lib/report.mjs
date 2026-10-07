@@ -1,6 +1,6 @@
 import { hasBoundedToken } from './markdown.mjs';
 import { splitFrontmatter } from './frontmatter.mjs';
-import { projectsOf, testPlanHeaderErrors, tpRows } from './plan-check.mjs';
+import { projectsOf, testPlanHeaderErrors, testPlanRowErrors, tpRows } from './plan-check.mjs';
 import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export { formatAge };
@@ -16,8 +16,13 @@ export function plannedIds(planText) {
     // Frontmatter opts into structured plan parsing regardless of the change's schema.
     const headerErrors = testPlanHeaderErrors(planText);
     if (headerErrors.length) return { error: headerErrors.join('\n'), ids: [], applicability: value };
-    if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable', projects: {} };
+    const rowErrors = testPlanRowErrors(planText);
+    if (rowErrors.length) return { error: rowErrors.join('\n'), ids: [], applicability: value };
     const rows = tpRows(planText);
+    if (value === 'not-applicable') {
+      if (rows.length) return { error: 'not-applicable なのに TP があります', ids: [], applicability: value };
+      return { ids: [], applicability: 'not-applicable', projects: {} };
+    }
     const projects = {};
     for (const row of rows) {
       const { projects: declared, blank } = projectsOf(row);

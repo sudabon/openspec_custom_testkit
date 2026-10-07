@@ -88,17 +88,24 @@ export function tpRows(planText) {
   return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
 }
 
-// Reserve Projects and its common spelling variants, while preserving custom columns.
-const PROJECT_HEADER_VARIANT = /^projec?ts?(?:\s*[（(].*[)）])?$/i;
+export function testPlanRowErrors(planText) {
+  return parseTable(section(planText, '## E2E観点一覧')).rows
+    .filter(row => !/^TP-\d{3}$/.test(row['TP-ID'] ?? ''))
+    .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`);
+}
+
+// Reserve project-related names (including the existing Projets typo), preserving custom columns.
+const PROJECT_HEADER_VARIANT = /projec?t|プロジェクト/;
 
 export function testPlanHeaderErrors(planText) {
   const { headers } = parseTable(section(planText, '## E2E観点一覧'));
   const errors = [];
   const seen = new Set();
   for (const header of headers) {
+    const normalized = header.normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();
     if (!header) errors.push('E2E観点一覧 の列 (空) は不正です（列名を指定してください）');
-    else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(header)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
-    if (seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
+    else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(normalized)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
+    if (header && seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
     seen.add(header);
   }
   return errors;
@@ -124,8 +131,9 @@ function viewpointName(cell) {
 
 // Strip the optional "該当なし" marker and parentheses; the remaining text must be a concrete reason.
 function reasonText(cell) {
-  const reason = asString(cell).replace(/^該当なし\s*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
-  return /^(<[^>]*>|[-–—]|tbd|todo|未定|なし|n\/?a|\.{3}|…)$/i.test(reason) ? '' : reason;
+  const reason = asString(cell).replace(/[。．.!！?？、,，…\s]+$/u, '').replace(/^該当なし\s*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
+  const content = reason.replace(/[。．.!！?？、,，…\s]+$/u, '');
+  return !content || /^(<[^>]*>|[-–—]|tbd|todo|未定(?:です|である)?|(?:特に)?なし|n\/?a)$/i.test(content) ? '' : reason;
 }
 
 function viewpointErrors(id, text, e2e) {
@@ -229,6 +237,7 @@ export function checkTestPlan(repo, change) {
   if (new Set(tpIds).size !== tpIds.length) errors.push(`${change.id}: TP-ID が重複しています`);
   if (change.schema === SCHEMA_INTEGRATED) {
     errors.push(...testPlanHeaderErrors(text).map(error => `${change.id}: ${error}`));
+    errors.push(...testPlanRowErrors(text).map(error => `${change.id}: ${error}`));
     for (const row of tp) {
       const declared = projectsOf(row);
       if (declared.blank) errors.push(`${change.id}: ${row['TP-ID']} の Projects に空の要素があります`);

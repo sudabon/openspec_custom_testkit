@@ -158,7 +158,7 @@ test('viewpoint register negatives each fail', () => {
 });
 
 test('placeholder-only reasons fail for both individual and all-viewpoint rows', () => {
-  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'TODO', 'todo', '未定', 'なし', 'N/A', 'na', '...', '…', '該当なし', '該当なし（<理由>）', '該当なし(TBD)', '該当なし（TODO）', '該当なし（未定）', '該当なし（なし）']) {
+  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'TODO', 'todo', '未定', 'なし', 'N/A', 'na', '...', '…', '特になし', 'TBD。', '未定です', '?', '？？', '未定です。', '該当なし', '該当なし（<理由>）', '該当なし(TBD)', '該当なし（TODO）', '該当なし（未定）', '該当なし（なし）', '該当なし（特になし）。', '該当なし（TBD。）']) {
     for (const all of [false, true]) {
       const rows = all ? [['全観点', '', reason]] : fullRows.map(row => row[0] === '性能' ? ['性能', '', reason] : row);
       const result = check({ viewpoints: table(rows), plan: all ? naPlan : requiredPlan() }, { e2e: all ? 'not-applicable' : 'required' });
@@ -168,7 +168,7 @@ test('placeholder-only reasons fail for both individual and all-viewpoint rows',
 });
 
 test('placeholder reasons count as empty when a Failure Mode is assigned', () => {
-  for (const reason of ['-', '<理由>', 'TBD', 'TODO', '未定', 'なし', '該当なし（N/A）']) {
+  for (const reason of ['-', '<理由>', 'TBD', 'TODO', '未定', 'なし', '特になし', 'TBD。', '未定です', '?', '該当なし（N/A）']) {
     const rows = fullRows.map(row => row[0] === '性能' ? ['性能', 'F1', reason] : row);
     assert.deepEqual(check({ viewpoints: table(rows) }).errors, [], reason);
   }
@@ -184,6 +184,9 @@ test('supported viewpoint spelling and separator variants pass', () => {
     ['入力系セキュリティ', '', '該当なし(入力欄がない)'],
   ];
   assert.deepEqual(check({ viewpoints: table(rows) }).errors, []);
+  for (const reason of ['入力欄がない。', '対象となる入力は特になし。', '未定項目は表示に影響しない。', '該当なし（画面を変更しない）。']) {
+    assert.deepEqual(check({ viewpoints: table([['全観点', '', reason]]), plan: naPlan }, { e2e: 'not-applicable' }).errors, [], reason);
+  }
 });
 
 test('a not-applicable change may cover every viewpoint with one row', () => {
@@ -290,6 +293,11 @@ test('missing quality.md is reported once with either or both gates enabled', ()
         if (phase === 'final' && options.quality !== false) assert.ok(result.failures.includes('未完了タスクが残っています'));
       }
     }
+    for (const options of [{}, { quality: false }, { plan: false }]) {
+      const result = evaluateChange(repo.dir, change(), { phase: 'final', tags: false, ...options });
+      assert.equal(result.failures.filter(line => /quality\.md が/.test(line)).length, 1, JSON.stringify({ options, failures: result.failures }));
+      if (options.quality !== false) assert.ok(result.failures.includes('未完了タスクが残っています'));
+    }
     rmSync(join(repo.dir, 'openspec/changes/demo/test-plan.md'));
     const missingBoth = evaluateChange(repo.dir, change({ tasksText: '- [ ] 1.1 a\n' }), { phase: 'plan', tags: false });
     assert.equal(missingBoth.failures.filter(line => /quality\.md が/.test(line)).length, 1);
@@ -353,7 +361,7 @@ test('Projects column is optional, rejects blank entries and merges duplicates',
 });
 
 test('project spelling variants, duplicate and empty headers are rejected', () => {
-  for (const header of ['Project', 'projects', 'PROJECTS', 'Projects（任意）', 'Project (optional)', 'Projets', 'Projects | Projects', 'Notes | Notes', '']) {
+  for (const header of ['Project', 'projects', 'PROJECTS', 'Projects（任意）', 'Project (optional)', 'Projets', 'プロジェクト', 'Project名', 'Playwright Projects', 'Target Projects', 'Project names', 'Projects:', 'Projects 任意', 'Ｐｒｏｊｅｃｔｓ', '`Projects`', '**Projects**', 'Ｐｒｏｊｅｃｔｓ：', 'Pro_jects', 'Projects | Projects', 'Notes | Notes', '']) {
     const plan = requiredPlan('chromium, mobile-safari').replace(' Projects |', ` ${header} |`);
     const checked = check({ viewpoints: table(fullRows), plan });
     assert.ok(checked.errors.some(line => /E2E観点一覧.*列/.test(line)), `${header}: ${checked.errors.join(' / ')}`);
@@ -365,6 +373,39 @@ test('project spelling variants, duplicate and empty headers are rejected', () =
       assert.match(report.stderr, /列 \(空\)/);
     }
   }
+});
+
+test('two empty headers report two empty-column errors without a duplicate error', () => {
+  const plan = requiredPlan('chromium').replace(' Projects |', ' | |');
+  const checked = check({ viewpoints: table(fullRows), plan });
+  assert.equal(checked.errors.length, 2);
+  assert.ok(checked.errors.every(line => /列 \(空\)/.test(line)));
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([]) });
+  assert.equal(report.exitCode, 2);
+  assert.equal(report.stderr.trim().split('\n').length, 2);
+  assert.doesNotMatch(report.stderr, /重複/);
+});
+
+test('malformed TP IDs cannot disappear behind a passing TP', () => {
+  for (const id of ['TP-01', 'tp-003', '`TP-002`', '', 'TP-0001']) {
+    const plan = requiredPlan() + `| ${id} | demo | Hidden | R1 | O1 | app | click | 2 |\n`;
+    const checked = check({ viewpoints: table(fullRows), plan });
+    assert.ok(checked.errors.some(line => /TP-ID.*不正/.test(line)), `${id}: ${checked.errors.join(' / ')}`);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+    assert.equal(report.exitCode, 2, id);
+    assert.match(report.stderr, /TP-ID.*不正/);
+    assert.ok(report.stderr.includes(id || '(空)'));
+  }
+});
+
+test('standalone reporter rejects TP rows under not-applicable', () => {
+  for (const id of ['TP-001', 'TP-01']) {
+    const plan = requiredPlan().replace('e2e: required', 'e2e: not-applicable').replace('TP-001', id);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([]) });
+    assert.equal(report.exitCode, 2, report.stdout);
+    assert.match(report.stderr, id === 'TP-001' ? /not-applicable.*TP/ : /TP-ID.*不正/);
+  }
+  assert.equal(buildReport({ changeId: 'demo', planText: naPlan, results: results([]) }).exitCode, 0);
 });
 
 test('custom plan columns preserve coverage with and without Projects', () => {
@@ -470,7 +511,13 @@ test('reporter accepts Japanese project separators and diagnoses unexecuted or m
     const report = buildReport({ changeId: 'demo', planText: requiredPlan('chromium'), results: skipped });
     assert.equal(report.exitCode, 1);
     assert.match(report.stdout, attempts.length ? /TP-001 \(chromium 未pass\)/ : /TP-001 \(chromium 未実行\)/);
-    assert.match(report.stdout, /skip 条件を確認/);
+    if (attempts.length) {
+      assert.match(report.stdout, /TP-001: chromium は skip のみです。skip 条件を確認してください/);
+      assert.doesNotMatch(report.stdout, /Projects の指定/);
+    } else {
+      assert.match(report.stdout, /TP-001: Projects の指定 \(chromium\).*skip 条件を確認してください/);
+      assert.doesNotMatch(report.stdout, /skip のみ/);
+    }
   }
 });
 
