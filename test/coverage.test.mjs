@@ -695,7 +695,7 @@ test('CI preserves summary and risk output if either coverage artifact cannot be
       cwd: repo.dir,
       execFile(file, args, opts) {
         const result = exec(file, args, opts);
-        if (args.includes('run-regression')) mkdirSync(join(opts.env.TESTKIT_RUN_DIR, filename));
+        if (args.includes('run-regression')) mkdirSync(join(opts.env.TESTKIT_RUN_DIR, '..', filename));
         return result;
       },
     });

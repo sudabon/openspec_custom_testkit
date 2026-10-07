@@ -160,3 +160,17 @@ workflow の公開系 step は local harness で確認した。保持日数の�
 | hosted GitHub Actions での artifact 保存・artifact URL・step summary・PR コメント | 実 CI を実行していない。`actions/upload-artifact@v4` の `artifact-url` 出力と空の `retention-days` の扱いは、実 CI で未確認 |
 | fork PR での権限不足 | 実 CI を実行していない。fake `gh` の 403 で代替した |
 | shellcheck | ローカルに無いため、actionlint の shellcheck 連携を無効にした |
+
+## PR #9 必須修正・修正推奨 8 件
+
+記録日: 2026-10-07 JST。ホストは Darwin、Node v26.2.0。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 340 pass / 0 fail / 0 skipped |
+| `npm run lint` | 成功。265 files scanned |
+| `npm run test:smoke` | 成功（exit 0）。同梱 example の Chromium 起動、HTML と添付の保存も確認 |
+
+要約生成の両段階の例外、GITHUB_OUTPUT 書き込み失敗で終了コード 0 / 3 が保持されることを確認した。欠落・破損した入力の案内、回帰実行による E2E 成果物の上書き防止、早期終了時の理由と PR コメント用 summary_file の出力を local harness で検証した。workflow の run スクリプトを実行し、HTML の実ファイル確認と testkit-results のアップロード失敗が step summary・PR コメントに反映されることを確認した（GitHub API は fake gh）。
+
+全体テストと smoke の初回実行は sandbox の npm キャッシュ書き込み制限・Chromium 起動制限で失敗したため、sandbox 外で再実行して成功した。実際の reusable workflow による artifact upload と PR コメント投稿は、このローカル検証には含めていない。

@@ -24,7 +24,7 @@ jobs:
 
 Playwright の `webServer` が localhost のサーバーを起動する構成を標準にする。browser とサーバーの依存は npm mode では `npm ci` と Playwright の導入に含まれる。
 
-JSON reporter は `$TESTKIT_RESULTS_JSON`（絶対パス）へ今回の結果を書き出す必要がある。同梱 `playwright.config.example.ts` を採用すると、この環境変数とローカル実行用の既定パスを切り替える。`--reporter=json` は config の reporter を上書きするため、使う場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` とする。monorepo でもこの絶対パスを変更しない。
+JSON reporter は `$TESTKIT_RESULTS_JSON`（絶対パス）へ今回の結果を書き出す必要がある。同梱 `playwright.config.example.ts` を採用すると、この環境変数とローカル実行用の既定パスを切り替える。既定 project は Chromium だけである。コメント内の WebKit / mobile-safari の例を有効にする場合は、`setup-mode: caller` にして setup-command で `npx playwright install --with-deps chromium webkit` を実行する。`--reporter=json` は config の reporter を上書きするため、使う場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` とする。monorepo でもこの絶対パスを変更しない。
 
 ## caller
 
@@ -88,7 +88,7 @@ with:
 
 ## 全量回帰とシナリオ対応表
 
-`regression-command` は change の差分が無い PR でも実行する。今回の Playwright JSON を `$TESTKIT_RESULTS_JSON`（run ごとのディレクトリの `regression-results.json`）へ書く。job はその JSON で `testkit-gate.mjs coverage` と同じ対応表を作り、`coverage.md` と `coverage.json` として保存する。`report-max-age` の鮮度検査も同じく適用する。
+`regression-command` は change の差分が無い PR でも実行する。今回の Playwright JSON を `$TESTKIT_RESULTS_JSON`（run ごとのディレクトリの `regression-results.json`）へ書く。job はその JSON で `testkit-gate.mjs coverage` と同じ対応表を作り、`coverage.md` と `coverage.json` として保存する。`report-max-age` の鮮度検査も同じく適用する。回帰コマンドの `TESTKIT_RUN_DIR` は E2E の実行 directory 内の `regression/` を指すため、回帰実行による出力初期化で E2E の HTML レポートや添付は消えない。JSON の保存先は従来どおり実行 directory 直下である。
 
 ```yaml
 with:
@@ -103,7 +103,9 @@ with:
 
 E2E を実行すると、gate は change ごとの要約（TP-ID、テスト、project、結果、フレーク、添付）を step summary に書き、artifact `testkit-playwright-report` に今回の実行 directory（HTML レポート、添付、results.json、`<change-id>.summary.md`）を保存する。step summary の末尾には、ワークフロー実行と artifact へのリンクが付く。要約の読み方は `docs/workflow.md` の「E2E 結果の公開」にある。
 
-添付と HTML レポートを artifact に入れるには、Playwright の `outputDir` と HTML reporter の `outputFolder` を `$TESTKIT_RUN_DIR` の配下にする（同梱 `playwright.config.example.ts` を参照）。別の場所に出した添付は、要約に「公開対象外」と表示される。
+添付を artifact に入れるには、Playwright の `outputDir` を `$TESTKIT_RUN_DIR` の配下にする。HTML reporter の `outputFolder` は `$TESTKIT_RUN_DIR/playwright-report` に設定する（同梱 `playwright.config.example.ts` を参照）。公開前にその配下の `index.html` を確認し、無い場合は警告を出して artifact を「今回の結果」と案内する。別の場所に出した添付は、要約に「公開対象外」と表示される。
+
+`testkit-results` を保存できなかった場合も、step summary と PR コメントの公開先にその旨を表示する。git リポジトリの特定、change 選択、report-max-age、lockfile などの入力・セットアップ確認で早期終了した場合は、終了理由を要約に残す。要約生成や GITHUB_OUTPUT への書き込み失敗は警告として出し、元のゲート終了コードを保持する。
 
 PR コメントは任意で、既定では投稿しない。有効にする場合は、呼び出し側で `pull-requests: write` を付ける。
 

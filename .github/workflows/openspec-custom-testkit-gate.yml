@@ -122,6 +122,27 @@ jobs:
         run: node scripts/ci-job.mjs
 
       # Publishing steps run after failures too and never change the job result: the gate step alone decides it.
+      - name: Inspect Playwright report
+        id: inspect-report
+        if: always() && steps.inputs.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUN_DIR: ${{ steps.job.outputs.run_dir }}
+          E2E_RAN: ${{ steps.job.outputs.e2e_ran }}
+        run: |
+          available=false
+          if [ "$E2E_RAN" = "true" ] && [ -n "$RUN_DIR" ]; then
+            if [ -f "$RUN_DIR/playwright-report/index.html" ]; then
+              available=true
+            else
+              echo '::warning::HTML レポートがありません。HTML reporter の outputFolder を TESTKIT_RUN_DIR/playwright-report に設定してください。ゲートの判定には影響しません'
+            fi
+          fi
+          if ! printf 'html_report=%s\n' "$available" >> "$GITHUB_OUTPUT"; then
+            echo '::warning::HTML レポートの確認結果を出力できません。ゲートの判定には影響しません'
+          fi
+
       - name: Save run artifacts
         id: results
         if: always() && steps.inputs.outcome == 'success'
@@ -151,7 +172,9 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RESULTS_URL: ${{ steps.results.outputs.artifact-url }}
+          RESULTS_OUTCOME: ${{ steps.results.outcome }}
           REPORT_URL: ${{ steps.report.outputs.artifact-url }}
+          HTML_REPORT: ${{ steps.inspect-report.outputs.html_report }}
           E2E_RAN: ${{ steps.job.outputs.e2e_ran }}
         run: |
           links="$RUNNER_TEMP/testkit-links.md"
@@ -159,12 +182,21 @@ jobs:
             printf '\n#### 公開先\n\n'
             printf -- '- ワークフロー実行: %s\n' "$RUN_URL"
             if [ -n "$REPORT_URL" ]; then
-              printf -- '- HTML レポートと今回の結果 (testkit-playwright-report): %s\n' "$REPORT_URL"
+              if [ "$HTML_REPORT" = "true" ]; then
+                printf -- '- HTML レポートと今回の結果 (testkit-playwright-report): %s\n' "$REPORT_URL"
+              else
+                printf -- '- 今回の結果 (testkit-playwright-report): %s\n' "$REPORT_URL"
+                printf -- '- HTML レポートは確認できません。HTML reporter の outputFolder を TESTKIT_RUN_DIR/playwright-report に設定してください\n'
+              fi
             elif [ "$E2E_RAN" = "true" ]; then
               printf -- '- HTML レポートと今回の結果 (testkit-playwright-report): 保存されていません。job ログを確認してください\n'
             fi
             if [ -n "$RESULTS_URL" ]; then
               printf -- '- 実行記録 (testkit-results): %s\n' "$RESULTS_URL"
+            elif [ "$RESULTS_OUTCOME" = "failure" ]; then
+              printf -- '- 実行記録 (testkit-results): アップロードに失敗し、保存されていません。job ログを確認してください\n'
+            else
+              printf -- '- 実行記録 (testkit-results): 保存されていません。job ログを確認してください\n'
             fi
           } > "$links"
           if ! cat "$links" >> "$GITHUB_STEP_SUMMARY"; then

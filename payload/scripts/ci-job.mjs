@@ -26,6 +26,7 @@ export function runCiJob(env = process.env, deps = {}) {
   const cwd = deps.cwd ?? process.cwd();
   const execFile = deps.execFile ?? execFileSync;
   const evaluate = deps.evaluateChange ?? evaluateChange;
+  const reportFor = deps.buildReport ?? buildReport;
   const lines = [];
   let code = 0;
   const fail = (status, message) => {
@@ -152,11 +153,11 @@ export function runCiJob(env = process.env, deps = {}) {
         continue;
       }
       const input = { changeId: change.id, planText: plan, results, maxAge };
-      const report = buildReport(input);
+      const report = reportFor(input);
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
       lines.push(...[report.stdout.trimEnd(), report.stderr.trimEnd()].filter(Boolean));
       if (report.exitCode) code = code || report.exitCode;
-      summaries.push({ id: change.id, text: publishSummary(input, runDir, lines) ?? unreadable(change.id) });
+      summaries.push({ id: change.id, text: publishSummary(input, runDir, lines, reportFor) ?? unreadable(change.id) });
     }
   }
   let e2eNote = null;
@@ -175,10 +176,12 @@ export function runCiJob(env = process.env, deps = {}) {
     let resultsPath = null;
     if (env.REGRESSION_COMMAND) {
       resultsPath = join(runDir, 'regression-results.json');
+      const regressionDir = join(runDir, 'regression');
+      mkdirSync(regressionDir, { recursive: true });
       const regression = run(execFile, 'bash', ['-c', env.REGRESSION_COMMAND], work, {
         ...env,
         E2E_BASE_URL: env.E2E_BASE_URL || 'http://localhost:3000',
-        TESTKIT_RUN_DIR: runDir,
+        TESTKIT_RUN_DIR: regressionDir,
         TESTKIT_RESULTS_JSON: resultsPath,
       });
       record('regression', env.REGRESSION_COMMAND, regression, existsSync(resultsPath) ? resultsPath : undefined);
@@ -251,21 +254,26 @@ export function runCiJob(env = process.env, deps = {}) {
 }
 
 function unreadable(id) {
-  return `### ${id}\n\nレポートを作れません（入力エラー）。詳細は job ログと artifact 内の <code>${id}.report.txt</code> を参照してください。\n`;
+  return `### ${id}\n\nレポートを作れません。詳細は job ログを参照してください。\n`;
 }
 
 // Writes the full summary next to the results and returns the row-limited text for the step summary.
 // Publishing problems are warnings only; the gate verdict comes from the text report above.
-function publishSummary(input, runDir, lines) {
-  const overflowRef = `${input.changeId}.summary.md`;
-  const full = buildReport({ ...input, format: 'summary', publishRoot: runDir });
-  if (full.exitCode === 2) return null;
+function publishSummary(input, runDir, lines, reportFor) {
   try {
-    writeFileSync(join(runDir, overflowRef), full.stdout);
+    const overflowRef = `${input.changeId}.summary.md`;
+    const full = reportFor({ ...input, format: 'summary', publishRoot: runDir });
+    if (full.exitCode === 2) return null;
+    try {
+      writeFileSync(join(runDir, overflowRef), full.stdout);
+    } catch (err) {
+      lines.push(`::warning::${overflowRef} を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+    }
+    return reportFor({ ...input, format: 'summary', publishRoot: runDir, maxRows: STEP_SUMMARY_MAX_ROWS, overflowRef }).stdout;
   } catch (err) {
-    lines.push(`::warning::${overflowRef} を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+    lines.push(`::warning::${input.changeId} の要約を生成できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+    return null;
   }
-  return buildReport({ ...input, format: 'summary', publishRoot: runDir, maxRows: STEP_SUMMARY_MAX_ROWS, overflowRef }).stdout;
 }
 
 function stepSummaryText(summaries, note) {
@@ -302,22 +310,31 @@ function run(execFile, file, args, cwd, env) {
 function finish(repo, code, lines, meta, env) {
   const id = `${Date.now().toString(36)}-summary`;
   const dir = join(repo, 'test-results/testkit', id);
+  // Early input/setup failures have no run metadata, but their reason must still reach both summaries.
+  const stepSummary = meta?.stepSummary ?? `${STEP_SUMMARY_TITLE}\n\n入力・セットアップの確認で停止しました（終了コード ${code}）。E2E は実行していません。\n\n<pre>${lines.join('\n').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>\n`;
   // The step summary and its copy for the PR comment are publishing only: failures warn and never change `code`.
   let summaryFile = '';
-  if (meta?.stepSummary != null) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'step-summary.md'), stepSummary);
+    summaryFile = join(dir, 'step-summary.md');
+  } catch (err) {
+    lines.push(`::warning::E2E の要約を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+  }
+  if (env.GITHUB_STEP_SUMMARY) {
     try {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, 'step-summary.md'), meta.stepSummary);
-      summaryFile = join(dir, 'step-summary.md');
+      appendFileSync(env.GITHUB_STEP_SUMMARY, stepSummary);
     } catch (err) {
-      lines.push(`::warning::E2E の要約を保存できません (${err.code ?? err.message})。ゲートの判定には影響しません`);
+      lines.push(`::warning::step summary に書き込めません (${err.code ?? err.message})。ゲートの判定には影響しません`);
     }
-    if (env.GITHUB_STEP_SUMMARY) {
-      try {
-        appendFileSync(env.GITHUB_STEP_SUMMARY, meta.stepSummary);
-      } catch (err) {
-        lines.push(`::warning::step summary に書き込めません (${err.code ?? err.message})。ゲートの判定には影響しません`);
-      }
+  }
+  if (env.GITHUB_OUTPUT) {
+    try {
+      const outputs = [`run_dir=${meta?.runDir ?? ''}`, `e2e_ran=${meta?.e2eRan ?? false}`, `summary_file=${summaryFile}`];
+      if (meta?.riskLevel) outputs.unshift(`risk_level=${meta.riskLevel}`);
+      appendFileSync(env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`);
+    } catch (err) {
+      lines.push(`::warning::GITHUB_OUTPUT に書き込めません (${err.code ?? err.message})。artifact・PR コメントの公開情報を渡せません。ゲートの判定には影響しません`);
     }
   }
   try {
@@ -326,14 +343,7 @@ function finish(repo, code, lines, meta, env) {
   } catch {
     lines.push('結果ディレクトリを書けませんでした');
   }
-  if (env.GITHUB_OUTPUT && meta?.riskLevel) {
-    try {
-      const outputs = [`risk_level=${meta.riskLevel}`];
-      if ('stepSummary' in meta) outputs.push(`run_dir=${meta.runDir ?? ''}`, `e2e_ran=${meta.e2eRan}`, `summary_file=${summaryFile}`);
-      appendFileSync(env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`);
-    } catch { /* ignore */ }
-  }
-  return { code, lines, ...meta, summaryDir: dir };
+  return { code, lines, ...meta, stepSummary, summaryDir: dir };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

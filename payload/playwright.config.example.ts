@@ -19,11 +19,11 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
   },
-  // test-plan の Projects 列にはこの name を書く。必要な project だけ残す。
-  // 1 つに絞って実行するには `npx playwright test --project=chromium`。
+  // test-plan の Projects 列にはこの name を書く。既定の npm setup が導入する Chromium だけを有効にする。
+  // WebKit を使う場合は caller setup で `npx playwright install --with-deps chromium webkit` を実行し、下の例を有効にする。
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
-    { name: 'mobile-safari', use: { ...devices['iPhone 13'] } },
+    // { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+    // { name: 'mobile-safari', use: { ...devices['iPhone 13'] } },
   ],
 });

@@ -228,6 +228,124 @@ function e2eExec({ results = name => load('results.json', name) } = {}) {
 
 const noGate = () => ({ phase: 'plan', warnings: [], failures: [] });
 
+test('summary generation exceptions preserve passing and failing gate verdicts in both rendering passes', async t => {
+  const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
+  for (const expected of [0, 3]) for (const failOn of [1, 2]) {
+    const { repo, env, summary, output } = e2eRepo(t);
+    writeFileSync(join(repo.dir, 'openspec/changes/demo/test-plan.md'), fixture('single-project-plan.md'));
+    let summaryCalls = 0;
+    const ran = runCiJob({ ...env, E2E_COMMAND: 'run-e2e' }, {
+      cwd: repo.dir, evaluateChange: noGate,
+      execFile: e2eExec({ results: dirs => {
+        const data = load('single-project-results.json', dirs);
+        if (expected) data.suites[0].specs[0].tests[0].status = 'unexpected';
+        return data;
+      } }),
+      buildReport(input) {
+        if (input.format === 'summary' && ++summaryCalls === failOn) throw new Error('summary rendering failed');
+        return buildReport(input);
+      },
+    });
+    assert.equal(ran.code, expected);
+    assert.match(ran.lines.join('\n'), /::warning::demo の要約を生成できません.*summary rendering failed/);
+    assert.match(readFileSync(summary, 'utf8'), /レポートを作れません。詳細は job ログ/);
+    assert.match(readFileSync(output, 'utf8'), /^summary_file=.+/m);
+    assert.ok(existsSync(join(ran.runDir, 'demo.report.txt')));
+  }
+});
+
+test('GITHUB_OUTPUT write failures warn, reach the saved log and preserve the gate verdict', async t => {
+  const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
+  for (const expected of [0, 3]) {
+    const { repo, env, summary } = e2eRepo(t);
+    writeFileSync(join(repo.dir, 'openspec/changes/demo/test-plan.md'), fixture('single-project-plan.md'));
+    const ran = runCiJob({ ...env, E2E_COMMAND: 'run-e2e', GITHUB_OUTPUT: repo.dir }, {
+      cwd: repo.dir, evaluateChange: noGate,
+      execFile: e2eExec({ results: dirs => load(expected ? 'results.json' : 'single-project-results.json', dirs) }),
+    });
+    assert.equal(ran.code, expected);
+    assert.match(ran.lines.join('\n'), /::warning::GITHUB_OUTPUT に書き込めません/);
+    assert.match(readFileSync(join(ran.summaryDir, 'summary.txt'), 'utf8'), /::warning::GITHUB_OUTPUT/);
+    assert.match(readFileSync(summary, 'utf8'), /### demo/);
+  }
+});
+
+test('missing or unreadable report inputs point at the job log, never an absent report file', async t => {
+  const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
+  for (const broken of ['missing-results', 'invalid-json', 'missing-plan']) {
+    const { repo, env, summary } = e2eRepo(t);
+    const exec = e2eExec();
+    const ran = runCiJob({ ...env, E2E_COMMAND: 'run-e2e' }, {
+      cwd: repo.dir, evaluateChange: noGate,
+      execFile(file, args, opts) {
+        if (!args.includes('run-e2e') || broken === 'missing-results') return '';
+        exec(file, args, opts);
+        if (broken === 'invalid-json') writeFileSync(opts.env.TESTKIT_RESULTS_JSON, '{broken');
+        if (broken === 'missing-plan') rmSync(join(repo.dir, 'openspec/changes/demo/test-plan.md'));
+        return '';
+      },
+    });
+    assert.equal(ran.code, 2, broken);
+    assert.match(readFileSync(summary, 'utf8'), /job ログ/);
+    assert.doesNotMatch(readFileSync(summary, 'utf8'), /demo\.report\.txt/);
+    assert.equal(existsSync(join(ran.runDir, 'demo.report.txt')), false);
+  }
+});
+
+test('regression output cleanup cannot overwrite E2E attachments or HTML', async t => {
+  const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
+  const { repo, env } = e2eRepo(t);
+  const exec = e2eExec();
+  let regressionDir;
+  const ran = runCiJob({ ...env, E2E_COMMAND: 'run-e2e', REGRESSION_COMMAND: 'run-regression' }, {
+    cwd: repo.dir, evaluateChange: noGate,
+    execFile(file, args, opts) {
+      if (!opts.env.TESTKIT_RUN_DIR) return '';
+      const root = opts.env.TESTKIT_RUN_DIR;
+      const regression = args.includes('run-regression');
+      if (regression) {
+        regressionDir = root;
+        // Model Playwright clearing both output directories at startup.
+        for (const rel of ['test-results', 'playwright-report']) rmSync(join(root, rel), { recursive: true, force: true });
+        writeFileSync(opts.env.TESTKIT_RESULTS_JSON, JSON.stringify({ suites: [] }));
+      } else exec(file, args, opts);
+      mkdirSync(join(root, 'playwright-report'), { recursive: true });
+      writeFileSync(join(root, 'playwright-report/index.html'), regression ? 'regression' : 'e2e');
+      return '';
+    },
+  });
+  assert.equal(ran.code, 3);
+  assert.equal(regressionDir, join(ran.runDir, 'regression'));
+  assert.equal(readFileSync(join(ran.runDir, 'playwright-report/index.html'), 'utf8'), 'e2e');
+  assert.equal(readFileSync(join(regressionDir, 'playwright-report/index.html'), 'utf8'), 'regression');
+  assert.equal(readFileSync(join(ran.runDir, 'test-results/save-chromium/trace.zip'), 'utf8'), 'x');
+  assert.ok(existsSync(join(ran.runDir, 'regression-results.json')), 'existing JSON location stays compatible');
+});
+
+test('early input and setup failures publish their reason and the PR summary output', async t => {
+  const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
+  for (const [over, expected, reason] of [
+    [{ BASE_REF: 'missing-ref' }, 2, /比較元refを解決できません/],
+    [{ REPORT_MAX_AGE: '-1' }, 2, /report-max-age/],
+    [{ SETUP_MODE: 'npm' }, 1, /package-lock\.json がありません/],
+    [{ SETUP_MODE: 'invalid' }, 1, /未対応の setup-mode/],
+    [{ WORKING_DIRECTORY: '..' }, 1, /working-directory がリポジトリの外/],
+    [{ NO_REPO: true }, 2, /git リポジトリを特定できません/],
+  ]) {
+    const { repo, env, summary, output } = e2eRepo(t);
+    const cwd = over.NO_REPO ? mkdtempSync(join(tmpdir(), 'tk-no-git-')) : repo.dir;
+    if (over.NO_REPO) t.after(() => rmSync(cwd, { recursive: true, force: true }));
+    const ran = runCiJob({ ...env, ...over }, { cwd, execFile: () => assert.fail('commands must not run') });
+    assert.equal(ran.code, expected);
+    const text = readFileSync(summary, 'utf8');
+    assert.match(text, reason);
+    assert.match(text, /E2E は実行していません/);
+    const outputs = readFileSync(output, 'utf8');
+    assert.match(outputs, /^e2e_ran=false$/m);
+    assert.equal(readFileSync(outputs.match(/^summary_file=(.+)$/m)[1], 'utf8'), text);
+  }
+});
+
 test('ci-job writes <change-id>.summary.md and appends it to the step summary', async t => {
   const { runCiJob } = await import('../payload/scripts/ci-job.mjs');
   const { repo, env, summary, output } = e2eRepo(t);

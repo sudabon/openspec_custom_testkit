@@ -85,8 +85,8 @@ if (failedReport.exitCode !== 3) {
   process.exit(1);
 }
 
-// The shipped example declares several projects. A browserless test checks that Playwright accepts
-// the device presets and that the reporter needs a pass on every project listed in Projects.
+// The shipped example defaults to Chromium, matching npm setup. Check it launches that browser
+// and that the reporter still diagnoses additional projects requested by the plan.
 mkdirSync(join(root, '.tmp'), { recursive: true });
 const exampleDir = mkdtempSync(join(root, '.tmp/example-'));
 try {
@@ -94,7 +94,10 @@ try {
   mkdirSync(join(exampleDir, 'tests/e2e'), { recursive: true });
   writeFileSync(join(exampleDir, 'tests/e2e/projects.spec.ts'), `import { writeFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
-test('全 project で動く', { tag: ['@smoke-projects', '@TP-001'] }, () => expect(1 + 1).toBe(2));
+test('既定 browser で動く', { tag: ['@smoke-projects', '@TP-001'] }, async ({ page }) => {
+  await page.setContent('<button>synthetic</button>');
+  await expect(page.getByRole('button', { name: 'synthetic' })).toBeVisible();
+});
 test('添付を残す', { tag: ['@smoke-projects', '@TP-001'] }, async ({}, testInfo) => {
   const file = testInfo.outputPath('evidence.txt');
   writeFileSync(file, 'synthetic');
@@ -111,6 +114,10 @@ test('添付を残す', { tag: ['@smoke-projects', '@TP-001'] }, async ({}, test
     process.exit(example.code || 1);
   }
   const exampleResults = JSON.parse(readFileSync(output, 'utf8'));
+  if (exampleResults.config.projects.length !== 1 || exampleResults.config.projects[0].name !== 'chromium') {
+    console.error('example の既定 project が Chromium だけではありません');
+    process.exit(1);
+  }
   const projectPlan = (projects) => `---
 e2e: required
 ---
@@ -119,7 +126,7 @@ e2e: required
 |-------|-------------|----------|------|--------|---------|--------|----------|----------|
 | TP-001 | example | Visible | R1 | O1 | none | 動く | 2 | ${projects} |
 `;
-  const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium, webkit, mobile-safari'), results: exampleResults });
+  const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium'), results: exampleResults });
   if (allProjects.exitCode !== 0) {
     console.error(allProjects.stdout);
     console.error('example の全 project の pass を coverage に数えませんでした');
@@ -131,7 +138,7 @@ e2e: required
     console.error('未実行の project を coverage 欠落にしませんでした');
     process.exit(1);
   }
-  const summary = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium, webkit, mobile-safari'), results: exampleResults, format: 'summary', publishRoot: runDir });
+  const summary = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium'), results: exampleResults, format: 'summary', publishRoot: runDir });
   if (summary.exitCode !== 0 || !/evidence: <code>test-results\/[^<]+<\/code>/.test(summary.stdout) || summary.stdout.includes(exampleDir) || /（ファイルなし）|公開対象外/.test(summary.stdout)) {
     console.error(summary.stdout);
     console.error('example の添付が summary に相対パスで出ませんでした');

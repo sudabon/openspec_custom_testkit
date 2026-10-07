@@ -13,7 +13,7 @@ const step = name => {
   assert.ok(found, name);
   return found;
 };
-const PUBLISHING = ['Save run artifacts', 'Save Playwright report', 'Link published results', 'Publish PR comment'];
+const PUBLISHING = ['Inspect Playwright report', 'Save run artifacts', 'Save Playwright report', 'Link published results', 'Publish PR comment'];
 const MARKER = '<!-- openspec-custom-testkit -->';
 
 function sandbox(t) {
@@ -98,10 +98,33 @@ test('the job result follows the gate whatever happens to publishing', () => {
   }
 });
 
+test('HTML report inspection requires this E2E run to contain an index file', t => {
+  const dir = sandbox(t);
+  const output = join(dir, 'output');
+  const env = { RUN_DIR: dir, E2E_RAN: 'true', GITHUB_OUTPUT: output };
+  mkdirSync(join(dir, 'regression/playwright-report'), { recursive: true });
+  writeFileSync(join(dir, 'regression/playwright-report/index.html'), 'regression');
+  const missing = runStep('Inspect Playwright report', env);
+  assert.equal(missing.status, 0);
+  assert.match(missing.stdout, /^::warning::HTML レポートがありません/m);
+  assert.equal(readFileSync(output, 'utf8'), 'html_report=false\n');
+  mkdirSync(join(dir, 'playwright-report/index.html'), { recursive: true });
+  assert.match(runStep('Inspect Playwright report', env).stdout, /::warning::HTML レポートがありません/);
+  rmSync(join(dir, 'playwright-report/index.html'), { recursive: true });
+  writeFileSync(join(dir, 'playwright-report/index.html'), 'e2e');
+  writeFileSync(output, '');
+  assert.equal(runStep('Inspect Playwright report', env).status, 0);
+  assert.equal(readFileSync(output, 'utf8'), 'html_report=true\n');
+  assert.equal(runStep('Inspect Playwright report', { ...env, E2E_RAN: 'false' }).stdout, '');
+  const blocked = runStep('Inspect Playwright report', { ...env, GITHUB_OUTPUT: dir });
+  assert.equal(blocked.status, 0);
+  assert.match(blocked.stdout, /::warning::HTML レポートの確認結果を出力できません/);
+});
+
 test('the link step appends run and artifact links and only warns when the summary is unwritable', t => {
   const dir = sandbox(t);
   const summary = join(dir, 'summary.md');
-  const env = { RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary, RUN_URL: 'https://github.com/o/r/actions/runs/1', REPORT_URL: 'https://github.com/o/r/actions/runs/1/artifacts/2', RESULTS_URL: 'https://github.com/o/r/actions/runs/1/artifacts/3', E2E_RAN: 'true' };
+  const env = { RUNNER_TEMP: dir, GITHUB_STEP_SUMMARY: summary, RUN_URL: 'https://github.com/o/r/actions/runs/1', REPORT_URL: 'https://github.com/o/r/actions/runs/1/artifacts/2', RESULTS_URL: 'https://github.com/o/r/actions/runs/1/artifacts/3', RESULTS_OUTCOME: 'success', HTML_REPORT: 'true', E2E_RAN: 'true' };
   const ran = runStep('Link published results', env);
   assert.equal(ran.status, 0, ran.stderr);
   const text = readFileSync(summary, 'utf8');
@@ -113,9 +136,31 @@ test('the link step appends run and artifact links and only warns when the summa
   assert.equal(failedUpload.status, 0);
   assert.match(readFileSync(join(dir, 'other.md'), 'utf8'), /保存されていません/);
 
+  const noHtml = runStep('Link published results', { ...env, GITHUB_STEP_SUMMARY: join(dir, 'no-html.md'), HTML_REPORT: 'false' });
+  assert.equal(noHtml.status, 0);
+  const noHtmlText = readFileSync(join(dir, 'no-html.md'), 'utf8');
+  assert.match(noHtmlText, /HTML レポートは確認できません/);
+  assert.match(noHtmlText, /- 今回の結果 \(testkit-playwright-report\): .*artifacts\/2/);
+  assert.doesNotMatch(noHtmlText, /HTML レポートと今回の結果/);
+
   const unwritable = runStep('Link published results', { ...env, GITHUB_STEP_SUMMARY: join(dir, 'missing/summary.md') });
   assert.equal(unwritable.status, 0);
   assert.match(unwritable.stdout, /^::warning::step summary に公開先を書き込めません/m);
+});
+
+test('results upload failures are published in both the step summary and PR comment', t => {
+  const { dir, env } = commentEnv(t);
+  const summary = join(dir, 'github-summary.md');
+  assert.equal(step('Link published results').env.RESULTS_OUTCOME, '${{ steps.results.outcome }}');
+  const linked = runStep('Link published results', {
+    ...env, GITHUB_STEP_SUMMARY: summary, RUN_URL: 'https://example.invalid/run',
+    RESULTS_URL: '', RESULTS_OUTCOME: 'failure', REPORT_URL: '', E2E_RAN: 'false',
+  });
+  assert.equal(linked.status, 0);
+  const reason = /実行記録 \(testkit-results\): アップロードに失敗し、保存されていません/;
+  assert.match(readFileSync(summary, 'utf8'), reason);
+  assert.equal(runStep('Publish PR comment', env).status, 0);
+  assert.match(JSON.parse(readFileSync(env.FAKE_GH_PAYLOAD, 'utf8')).body, reason);
 });
 
 // Fake gh: logs each call and the JSON payload; FAKE_GH_FAIL makes the named method fail like a 403.
