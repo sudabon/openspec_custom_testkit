@@ -280,8 +280,13 @@ test('payload claude files are not gitignored', () => {
     () => execFileSync('git', ['check-ignore', '--', 'payload/.claude/agents/qe-oracle-writer.md'], { cwd: repo, encoding: 'utf8' }),
     err => err.status === 1,
   );
-  const rootClaude = execFileSync('git', ['check-ignore', '--', '.claude/settings.json'], { cwd: repo, encoding: 'utf8' }).trim();
-  assert.equal(rootClaude, '.claude/settings.json');
+  // The shared project settings are tracked; every other root agent file stays local.
+  assert.throws(
+    () => execFileSync('git', ['check-ignore', '--', '.claude/settings.json'], { cwd: repo, encoding: 'utf8' }),
+    err => err.status === 1,
+  );
+  const rootClaude = execFileSync('git', ['check-ignore', '--', '.claude/settings.local.json'], { cwd: repo, encoding: 'utf8' }).trim();
+  assert.equal(rootClaude, '.claude/settings.local.json');
 });
 
 
