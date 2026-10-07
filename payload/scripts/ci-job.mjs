@@ -9,6 +9,7 @@ import { buildReport } from './lib/report.mjs';
 import { renderJson, runCoverage } from './lib/coverage-map.mjs';
 import { selectChanges } from './lib/select.mjs';
 import { SCHEMA_E2E } from './lib/critical.mjs';
+import { reportInputs } from './lib/flaky.mjs';
 import { executionBlock } from './lib/evidence-check.mjs';
 import { sha256File } from './lib/hash.mjs';
 import { asString, splitFrontmatter } from './lib/frontmatter.mjs';
@@ -144,15 +145,17 @@ export function runCiJob(env = process.env, deps = {}) {
         continue;
       }
       let plan;
+      let inputs;
       try {
         if (resultsError) throw resultsError;
         plan = readFileSync(join(repo, change.path, 'test-plan.md'), 'utf8');
+        inputs = reportInputs(repo, change);
       } catch (err) {
         fail(2, `${change.id}: レポートを読めません (${err.message})`);
         summaries.push({ id: change.id, text: unreadable(change.id) });
         continue;
       }
-      const input = { changeId: change.id, planText: plan, results, maxAge };
+      const input = { ...inputs, changeId: change.id, planText: plan, results, maxAge };
       const report = reportFor(input);
       writeFileSync(join(runDir, `${change.id}.report.txt`), `${report.stdout}${report.stderr}`);
       lines.push(...[report.stdout.trimEnd(), report.stderr.trimEnd()].filter(Boolean));

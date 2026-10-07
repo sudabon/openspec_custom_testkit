@@ -2,14 +2,15 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { toplevel } from './lib/git.mjs';
+import { reportInputs } from './lib/flaky.mjs';
 import { buildReport, parseReporterArgs } from './lib/report.mjs';
-import { resolveNamed } from './lib/select.mjs';
+import { changeSchema, resolveNamed } from './lib/select.mjs';
 
 const USAGE = `usage: e2e-report.mjs <change-id> [results.json] [--max-age <seconds>] [--format text|summary]
 
 --format summary: 人向けの Markdown 要約。添付は results.json のディレクトリからの相対パスで示す
 
-exit code: 0=問題なし / 1=カバレッジ欠落 / 2=引数・入力エラー / 3=失敗テストあり`;
+exit code: 0=問題なし / 1=カバレッジ欠落 / 2=引数・入力エラー / 3=失敗テストあり（policy で不合格にした flaky を含む）`;
 
 const parsed = parseReporterArgs(process.argv.slice(2));
 if (parsed.help) {
@@ -29,6 +30,18 @@ try {
 const change = resolveNamed(repo, parsed.changeId);
 if (!change) {
   console.error(`change が存在しません: ${parsed.changeId}`);
+  process.exit(2);
+}
+const schema = changeSchema(repo, change.dir);
+if (schema.error) {
+  console.error(schema.error);
+  process.exit(2);
+}
+let inputs;
+try {
+  inputs = reportInputs(repo, { path: change.dir, ...schema });
+} catch (err) {
+  console.error(`レポートの入力を読めません: ${err.message}`);
   process.exit(2);
 }
 const planPath = join(repo, change.dir, 'test-plan.md');
@@ -54,6 +67,7 @@ try {
   process.exit(2);
 }
 const report = buildReport({
+  ...inputs,
   changeId: change.id,
   planText,
   results,

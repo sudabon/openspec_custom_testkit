@@ -10,7 +10,9 @@ mutation_threshold_high: 70
 | Falsification レビュー | 必須 | 必須 | 必須 |
 \`\`\`
 
-統合 schema の low は、旧 quality-driven policy の「任意」より厳しく、環境変数では弱められません。`;
+統合 schema の low は、旧 quality-driven policy の「任意」より厳しく、環境変数では弱められません。
+
+任意: Risk 別にフレークを不合格にする場合は、\`flaky_fail_levels: [high]\` をインデント・箇条書き記号・バッククォートの無い独立した行として追記します（low / medium / high を列挙。書かなければ従来どおり flaky を pass として数えます）。`;
 
 function gateRow(text, label) {
   const body = section(text, '## 3. Quality Gate Matrix') ?? text;
@@ -40,6 +42,28 @@ export function policyIssues(policyText) {
   }
   if (issues.length) issues.push(SAMPLE);
   return issues;
+}
+
+export const RISK_LEVELS = ['low', 'medium', 'high'];
+
+// `flaky_fail_levels: [high]` at the start of a line. Missing means no policy (flaky counts as pass).
+// A value that cannot be read is an input error: silently ignoring it would look like an active policy.
+export function flakyFailLevels(policyText) {
+  const invalid = detail => ({ levels: [], error: `quality-policy.md の flaky_fail_levels が不正です (${detail})。[high] や [medium, high] のように low / medium / high を角括弧で列挙してください` });
+  // Reject setting-like near misses, while allowing prose that mentions the key mid-sentence.
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky_fail_level\w*\b/.test(line));
+  if (candidates.some(line => !/^flaky_fail_levels:/.test(line))) {
+    return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、flaky_fail_levels: [high] の形式で独立した行に書いてください');
+  }
+  const lines = candidates.map(line => line.slice('flaky_fail_levels:'.length).trim());
+  if (!lines.length) return { levels: [], error: null };
+  if (lines.length > 1) return invalid('複数の行があります');
+  const list = lines[0].match(/^\[(.*)\]$/);
+  if (!list) return invalid(lines[0] || '空');
+  const items = list[1].trim() ? list[1].split(',').map(item => item.trim()) : [];
+  const bad = items.filter(item => !RISK_LEVELS.includes(item));
+  if (bad.length) return invalid(bad.map(item => item || '空の要素').join(', '));
+  return { levels: [...new Set(items)], error: null };
 }
 
 export const E2E_LINT_DEFAULTS = { mode: 'enforce', scope: 'changed' };
