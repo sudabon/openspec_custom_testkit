@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
@@ -85,22 +85,39 @@ if (failedReport.exitCode !== 3) {
   process.exit(1);
 }
 
-// The shipped example declares several projects. A browserless test checks that Playwright accepts
-// the device presets and that the reporter needs a pass on every project listed in Projects.
+// The shipped example defaults to Chromium, matching npm setup. Check it launches that browser
+// and that the reporter still diagnoses additional projects requested by the plan.
 mkdirSync(join(root, '.tmp'), { recursive: true });
 const exampleDir = mkdtempSync(join(root, '.tmp/example-'));
 try {
   writeFileSync(join(exampleDir, 'playwright.config.ts'), readFileSync(join(root, 'payload/playwright.config.example.ts')));
   mkdirSync(join(exampleDir, 'tests/e2e'), { recursive: true });
-  writeFileSync(join(exampleDir, 'tests/e2e/projects.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('全 project で動く', { tag: ['@smoke-projects', '@TP-001'] }, () => expect(1 + 1).toBe(2));\n");
-  const output = join(exampleDir, 'results.json');
-  const example = run(process.execPath, [join(root, 'node_modules/@playwright/test/cli.js'), 'test', '--config', join(exampleDir, 'playwright.config.ts')], { TESTKIT_RESULTS_JSON: output });
+  writeFileSync(join(exampleDir, 'tests/e2e/projects.spec.ts'), `import { writeFileSync } from 'node:fs';
+import { test, expect } from '@playwright/test';
+test('既定 browser で動く', { tag: ['@smoke-projects', '@TP-001'] }, async ({ page }) => {
+  await page.setContent('<button>synthetic</button>');
+  await expect(page.getByRole('button', { name: 'synthetic' })).toBeVisible();
+});
+test('添付を残す', { tag: ['@smoke-projects', '@TP-001'] }, async ({}, testInfo) => {
+  const file = testInfo.outputPath('evidence.txt');
+  writeFileSync(file, 'synthetic');
+  await testInfo.attach('evidence', { path: file, contentType: 'text/plain' });
+});
+`);
+  // Run as the CI gate does: attachments and the HTML report land under this run's directory.
+  const runDir = join(exampleDir, 'run');
+  const output = join(runDir, 'results.json');
+  const example = run(process.execPath, [join(root, 'node_modules/@playwright/test/cli.js'), 'test', '--config', join(exampleDir, 'playwright.config.ts')], { TESTKIT_RESULTS_JSON: output, TESTKIT_RUN_DIR: runDir });
   if (example.code !== 0) {
     console.error(example.stdout);
     console.error('同梱 example の Playwright 実行が失敗しました');
     process.exit(example.code || 1);
   }
   const exampleResults = JSON.parse(readFileSync(output, 'utf8'));
+  if (exampleResults.config.projects.length !== 1 || exampleResults.config.projects[0].name !== 'chromium') {
+    console.error('example の既定 project が Chromium だけではありません');
+    process.exit(1);
+  }
   const projectPlan = (projects) => `---
 e2e: required
 ---
@@ -109,7 +126,7 @@ e2e: required
 |-------|-------------|----------|------|--------|---------|--------|----------|----------|
 | TP-001 | example | Visible | R1 | O1 | none | 動く | 2 | ${projects} |
 `;
-  const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium, webkit, mobile-safari'), results: exampleResults });
+  const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium'), results: exampleResults });
   if (allProjects.exitCode !== 0) {
     console.error(allProjects.stdout);
     console.error('example の全 project の pass を coverage に数えませんでした');
@@ -119,6 +136,16 @@ e2e: required
   if (absent.exitCode !== 1 || !absent.stdout.includes('TP-001 (firefox 未実行)')) {
     console.error(absent.stdout);
     console.error('未実行の project を coverage 欠落にしませんでした');
+    process.exit(1);
+  }
+  const summary = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium'), results: exampleResults, format: 'summary', publishRoot: runDir });
+  if (summary.exitCode !== 0 || !/evidence: <code>test-results\/[^<]+<\/code>/.test(summary.stdout) || summary.stdout.includes(exampleDir) || /（ファイルなし）|公開対象外/.test(summary.stdout)) {
+    console.error(summary.stdout);
+    console.error('example の添付が summary に相対パスで出ませんでした');
+    process.exit(1);
+  }
+  if (!existsSync(join(runDir, 'playwright-report/index.html'))) {
+    console.error('example の HTML レポートが TESTKIT_RUN_DIR の配下にありません');
     process.exit(1);
   }
 } finally {

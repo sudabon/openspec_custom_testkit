@@ -24,7 +24,7 @@ jobs:
 
 Playwright の `webServer` が localhost のサーバーを起動する構成を標準にする。browser とサーバーの依存は npm mode では `npm ci` と Playwright の導入に含まれる。
 
-JSON reporter は `$TESTKIT_RESULTS_JSON`（絶対パス）へ今回の結果を書き出す必要がある。同梱 `playwright.config.example.ts` を採用すると、この環境変数とローカル実行用の既定パスを切り替える。`--reporter=json` は config の reporter を上書きするため、使う場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` とする。monorepo でもこの絶対パスを変更しない。
+JSON reporter は `$TESTKIT_RESULTS_JSON`（絶対パス）へ今回の結果を書き出す必要がある。同梱 `playwright.config.example.ts` を採用すると、この環境変数とローカル実行用の既定パスを切り替える。既定 project は Chromium だけである。コメント内の WebKit / mobile-safari の例を有効にする場合は、`setup-mode: caller` にして setup-command で `npx playwright install --with-deps chromium webkit` を実行する。`--reporter=json` は config の reporter を上書きするため、使う場合は `PLAYWRIGHT_JSON_OUTPUT_FILE="$TESTKIT_RESULTS_JSON" npx playwright test --reporter=json` とする。monorepo でもこの絶対パスを変更しない。
 
 ## caller
 
@@ -88,7 +88,7 @@ with:
 
 ## 全量回帰とシナリオ対応表
 
-`regression-command` は change の差分が無い PR でも実行する。今回の Playwright JSON を `$TESTKIT_RESULTS_JSON`（run ごとのディレクトリの `regression-results.json`）へ書く。job はその JSON で `testkit-gate.mjs coverage` と同じ対応表を作り、`coverage.md` と `coverage.json` として保存する。`report-max-age` の鮮度検査も同じく適用する。
+`regression-command` は change の差分が無い PR でも実行する。今回の Playwright JSON を `$TESTKIT_RESULTS_JSON`（run ごとのディレクトリの `regression-results.json`）へ書く。job はその JSON で `testkit-gate.mjs coverage` と同じ対応表を作り、`coverage.md` と `coverage.json` として保存する。`report-max-age` の鮮度検査も同じく適用する。回帰コマンドの `TESTKIT_RUN_DIR` は E2E の実行 directory 内の `regression/` を指すため、回帰実行による出力初期化で E2E の HTML レポートや添付は消えない。JSON の保存先は従来どおり実行 directory 直下である。
 
 ```yaml
 with:
@@ -99,9 +99,40 @@ with:
 
 `coverage-strict` が true のときだけ、対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする。回帰コマンドが非ゼロで終わった場合は、対応表を保存したうえで job を失敗させる。結果 JSON の欠落・破損・実行エラー・鮮度違反、main spec・archive の見出しや YAML の不備などの入力エラーでは、coverage は終了コード 2 を返す。予期しない内部例外は終了コード 3 とし、スタックトレースを CI ログ・coverage.md・summary.txt に残す。進行中 change の不備は警告にして注記から除外するため、それだけでは coverage は失敗しない。レポーターと coverage のエラー詳細は CI ログと summary.txt に残し、対応表の保存に失敗した場合も summary と risk_level の出力を続ける。job は先に発生した失敗の終了コードを保持するため、回帰コマンドが既に非ゼロならそのコードで終了する。`coverage-strict` だけを指定した場合は宣言上の対応だけを検査し、fail・未実行を判定しない旨を表示する。両方とも未指定なら従来と同じ手順で動く。
 
+## 結果の公開と PR コメント
+
+E2E を実行すると、gate は change ごとの要約（TP-ID、テスト、project、結果、フレーク、添付）を step summary に書き、artifact `testkit-playwright-report` に今回の実行 directory（HTML レポート、添付、results.json、`<change-id>.summary.md`）を保存する。step summary の末尾には、ワークフロー実行と artifact へのリンクが付く。要約の読み方は `docs/workflow.md` の「E2E 結果の公開」にある。
+
+添付を artifact に入れるには、Playwright の `outputDir` を `$TESTKIT_RUN_DIR` の配下にする。HTML reporter の `outputFolder` は `$TESTKIT_RUN_DIR/playwright-report` に設定する（同梱 `playwright.config.example.ts` を参照）。公開前にその配下の `index.html` を確認し、無い場合は警告を出して artifact を「今回の結果」と案内する。別の場所に出した添付は、要約に「公開対象外」と表示される。
+
+`testkit-results` を保存できなかった場合も、step summary と PR コメントの公開先にその旨を表示する。git リポジトリの特定、change 選択、report-max-age、lockfile などの入力・セットアップ確認で早期終了した場合は、終了理由を要約に残す。要約生成や GITHUB_OUTPUT への書き込み失敗は警告として出し、元のゲート終了コードを保持する。
+
+PR コメントは任意で、既定では投稿しない。有効にする場合は、呼び出し側で `pull-requests: write` を付ける。
+
+```yaml
+jobs:
+  gate:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: sudabon/openspec_custom_testkit/.github/workflows/openspec-custom-testkit-gate.yml@main
+    with:
+      test-command: npm test
+      e2e-command: npx playwright test
+      publish-pr-comment: true
+      artifact-retention-days: "7"
+```
+
+- コメントはマーカー `<!-- openspec-custom-testkit -->` 付きの 1 件を作成・更新する。本文はファイル経由で渡し、PR タイトルなどの文字列を shell に展開しない。
+- fork からの PR など書き込み権限が無いときは、警告を出して投稿を諦める。ゲートの判定は変わらない。
+- `artifact-retention-days` は、`testkit-results` と `testkit-playwright-report` の両方に適用する。空なら GitHub の既定に従う。正の整数以外はゲートの前に入力エラーになる。
+- 公開系の step（artifact、リンク、PR コメント）は、ゲートが失敗しても実行し、失敗しても job の結果を変えない。
+
+screenshot、video、trace には、画面上の個人情報、トークン、内部 URL が写ることがある。private リポジトリでも、artifact はリポジトリを閲覧できる全員が取得できる。kit は添付の中身を検査もマスキングもしない。テストデータには合成データを使い、保持日数は必要な期間に絞る。
+
 ## 旧 workflow からの変更
 
-旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age`、`regression-command`、`coverage-strict` が増えている。
+旧 `openspec-quality-gate.yml` と `openspec-e2e-gate.yml` の URL は変えない。新しい検査は `openspec-custom-testkit-gate.yml` を追加して呼ぶ。入力の名前は `base-ref`、`gate-phase`、`setup-mode`、`setup-command`、`e2e-command`、`e2e-base-url`、`report-max-age`、`regression-command`、`coverage-strict`、`publish-pr-comment`、`artifact-retention-days` が増えている。
 
 ## Evidence と実行記録
 

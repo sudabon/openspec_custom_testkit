@@ -59,6 +59,14 @@ on:
         description: true のとき、シナリオ対応表の要対応（未保護・要再確認・孤立・fail・未実行）を job の失敗にする
         type: boolean
         default: false
+      publish-pr-comment:
+        description: true のとき E2E の要約を PR コメント 1 件として作成・更新する。呼び出し側に pull-requests write 権限が必要。投稿の失敗は警告だけで、ゲートの判定は変えない
+        type: boolean
+        default: false
+      artifact-retention-days:
+        description: 公開する artifact の保持日数（正の整数）。空なら GitHub の既定。不正な値はゲートの前に入力エラーにする
+        type: string
+        default: ""
     outputs:
       risk-level:
         description: 対象 change の最大 risk_level
@@ -70,6 +78,18 @@ jobs:
     outputs:
       risk-level: ${{ steps.job.outputs.risk_level }}
     steps:
+      # Invalid retention must stop before the gate: silently falling back could keep sensitive attachments longer than intended.
+      - name: Validate publishing inputs
+        id: inputs
+        shell: bash
+        env:
+          ARTIFACT_RETENTION_DAYS: ${{ inputs.artifact-retention-days }}
+        run: |
+          if [ -n "$ARTIFACT_RETENTION_DAYS" ] && ! [[ "$ARTIFACT_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::artifact-retention-days には正の整数（日数）を指定してください"
+            exit 2
+          fi
+
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
@@ -101,10 +121,131 @@ jobs:
           COVERAGE_STRICT: ${{ inputs.coverage-strict }}
         run: node scripts/ci-job.mjs
 
+      # Publishing steps run after failures too and never change the job result: the gate step alone decides it.
+      - name: Inspect Playwright report
+        id: inspect-report
+        if: always() && steps.inputs.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUN_DIR: ${{ steps.job.outputs.run_dir }}
+          E2E_RAN: ${{ steps.job.outputs.e2e_ran }}
+        run: |
+          available=false
+          if [ "$E2E_RAN" = "true" ] && [ -n "$RUN_DIR" ]; then
+            if [ -f "$RUN_DIR/playwright-report/index.html" ]; then
+              available=true
+            else
+              echo '::warning::HTML レポートがありません。HTML reporter の outputFolder を TESTKIT_RUN_DIR/playwright-report に設定してください。ゲートの判定には影響しません'
+            fi
+          fi
+          if ! printf 'html_report=%s\n' "$available" >> "$GITHUB_OUTPUT"; then
+            echo '::warning::HTML レポートの確認結果を出力できません。ゲートの判定には影響しません'
+          fi
+
       - name: Save run artifacts
-        if: always()
+        id: results
+        if: always() && steps.inputs.outcome == 'success'
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: testkit-results
           path: test-results/testkit/
           if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: Save Playwright report
+        id: report
+        if: always() && steps.inputs.outcome == 'success' && steps.job.outputs.e2e_ran == 'true' && steps.job.outputs.run_dir != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: testkit-playwright-report
+          path: ${{ steps.job.outputs.run_dir }}
+          if-no-files-found: ignore
+          retention-days: ${{ inputs.artifact-retention-days }}
+
+      - name: Link published results
+        if: always() && steps.inputs.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULTS_URL: ${{ steps.results.outputs.artifact-url }}
+          RESULTS_OUTCOME: ${{ steps.results.outcome }}
+          REPORT_URL: ${{ steps.report.outputs.artifact-url }}
+          HTML_REPORT: ${{ steps.inspect-report.outputs.html_report }}
+          E2E_RAN: ${{ steps.job.outputs.e2e_ran }}
+        run: |
+          links="$RUNNER_TEMP/testkit-links.md"
+          {
+            printf '\n#### 公開先\n\n'
+            printf -- '- ワークフロー実行: %s\n' "$RUN_URL"
+            if [ -n "$REPORT_URL" ]; then
+              if [ "$HTML_REPORT" = "true" ]; then
+                printf -- '- HTML レポートと今回の結果 (testkit-playwright-report): %s\n' "$REPORT_URL"
+              else
+                printf -- '- 今回の結果 (testkit-playwright-report): %s\n' "$REPORT_URL"
+                printf -- '- HTML レポートは確認できません。HTML reporter の outputFolder を TESTKIT_RUN_DIR/playwright-report に設定してください\n'
+              fi
+            elif [ "$E2E_RAN" = "true" ]; then
+              printf -- '- HTML レポートと今回の結果 (testkit-playwright-report): 保存されていません。job ログを確認してください\n'
+            fi
+            if [ -n "$RESULTS_URL" ]; then
+              printf -- '- 実行記録 (testkit-results): %s\n' "$RESULTS_URL"
+            elif [ "$RESULTS_OUTCOME" = "failure" ]; then
+              printf -- '- 実行記録 (testkit-results): アップロードに失敗し、保存されていません。job ログを確認してください\n'
+            else
+              printf -- '- 実行記録 (testkit-results): 保存されていません。job ログを確認してください\n'
+            fi
+          } > "$links"
+          if ! cat "$links" >> "$GITHUB_STEP_SUMMARY"; then
+            echo "::warning::step summary に公開先を書き込めません。ゲートの判定には影響しません"
+          fi
+
+      # The body travels through files and jq; no PR-provided string is expanded by the shell.
+      - name: Publish PR comment
+        if: always() && steps.inputs.outcome == 'success' && inputs.publish-pr-comment && github.event.pull_request.number
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SUMMARY_FILE: ${{ steps.job.outputs.summary_file }}
+        run: |
+          marker='<!-- openspec-custom-testkit -->'
+          body="$RUNNER_TEMP/testkit-pr-comment.md"
+          links="$RUNNER_TEMP/testkit-links.md"
+          {
+            printf '%s\n' "$marker"
+            if [ -n "$SUMMARY_FILE" ] && [ -f "$SUMMARY_FILE" ]; then
+              cat "$SUMMARY_FILE"
+            else
+              printf '## openspec-custom-testkit E2E\n\n要約はありません。ワークフロー実行のログを参照してください。\n'
+            fi
+            if [ -f "$links" ]; then cat "$links"; fi
+          } > "$body"
+          if [ "$(wc -c < "$body")" -gt 60000 ]; then
+            {
+              printf '%s\n## openspec-custom-testkit E2E\n\n要約が PR コメントの上限を超えるため省略しました。step summary と artifact を参照してください。\n' "$marker"
+              if [ -f "$links" ]; then cat "$links"; fi
+            } > "$body"
+          fi
+          warn() {
+            echo "::warning::PR コメントを$1できません。pull-requests: write 権限と fork PR かどうかを確認してください。ゲートの判定には影響しません"
+          }
+          if ! ids=$(gh api --paginate "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- openspec-custom-testkit -->"))) | .id'); then
+            warn 取得
+            exit 0
+          fi
+          id=$(printf '%s\n' "$ids" | head -n 1)
+          payload="$RUNNER_TEMP/testkit-pr-comment.json"
+          jq -n --rawfile body "$body" '{body: $body}' > "$payload"
+          if [ -n "$id" ]; then
+            if ! gh api --method PATCH "repos/$REPOSITORY/issues/comments/$id" --input "$payload" > /dev/null; then
+              warn 更新
+            fi
+          elif ! gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" --input "$payload" > /dev/null; then
+            warn 投稿
+          fi

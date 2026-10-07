@@ -94,6 +94,7 @@ export function flatten(results) {
           status,
           flaky: raw === 'flaky',
           attempts: attempts.length,
+          attemptResults: attempts,
           raw,
         });
       }
