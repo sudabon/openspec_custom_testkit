@@ -4,7 +4,7 @@ import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
-import { e2eLintPolicy, flakyFailLevels, policyIssues } from './policy.mjs';
+import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, policyIssues } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
   const failures = [];
@@ -46,6 +46,8 @@ export function doctor(repo, options = {}) {
     failures.push(...lint.errors);
     const flaky = flakyFailLevels(policyText);
     if (flaky.error) failures.push(flaky.error);
+    const mockAge = mockContractMaxAgeDays(policyText);
+    if (mockAge.error) failures.push(mockAge.error);
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);

@@ -5,6 +5,7 @@ import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmat
 import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section, tpReferences } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
+import { checkRegistry } from './registry.mjs';
 
 const TAG_SOURCE = /\.(?:[cm]?[jt]sx?|feature)$/i;
 
@@ -247,7 +248,7 @@ function missingViewpoints(repo, change) {
   return { error: `${label}（${created} 作成で導入日 ${since} 以降です）` };
 }
 
-export function checkTestPlan(repo, change) {
+export function checkTestPlan(repo, change, { now } = {}) {
   const errors = [];
   const notes = [];
   const warnings = [];
@@ -351,10 +352,19 @@ export function checkTestPlan(repo, change) {
     }
   }
 
+  // Fixture and mock registration; legacy spec-driven-e2e changes get warnings only.
+  let registryChecked = false;
+  if ((change.schema === SCHEMA_INTEGRATED && change.e2e === 'required') || change.schema === SCHEMA_E2E) {
+    const registry = checkRegistry(repo, change, tp, { now });
+    errors.push(...registry.errors);
+    warnings.push(...registry.warnings);
+    registryChecked = tp.length > 0;
+  }
+
   const legacyIds = change.schema === SCHEMA_E2E
     ? [...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0])
     : tpIds;
-  return { errors, notes, warnings, projects, requiredTags: [...new Set(legacyIds)] };
+  return { errors, notes, warnings, projects, registryChecked, requiredTags: [...new Set(legacyIds)] };
 }
 
 function loadTagCorpus(repo) {

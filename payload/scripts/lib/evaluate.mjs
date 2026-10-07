@@ -7,6 +7,7 @@ import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 import { LAYERS, qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
 import { checkHandoff, residualHeadingErrors } from './qa-handoff.mjs';
+import { IDEMPOTENCY_NOTE } from './registry.mjs';
 import { parseTasks, taskState } from './tasks.mjs';
 
 function sealRequired(change, level, env) {
@@ -129,7 +130,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           else oks.push('全タスク完了');
           const policyPath = join(repo, 'openspec/quality-policy.md');
           const policyText = existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '';
-          const evidence = checkEvidence(repo, change, { digest: digest.digest, policyText, manifest: options.manifest });
+          const evidence = checkEvidence(repo, change, { digest: digest.digest, policyText, manifest: options.manifest, now: options.now });
           failures.push(...evidence.errors);
           warnings.push(...evidence.notes);
           if (change.schema === SCHEMA_INTEGRATED) {
@@ -143,10 +144,11 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   }
 
   if (runPlan) {
-    const plan = checkTestPlan(repo, change);
+    const plan = checkTestPlan(repo, change, { now: options.now });
     failures.push(...plan.errors);
     warnings.push(...plan.warnings);
     planWarnings.push(...plan.warnings);
+    if (plan.registryChecked) oks.push(IDEMPOTENCY_NOTE);
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');

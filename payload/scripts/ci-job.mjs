@@ -62,7 +62,11 @@ export function runCiJob(env = process.env, deps = {}) {
       source = join(runDir, `${name}.log`);
       writeFileSync(source, result.output);
     }
-    if (!result.truncated && existsSync(source)) executions.push({ id: `${runId}-${name}`, command, exit_code: result.code, source_sha256: sha256File(source) });
+    executions.push({
+      id: `${runId}-${name}`, command, exit_code: result.code, started_at: result.started_at,
+      ...(existsSync(source) ? { source_sha256: sha256File(source) } : {}),
+      ...(result.truncated ? { truncated: true } : {}),
+    });
   };
 
   const mode = env.SETUP_MODE || 'npm';
@@ -115,6 +119,14 @@ export function runCiJob(env = process.env, deps = {}) {
     record('mutation', env.MUTATION_COMMAND, mutation);
     lines.push(...mutation.lines);
     if (mutation.code) code = code || mutation.code;
+  }
+  // Optional contract tests against the real services' contracts. Unset means nothing runs and nothing is sent;
+  // a pass never updates the verification dates in the mock registry.
+  if (env.CONTRACT_COMMAND) {
+    const contract = run(execFile, 'bash', ['-c', env.CONTRACT_COMMAND], work, env);
+    record('contract', env.CONTRACT_COMMAND, contract);
+    lines.push(...contract.lines);
+    if (contract.code) code = code || contract.code;
   }
   const required = selected.changes.filter(change => change.e2e === 'required' || change.schema === SCHEMA_E2E);
   const summaries = [];
@@ -221,7 +233,7 @@ export function runCiJob(env = process.env, deps = {}) {
       try { data = executionBlock(readFileSync(evidencePath, 'utf8')).data; }
       catch (err) { fail(1, `${change.id}: evidence.md を読み取れません (${err.code ?? err.message})`); continue; }
       for (const evidence of Array.isArray(data?.runs) ? data.runs : []) {
-        const execution = executions.find(run => run.command === evidence.command && run.exit_code === evidence.exit_code);
+        const execution = executions.find(run => !run.truncated && run.source_sha256 && run.command === evidence.command && run.exit_code === evidence.exit_code);
         if (execution) matched.push({ ...execution, id: evidence.id, change_id: change.id });
       }
     }
@@ -296,17 +308,18 @@ function stepSummaryText(summaries, note) {
 }
 
 function run(execFile, file, args, cwd, env) {
+  const started_at = new Date().toISOString();
   try {
     const stdout = execFile(file, args, { cwd, env, encoding: 'utf8', maxBuffer: MAX_OUTPUT_MIB * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { code: 0, output: String(stdout ?? ''), lines: stdout ? [String(stdout).trimEnd()] : [] };
+    return { code: 0, started_at, output: String(stdout ?? ''), lines: stdout ? [String(stdout).trimEnd()] : [] };
   } catch (err) {
     const stdout = err.stdout?.toString?.() ?? '';
     const stderr = err.stderr?.toString?.() ?? err.message;
     if (err.code === 'ENOBUFS') {
       const message = `${file} ${args.join(' ')}: 出力が ${MAX_OUTPUT_MIB} MiB を超えたため中断しました。終了コードを判定できません`;
-      return { code: 2, truncated: true, output: stdout + stderr, lines: [message, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
+      return { code: 2, started_at, truncated: true, output: stdout + stderr, lines: [message, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
     }
-    return { code: err.status || 1, output: stdout + stderr, lines: [`${file} ${args.join(' ')} failed`, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
+    return { code: err.status || 1, started_at, output: stdout + stderr, lines: [`${file} ${args.join(' ')} failed`, stdout.trimEnd(), String(stderr).trimEnd()].filter(Boolean) };
   }
 }
 

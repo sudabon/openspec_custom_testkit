@@ -277,6 +277,14 @@ artifacts:
       TP-ID は重複させない。Risk と Oracle は quality.md に存在する ID だけを参照する。
       Unit など E2E 以外の Oracle を TP として再実装しない。
 
+      Fixture 列は TP の前提状態を `,` または `、` で区切って書く（例: `seed:user-with-one-order, mock:payment-gateway`）。
+      - `mock:<name>` は外部サービスのモック、それ以外は fixture 名。名前のバッククォートは無視する。
+      - 前提状態が無い TP は `なし` だけを書く。`なし` を他の要素と併用しない。空欄にしない。
+      - fixture 名は E2E ルートの `fixtures/README.md` の表に登録し、その行の「使用する TP-ID」に `<change-id>:TP-NNN` を追記する。
+        `TP-NNN` だけでは数えない。モックは `mocks/README.md` の `## モック一覧` に、モック名・対象サービス・契約の出典・
+        整合の確認方法・最終確認日（YYYY-MM-DD）をそろえて登録する。未登録・未記載は計画ゲートが失敗する。
+      - 最終確認日は人間が実物と照合して更新する。Agent は日付を書き換えない。
+
       `## 対象外シナリオ` の列は Scenario, Reason, Oracle, Layer, Method。
       skip_specs でない通常の change では、specs の `#### Scenario:` をすべてどちらかの表に一度だけ置く。
     requires:

@@ -76,6 +76,18 @@ with:
   mutation-command: npm run mutation
 ```
 
+## 任意の契約テスト
+
+`contract-command` は、モックが実サービスの契約と合っているかを確かめる契約テスト（Pact、OpenAPI の差分検査など）を実行する任意入力である。kit はツールを同梱しない。指定したときだけ実行し、command と終了コードを `test-command` と同じ run 記録に残す。非ゼロ終了なら結果を保存した後に job を失敗させる。空なら何も実行せず、kit は外部サービスへ通信しない。
+
+```yaml
+with:
+  test-command: npm test
+  contract-command: npm run test:contract
+```
+
+成功しても `mocks/README.md` の最終確認日は更新しない。最終確認日は人間が照合内容を確認して書き換える。モックの鮮度（`mock_contract_max_age_days`）は最終確認日だけで判定する。
+
 ## 既存サーバー
 
 サーバーを workflow の外で起動済みにする場合、到達確認、fixture の初期化、終了後の片付けは呼び出し側の責務である。URL は `e2e-base-url` で渡す。

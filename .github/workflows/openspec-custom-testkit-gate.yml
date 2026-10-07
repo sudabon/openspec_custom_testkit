@@ -39,6 +39,10 @@ on:
         description: high で必須。閾値未満は非ゼロ終了
         type: string
         default: ""
+      contract-command:
+        description: 任意の契約テスト。指定時だけ実行して run 記録に残し、非ゼロ終了で job を失敗させる。空なら実行も外部送信もしない。成功してもモックの最終確認日は更新しない
+        type: string
+        default: ""
       e2e-command:
         description: Playwright JSON を TESTKIT_RESULTS_JSON へ書くコマンド
         type: string
@@ -114,6 +118,7 @@ jobs:
           SETUP_COMMAND: ${{ inputs.setup-command }}
           TEST_COMMAND: ${{ inputs.test-command }}
           MUTATION_COMMAND: ${{ inputs.mutation-command }}
+          CONTRACT_COMMAND: ${{ inputs.contract-command }}
           E2E_COMMAND: ${{ inputs.e2e-command }}
           E2E_BASE_URL: ${{ inputs.e2e-base-url }}
           REPORT_MAX_AGE: ${{ inputs.report-max-age }}

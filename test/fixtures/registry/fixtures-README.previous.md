@@ -1,21 +1,13 @@
 # E2E シード fixture 一覧
 
-test-plan.md の `Fixture` 列（統合 schema `quality-driven-e2e`）と「前提(fixture)」列
-（旧 `spec-driven-e2e`）に書いた fixture 名は、必ずこの表に登録すること。
+test-plan.md の「前提(fixture)」列に書いた fixture 名は、必ずこの表に登録すること。
 表を見れば「そのテストがどんな状態から始まるか」が読み手に分かる状態を維持する。
-
-- 「使用する TP-ID」には `<change-id>:TP-NNN` の形で、この fixture を使う TP をすべて書く
-  （`,` 区切り）。TP-ID は change ごとに採番されるため、`TP-001` だけでは数えない。
-- 統合 schema の計画ゲートは、未登録の fixture 名と、「使用する TP-ID」に無い TP を失敗にする。
-  旧 `spec-driven-e2e` の change では警告だけになる。
-- 外部サービスのモックは `Fixture` 列に `mock:<name>` と書き、`../mocks/README.md` に登録する。
-  前提状態が無い TP は `なし` と書く。
 
 ## fixture 名 → 作られる状態
 
 | fixture 名 | 作られる状態 | 使用する TP-ID | 方式 |
 |-----------|-------------|---------------|------|
-| `seed:user-with-one-order` | 有効な一般ユーザー1名 + 支払い済み注文1件 | add-checkout:TP-001, add-checkout:TP-004 | シードAPI |
+| `seed:user-with-one-order` | 有効な一般ユーザー1名 + 支払い済み注文1件 | TP-001, TP-004 | シードAPI |
 |  |  |  |  |
 
 ## 方式について
@@ -28,4 +20,3 @@ test-plan.md の `Fixture` 列（統合 schema `quality-driven-e2e`）と「前�
 
 どちらの方式でも、fixture は各テストの前に**べき等に**状態を作り直し、テスト間で状態を
 共有しないこと(順序依存の禁止は `.claude/skills/e2e-conventions/SKILL.md` を参照)。
-ゲートは登録だけを検査し、冪等性と状態非共有は検査しない。Human Code Review で確認する。

@@ -74,6 +74,25 @@ update は stamp に `features.nonfunctionalViewpoints.since`（その日の日�
 
 戻すときは kit を前の版へ update する。stamp の `features` は旧版では読まれない。
 
+## fixture・モックの登録検査の追加
+
+kit の update で `scripts/lib/registry.mjs`、E2E ルートの `mocks/README.md`、`fixtures/README.md` の新版、test-plan の instruction とテンプレートの `Fixture` 列の書式、evidence テンプレートの review 欄の説明、reusable workflow の任意入力 `contract-command` を配布する。
+
+- `fixtures/README.md` は、前回 kit が書いたまま（stamp に記録したハッシュと一致する）なら新版に置き換える。利用者が編集した README は保持し、差分を表示して skip する（`--force` を付けない限り上書きしない）。新版の主な差分は、列名の説明（統合の `Fixture` と旧 `前提(fixture)`）と「使用する TP-ID」の書式 `<change-id>:TP-NNN` である。編集済みの README には、自分で説明と書式を追記する。
+- `mocks/README.md` は存在しなければ作成する。既にあれば `--force` でも上書きしない（`quality-policy.md`・`quarantine.md` と同じ扱い）。
+- `quality-policy.md` は上書きしないので、`mock_contract_max_age_days` の行は自動では入らない。欠落時は 90 日で動く。変える場合と、§5 の Human Code Review に fixture の冪等性・状態非共有の確認項目を足す場合は人間が追記する（evidence テンプレートの review 欄の説明にも同じ項目がある）。
+
+update 後の最初の plan gate で、進行中の統合 `e2e: required` change の未登録が一覧表示される。対応は次のとおり。
+
+1. test-plan の `Fixture` 列を見直す。前提状態が無い TP は `なし`、外部サービスのモックは `mock:<name>` にする。
+2. fixture 名ごとに `fixtures/README.md` の `## fixture 名 → 作られる状態` に行を足し、「使用する TP-ID」に `<change-id>:TP-NNN` を `,` 区切りで書く。既存行の `TP-001` だけの記載は数えないので、change id を付けて書き直す。
+3. モックごとに `mocks/README.md` の `## モック一覧` に、モック名・対象サービス・契約の出典・整合の確認方法・最終確認日（YYYY-MM-DD）を書く。最終確認日は人間が実物と照合した日にする。
+4. final では最終確認日から検査日までの日数を検査する。照合できないモックは、モック名を含む Residual を evidence に書き、人間が承認する。
+
+旧 `spec-driven-e2e` の change は同じ不整合を警告するだけで、終了コードは変わらない。旧 `quality-driven` と `e2e: not-applicable` の change は影響を受けない。
+
+戻すときは kit を前の版へ update する。登録表に追記した行は残っても無害である。
+
 ## 既知の旧ファイル
 
 旧 stamp の版が QE 0.1.2 または E2E 0.2.0 で、内容が baseline に E2E root 変換を適用したバイトと一致するファイルだけを自動で置き換える。不明な版と独自編集は差分を表示して残す。必須ゲートが残ると install は 0 でも doctor は非ゼロになる。旧 stamp は読まない限り変更しない。

@@ -5,7 +5,8 @@ import { installedE2eRoot } from './e2e-root.mjs';
 import { git, headRevision, parseNameStatus } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
-import { mutationThreshold } from './policy.mjs';
+import { mockContractMaxAgeDays, mutationThreshold } from './policy.mjs';
+import { checkRegistry, mockFreshnessErrors } from './registry.mjs';
 import { quarantineAlternativeErrors, quarantineFor, utcDate } from './flaky.mjs';
 import { tpRows } from './plan-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
@@ -143,6 +144,23 @@ function quarantineErrors(repo, change, quality, { results, residuals, now }) {
   }
 }
 
+// Registry problems themselves are reported by the plan check, which also runs at final; only
+// correctly registered mocks are judged here.
+function freshnessErrors(repo, change, { policyText, residuals, now }) {
+  if (change.e2e !== 'required') return [];
+  const planPath = join(repo, change.path, 'test-plan.md');
+  try {
+    if (!existsSync(planPath)) return [];
+    const { mocks } = checkRegistry(repo, change, tpRows(readFileSync(planPath, 'utf8')), { now });
+    if (!mocks.length) return [];
+    const policy = mockContractMaxAgeDays(policyText);
+    if (policy.error) return [policy.error];
+    return mockFreshnessErrors(mocks, { maxAgeDays: policy.days, residuals, now });
+  } catch (err) {
+    return [`モックの鮮度を確認できません (${err.code ?? err.name}: ${err.message})`];
+  }
+}
+
 export function checkEvidence(repo, change, { digest, policyText, manifest, now = Date.now() }) {
   const errors = [];
   const notes = [];
@@ -266,6 +284,7 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
   }
 
   errors.push(...quarantineErrors(repo, change, quality, { results, residuals, now }));
+  errors.push(...freshnessErrors(repo, change, { policyText, residuals, now }));
 
   const level = asString(splitFrontmatter(quality).data?.risk_level);
   const threshold = mutationThreshold(policyText);
