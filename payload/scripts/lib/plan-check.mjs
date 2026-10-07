@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
 import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { hasBoundedToken, markdownProse, parseTable, planSections, planTables, section } from './markdown.mjs';
+import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 
@@ -84,17 +84,28 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
-// Same prose and sections as the coverage map, so the gate, the reporter and
-// coverage agree on which TP rows exist.
+const TP_SECTION = '## E2E観点一覧';
+const DELEGATED_SECTION = '## 対象外シナリオ';
+
+// Same prose and sections as the coverage map. Only `## E2E観点一覧` holds TP rows;
+// TP content under any other E2E観点一覧 / 対象外 heading fails instead of being dropped.
 function testPlanStructure(planText) {
   const prose = markdownProse(planText, { tables: true });
-  const tables = planSections(prose.text)
-    .filter(item => item.heading === '## E2E観点一覧')
+  const sections = planSections(prose.text);
+  const tables = sections
+    .filter(item => item.heading === TP_SECTION)
     .flatMap(item => planTables(item.body));
   const errors = [];
   if (prose.unclosedFence) errors.push('test-plan のコードフェンスが閉じられていません（閉じていないフェンス以降の TP 行を読めません）');
   // Tables without a delimiter row stay accepted when they start with the TP-ID header.
   const tpTable = table => table.firstCells.includes('TP-ID');
+  for (const { heading, body } of sections) {
+    if (heading === TP_SECTION || heading === DELEGATED_SECTION) continue;
+    if (!/^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading) && !delegatedHeading(heading)) continue;
+    if (planTables(body).some(tpTable) || /TP-\d+/.test(body)) {
+      errors.push(`見出し ${heading} の下に TP があります（TP は ${TP_SECTION} の節に置き、小見出しは E2E観点一覧・対象外 で始めないでください）`);
+    }
+  }
   for (const table of tables) {
     if (!tpTable(table)) errors.push(table.separator
       ? `E2E観点一覧 に TP-ID 列の無い表があります: ${table.firstLine}（TP 以外の表は別の節に置いてください）`
@@ -281,11 +292,14 @@ export function checkTestPlan(repo, change) {
   if (change.schema === SCHEMA_INTEGRATED && existsSync(qualityPath)) {
     const qualityText = readFileSync(qualityPath, 'utf8');
     model = qualityModel(qualityText);
-    if (section(qualityText, VIEWPOINT_HEADING) == null) {
+    // Examples in code fences cannot satisfy the viewpoint register.
+    const qualityProse = markdownProse(qualityText);
+    if (qualityProse.unclosedFence) errors.push(`${change.id}: quality.md のコードフェンスが閉じられていません（閉じていないフェンス以降の ${VIEWPOINT_HEADING} を読めません）`);
+    if (section(qualityProse.text, VIEWPOINT_HEADING) == null) {
       const missing = missingViewpoints(repo, change);
       if (missing.error) errors.push(missing.error);
       else warnings.push(missing.warning);
-    } else errors.push(...viewpointErrors(change.id, qualityText, change.e2e));
+    } else errors.push(...viewpointErrors(change.id, qualityProse.text, change.e2e));
     const riskIds = new Set(model.risks.map(row => row.ID));
     const oracleIds = new Set(model.oracles.map(row => row.ID));
     for (const row of tp) {

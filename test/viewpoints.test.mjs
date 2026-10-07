@@ -488,6 +488,37 @@ test('a top-level heading ends E2E観点一覧 for the gate, the reporter and co
   assert.deepEqual(planRows(plan, { legacy: false }).rows.filter(row => row.kind === 'tp').map(row => row.id), ['TP-001']);
 });
 
+test('TP under a nested E2E観点一覧 or 対象外 heading fails instead of disappearing', () => {
+  const nested = heading => `\n${heading}\n| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |\n|---|---|---|---|---|---|---|---|\n${hiddenRow}`;
+  for (const [name, plan] of [
+    ['E2E観点一覧 subheading', requiredPlan() + nested('### E2E観点一覧の補足')],
+    ['対象外 subheading', requiredPlan() + nested('### 対象外ブラウザ')],
+    ['not-applicable with a nested TP table', naPlan + nested('### E2E観点一覧')],
+    ['TP reference without a table', requiredPlan() + '\n### E2E観点一覧の補足\nTP-002 は後で追加する\n'],
+  ]) {
+    const checked = check({ viewpoints: table(fullRows), plan });
+    assert.ok(checked.errors.some(line => /見出し ### .* の下に TP があります/.test(line)), `${name}: ${checked.errors.join(' / ')}`);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+    assert.equal(report.exitCode, 2, `${name}: ${report.stdout}`);
+    assert.match(report.stderr, /の下に TP があります/, name);
+  }
+});
+
+test('nested plan headings without TP content and the delegated section stay accepted', () => {
+  const plan = requiredPlan() + '\n### E2E観点一覧の補足\n前提はログイン済み\n\n## 対象外シナリオ\n| Scenario | Reason | Oracle | Layer | Method |\n|---|---|---|---|---|\n| Other | TP-001 で代替 | O1 | Unit | node --test |\n';
+  assert.deepEqual(check({ viewpoints: table(fullRows), plan }).errors, []);
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+  assert.equal(report.exitCode, 0, report.stderr || report.stdout);
+});
+
+test('a viewpoint register inside a code fence does not satisfy quality.md', () => {
+  const fenced = '```md\n' + table(fullRows) + '```\n';
+  const checked = check({ viewpoints: fenced });
+  assert.ok(checked.errors.some(line => /quality\.md に ## Non-functional Viewpoints がありません/.test(line)), checked.errors.join(' / '));
+  const unclosed = check({ viewpoints: table(fullRows).replace('## Non-functional Viewpoints\n', '```\n## Non-functional Viewpoints\n') });
+  assert.ok(unclosed.errors.some(line => /quality\.md のコードフェンスが閉じられていません/.test(line)), unclosed.errors.join(' / '));
+});
+
 test('report TP-ID validation follows frontmatter even for legacy schemas', () => {
   const body = requiredPlan().replace(/^---\ne2e: required\n---\n/, '') + '| TP-01 | demo | Hidden | R1 | O1 | app | click | 2 |\n';
   const run = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]);
