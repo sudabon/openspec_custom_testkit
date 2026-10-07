@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
 import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { hasBoundedToken, parseTable, section } from './markdown.mjs';
+import { hasBoundedToken, parseTable, planTables, section, withoutFencedCode } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 
@@ -84,12 +84,16 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
+function testPlanTables(planText) {
+  return planTables(section(withoutFencedCode(planText).text, '## E2E観点一覧'));
+}
+
 export function tpRows(planText) {
-  return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
+  return testPlanTables(planText).flatMap(table => table.rows).filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
 }
 
 export function testPlanRowErrors(planText) {
-  return parseTable(section(planText, '## E2E観点一覧')).rows
+  return testPlanTables(planText).flatMap(table => table.rows)
     .filter(row => !/^TP-\d{3}$/.test(row['TP-ID'] ?? ''))
     .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`);
 }
@@ -98,15 +102,16 @@ export function testPlanRowErrors(planText) {
 const PROJECT_HEADER_VARIANT = /projec?t|プロジェクト/;
 
 export function testPlanHeaderErrors(planText) {
-  const { headers } = parseTable(section(planText, '## E2E観点一覧'));
   const errors = [];
-  const seen = new Set();
-  for (const header of headers) {
-    const normalized = header.normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();
-    if (!header) errors.push('E2E観点一覧 の列 (空) は不正です（列名を指定してください）');
-    else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(normalized)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
-    if (header && seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
-    seen.add(header);
+  for (const { headers } of testPlanTables(planText)) {
+    const seen = new Set();
+    for (const header of headers) {
+      const normalized = header.normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();
+      if (!header) errors.push('E2E観点一覧 の列 (空) は不正です（列名を指定してください）');
+      else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(normalized)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
+      if (header && seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
+      seen.add(header);
+    }
   }
   return errors;
 }
@@ -131,9 +136,9 @@ function viewpointName(cell) {
 
 // Strip the optional "該当なし" marker and parentheses; the remaining text must be a concrete reason.
 function reasonText(cell) {
-  const reason = asString(cell).replace(/[。．.!！?？、,，…\s]+$/u, '').replace(/^該当なし\s*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
+  const reason = asString(cell).replace(/[。．.!！?？、,，…\s]+$/u, '').replace(/^該当なし[\s:：\-–—ー―]*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
   const content = reason.replace(/[。．.!！?？、,，…\s]+$/u, '');
-  return !content || /^(<[^>]*>|[-–—]|tbd|todo|未定(?:です|である)?|(?:特に)?なし|n\/?a)$/i.test(content) ? '' : reason;
+  return !content || /^(<[^>]*>|[-–—ー―]|tbd|todo|未定(?:です|である)?|(?:特に)?(?:なし|無し)|n\/?a)$/i.test(content) ? '' : reason;
 }
 
 function viewpointErrors(id, text, e2e) {

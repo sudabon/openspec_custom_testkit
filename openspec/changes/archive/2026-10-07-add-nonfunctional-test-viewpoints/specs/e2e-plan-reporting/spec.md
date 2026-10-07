@@ -4,7 +4,7 @@
 
 ### Requirement: Project-scoped TP coverage
 
-統合 test-plan の `## E2E観点一覧` は任意の `Projects` 列を MAY 持つ。値は Playwright project 名を `,` または `、` で区切る。統合 plan の `Projects` に似た別名（`Project`・`projects`・`Projects（任意）`・`Projets`・`プロジェクト`・`Playwright Projects`・`Ｐｒｏｊｅｃｔｓ` など）、重複列、空の列名は計画ゲートで MUST 拒否する。その他の追加列（`備考`・`Notes`・`優先度` など）は従来どおり無視する。reporter は schema にかかわらず frontmatter がある plan に同じ見出し検査を行い、違反は入力エラー（終了コード 2）とする。frontmatter の無い旧 plan は見出し検査の対象外とする。統合 plan の TP-ID は大文字の `TP-` と3桁の数字を必須とし、不正な行を黙って除外しない。reporter も frontmatter がある plan で同じ TP-ID 検査を行い、不正な TP-ID または `not-applicable` に TP 行がある場合は入力エラー（終了コード 2）にする。値がある TP は、指定した全 project で、その change と TP-ID のタグを持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に MUST 数える。列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。終了コードの意味（0/1/2/3）は変えない。
+統合 test-plan の `## E2E観点一覧` は任意の `Projects` 列を MAY 持つ。値は Playwright project 名を `,` または `、` で区切る。統合 plan の `Projects` に似た別名（`Project`・`projects`・`Projects（任意）`・`Projets`・`プロジェクト`・`Playwright Projects`・`Ｐｒｏｊｅｃｔｓ` など）、重複列、空の列名は計画ゲートで MUST 拒否する。列名は NFKC 正規化後に記号・空白を除き、小文字にした結果に `project`・`projet`・`プロジェクト` を含むものを予約する。正確な `Projects` 以外は、`Project Owner`・`担当プロジェクト`・`Subproject`・`Projection` など独自列の意図でも拒否する。それ以外の追加列（`備考`・`Notes`・`優先度` など）は従来どおり無視する。reporter は schema にかかわらず frontmatter がある plan に同じ見出し検査を行い、違反は入力エラー（終了コード 2）とする。frontmatter の無い旧 plan は見出し検査の対象外とする。統合 plan の TP-ID は大文字の `TP-` と3桁の数字を必須とし、不正な行を黙って除外しない。reporter も frontmatter がある plan で同じ TP-ID 検査を行い、不正な TP-ID または `not-applicable` に TP 行がある場合は入力エラー（終了コード 2）にする。値がある TP は、指定した全 project で、その change と TP-ID のタグを持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に MUST 数える。列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。終了コードの意味（0/1/2/3）は変えない。
 
 #### Scenario: One project is missing
 

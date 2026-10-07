@@ -17,7 +17,31 @@ function splitRow(line) {
 
 function isSeparator(line) {
   const cells = splitRow(line);
-  return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
+  return cells.length > 0 && cells.every(cell => /^:?-+:?$/.test(cell));
+}
+
+// Preserve line boundaries so fenced examples cannot introduce sections or table rows.
+export function withoutFencedCode(text) {
+  let fence = null;
+  const lines = String(text).split(/\r?\n/).map(line => {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return '';
+    }
+    // Backticks in an info string do not open a fenced block.
+    if (marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) {
+      fence = marker[1];
+      return '';
+    }
+    return line;
+  });
+  return { text: lines.join('\n'), unclosedFence: fence !== null };
+}
+
+export function planTables(body) {
+  return [...String(body ?? '').matchAll(/^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*/gm)]
+    .map(match => parseTable(match[0]));
 }
 
 export function parseTable(text) {

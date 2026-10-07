@@ -5,7 +5,7 @@ import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { readConfigDocument } from './environment.mjs';
 import { byteCompare } from './hash.mjs';
-import { parseTable } from './markdown.mjs';
+import { planTables, withoutFencedCode } from './markdown.mjs';
 import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
@@ -153,28 +153,13 @@ function hasFrontmatter(text) {
 // Fenced code and indented prose cannot introduce declarations or TP references.
 // Plans retain indented pipe tables for compatibility with existing test plans.
 function markdownProse(text, { tables = false } = {}) {
-  let fence = null;
-  const lines = String(text).split(/\r?\n/).map(line => {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
-      return '';
-    }
-    // Backticks in the info string make this inline code, not a fence opener.
-    if (marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) {
-      fence = marker[1];
-      return '';
-    }
+  const prose = withoutFencedCode(text);
+  if (prose.unclosedFence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
+  const lines = prose.text.split('\n').map(line => {
     if (/^(?: {4}|\t)/.test(line) && !(tables && /^\s*\|/.test(line))) return '';
     return line.replace(/^ {0,3}(?=#)/, '');
   });
-  if (fence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
   return lines.join('\n');
-}
-
-function planTables(body) {
-  return [...String(body ?? '').matchAll(/^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*/gm)]
-    .map(match => parseTable(match[0]));
 }
 
 function delegatedList(line) {

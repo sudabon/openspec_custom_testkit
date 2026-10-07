@@ -268,7 +268,7 @@ artifacts:
       - quality.md に E2E 層があるのに not-applicable にしてはならない。required なのに E2E 層が無いのも不可。
 
       `## E2E観点一覧` の列は TP-ID, Requirement, Scenario, Risk, Oracle, Fixture, Intent, Expected と、任意の Projects。
-      Projects はこの表記を使い、似た別名（Project・projects・プロジェクト・Playwright Projects・Ｐｒｏｊｅｃｔｓ など）・重複列・空の列名を置かない。備考や Notes などの追加列は無視する。
+      Projects はこの表記を使い、似た別名（Project・projects・プロジェクト・Playwright Projects・Ｐｒｏｊｅｃｔｓ など）・重複列・空の列名を置かない。列名は NFKC 正規化後に記号・空白を除き、小文字にした結果に `project`・`projet`・`プロジェクト` を含むものを予約する。正確な `Projects` 以外は、`Project Owner`・`担当プロジェクト`・`Subproject`・`Projection` など独自列の意図でも拒否する。それ以外の追加列（備考や Notes など）は無視する。
       Projects は Playwright project 名を `,` または `、` で区切る(例: `chromium, mobile-safari`)。値がある TP は、書いた全 project で
       pass したときだけ coverage に数える。空要素は計画ゲートが失敗し、重複は1つにまとめる。
       空欄または列なしなら、いずれかの project の pass で数える。必要な TP だけに付ける(CI 時間が増えるため)。

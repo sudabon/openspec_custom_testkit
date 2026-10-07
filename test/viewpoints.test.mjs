@@ -158,7 +158,7 @@ test('viewpoint register negatives each fail', () => {
 });
 
 test('placeholder-only reasons fail for both individual and all-viewpoint rows', () => {
-  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'TODO', 'todo', '未定', 'なし', 'N/A', 'na', '...', '…', '特になし', 'TBD。', '未定です', '?', '？？', '未定です。', '該当なし', '該当なし（<理由>）', '該当なし(TBD)', '該当なし（TODO）', '該当なし（未定）', '該当なし（なし）', '該当なし（特になし）。', '該当なし（TBD。）']) {
+  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'TODO', 'todo', '未定', 'なし', 'N/A', 'na', '...', '…', '特になし', '無し', '特に無し', 'ー', '―', '該当なし: なし', '該当なし - TBD', '該当なし（。）', '（…）', '未定である', 'TBD。', '未定です', '?', '？？', '未定です。', '該当なし', '該当なし（<理由>）', '該当なし(TBD)', '該当なし（TODO）', '該当なし（未定）', '該当なし（なし）', '該当なし（特になし）。', '該当なし（TBD。）']) {
     for (const all of [false, true]) {
       const rows = all ? [['全観点', '', reason]] : fullRows.map(row => row[0] === '性能' ? ['性能', '', reason] : row);
       const result = check({ viewpoints: table(rows), plan: all ? naPlan : requiredPlan() }, { e2e: all ? 'not-applicable' : 'required' });
@@ -168,7 +168,7 @@ test('placeholder-only reasons fail for both individual and all-viewpoint rows',
 });
 
 test('placeholder reasons count as empty when a Failure Mode is assigned', () => {
-  for (const reason of ['-', '<理由>', 'TBD', 'TODO', '未定', 'なし', '特になし', 'TBD。', '未定です', '?', '該当なし（N/A）']) {
+  for (const reason of ['-', '<理由>', 'TBD', 'TODO', '未定', 'なし', '特になし', '無し', '特に無し', 'ー', '―', '該当なし: なし', '該当なし - TBD', '該当なし（。）', '（…）', '未定である', 'TBD。', '未定です', '?', '該当なし（N/A）']) {
     const rows = fullRows.map(row => row[0] === '性能' ? ['性能', 'F1', reason] : row);
     assert.deepEqual(check({ viewpoints: table(rows) }).errors, [], reason);
   }
@@ -184,7 +184,7 @@ test('supported viewpoint spelling and separator variants pass', () => {
     ['入力系セキュリティ', '', '該当なし(入力欄がない)'],
   ];
   assert.deepEqual(check({ viewpoints: table(rows) }).errors, []);
-  for (const reason of ['入力欄がない。', '対象となる入力は特になし。', '未定項目は表示に影響しない。', '該当なし（画面を変更しない）。']) {
+  for (const reason of ['入力欄がない。', '対象となる入力は特になし。', '未定項目は表示に影響しない。', '該当なし（画面を変更しない）。', '該当なし: 入力欄がない', '該当なし - 画面を変更しない']) {
     assert.deepEqual(check({ viewpoints: table([['全観点', '', reason]]), plan: naPlan }, { e2e: 'not-applicable' }).errors, [], reason);
   }
 });
@@ -361,7 +361,7 @@ test('Projects column is optional, rejects blank entries and merges duplicates',
 });
 
 test('project spelling variants, duplicate and empty headers are rejected', () => {
-  for (const header of ['Project', 'projects', 'PROJECTS', 'Projects（任意）', 'Project (optional)', 'Projets', 'プロジェクト', 'Project名', 'Playwright Projects', 'Target Projects', 'Project names', 'Projects:', 'Projects 任意', 'Ｐｒｏｊｅｃｔｓ', '`Projects`', '**Projects**', 'Ｐｒｏｊｅｃｔｓ：', 'Pro_jects', 'Projects | Projects', 'Notes | Notes', '']) {
+  for (const header of ['Project', 'projects', 'PROJECTS', 'Projects（任意）', 'Project (optional)', 'Projets', 'プロジェクト', 'Project名', 'Playwright Projects', 'Target Projects', 'Project names', 'Projects:', 'Projects 任意', 'Ｐｒｏｊｅｃｔｓ', '`Projects`', '**Projects**', 'Ｐｒｏｊｅｃｔｓ：', 'Pro_jects', 'Project Owner', '担当プロジェクト', 'Subproject', 'Projection', 'Projects | Projects', 'Notes | Notes', '']) {
     const plan = requiredPlan('chromium, mobile-safari').replace(' Projects |', ` ${header} |`);
     const checked = check({ viewpoints: table(fullRows), plan });
     assert.ok(checked.errors.some(line => /E2E観点一覧.*列/.test(line)), `${header}: ${checked.errors.join(' / ')}`);
@@ -395,6 +395,58 @@ test('malformed TP IDs cannot disappear behind a passing TP', () => {
     assert.equal(report.exitCode, 2, id);
     assert.match(report.stderr, /TP-ID.*不正/);
     assert.ok(report.stderr.includes(id || '(空)'));
+  }
+});
+
+const secondPlanTable = `### 異常系
+| Projects | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |
+|---|---|---|---|---|---|---|---|---|
+| chromium, webkit | TP-002 | demo | Hidden | R1 | O1 | app | click | 2 |
+`;
+
+for (const [name, plan] of [
+  ['single-hyphen separators', requiredPlan('chromium, webkit').replace(/(?<=\|)-{3,}/g, '-')],
+  ['short aligned separators', requiredPlan('chromium, webkit').replace(/(?<=\|)-{3,}/g, ':--')],
+  ['subheading tables with independent headers', requiredPlan('chromium, webkit').replace('## E2E観点一覧\n', '## E2E観点一覧\n### 正常系\n') + '\n' + secondPlanTable],
+  ['fenced table examples', requiredPlan('chromium, webkit').replace('## E2E観点一覧\n', '## E2E観点一覧\n```md\n## E2E観点一覧\n| Example | Project |\n|-|-|\n| example | ignored |\n```\n~~~md\n| TP-ID |\n|-|\n| TP-999 |\n~~~\n')],
+]) {
+  test(`plan gate and reporter accept ${name}`, () => {
+    const ids = plan.includes('TP-002') ? ['TP-001', 'TP-002'] : ['TP-001'];
+    const checked = check({ viewpoints: table(fullRows), plan });
+    assert.deepEqual(checked.errors, []);
+    assert.deepEqual(checked.projects, Object.fromEntries(ids.map(id => [id, ['chromium', 'webkit']])));
+    const passes = ids.flatMap(tp => ['chromium', 'webkit'].map(project => ({ tp, project, status: 'expected' })));
+    const complete = buildReport({ changeId: 'demo', planText: plan, results: results(passes) });
+    assert.equal(complete.exitCode, 0, complete.stderr || complete.stdout);
+    const lastId = ids.at(-1);
+    const missing = buildReport({ changeId: 'demo', planText: plan, results: results(passes.filter(row => row.tp !== lastId || row.project !== 'webkit')) });
+    assert.equal(missing.exitCode, 1, missing.stderr || missing.stdout);
+    assert.ok(missing.stdout.includes(`${lastId} (webkit 未実行)`), missing.stdout);
+  });
+}
+
+test('later tables still validate their own headers and TP IDs', () => {
+  for (const [second, pattern] of [
+    [secondPlanTable.replace('Projects', 'Project'), /列 Project.*Projects/],
+    [secondPlanTable.replace('TP-002', 'tp-002'), /TP-ID tp-002.*不正/],
+  ]) {
+    const plan = requiredPlan() + '\n' + second;
+    assert.ok(check({ viewpoints: table(fullRows), plan }).errors.some(line => pattern.test(line)));
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+    assert.equal(report.exitCode, 2);
+    assert.match(report.stderr, pattern);
+  }
+});
+
+test('report TP-ID validation follows frontmatter even for legacy schemas', () => {
+  const body = requiredPlan().replace(/^---\ne2e: required\n---\n/, '') + '| TP-01 | demo | Hidden | R1 | O1 | app | click | 2 |\n';
+  const run = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]);
+  for (const prefix of ['', '---\ne2e: required\n---\n']) {
+    const plan = prefix + body;
+    assert.deepEqual(check({ viewpoints: '', plan }, { schema: 'spec-driven-e2e', scope: 'legacy-e2e' }).errors, []);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: run });
+    assert.equal(report.exitCode, prefix ? 2 : 0);
+    if (prefix) assert.match(report.stderr, /TP-ID TP-01.*不正/);
   }
 });
 
