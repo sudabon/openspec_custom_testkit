@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_INTEGRATED, SCHEMA_QE } from './lib/critical.mjs';
 import { digestForSchema } from './lib/digest.mjs';
-import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
+import { evaluateChange, maxLevel, qaReviewOf } from './lib/evaluate.mjs';
 import { asList, asString, setFrontmatterScalar, splitFrontmatter, validDate } from './lib/frontmatter.mjs';
 import { toplevel } from './lib/git.mjs';
+import { qaReviewRequiredLevels, RISK_LEVELS } from './lib/policy.mjs';
 import { isChangeName, selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: qe-gate.mjs seal <change>
@@ -116,6 +117,19 @@ function commandSeal(id) {
   if (integrated) {
     if (!asString(frontmatter.data.approved_by) || !validDate(asString(frontmatter.data.approved_at))) {
       console.error('quality.md が未承認です。approved_by と approved_at を人間が記入してから seal してください');
+      return 1;
+    }
+    const policyPath = join(repo, 'openspec/quality-policy.md');
+    const qa = qaReviewRequiredLevels(existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '');
+    if (qa.error) {
+      console.error(qa.error);
+      return 1;
+    }
+    const level = asString(frontmatter.data.risk_level);
+    // An unreadable risk_level cannot prove that QA review is unnecessary.
+    const needed = qa.levels.includes(level) || (!RISK_LEVELS.includes(level) && qa.levels.length > 0);
+    if (needed && qaReviewOf(frontmatter.data) !== 'ok') {
+      console.error(`risk_level=${level || '(空)'} は quality-policy.md の qa_review_required_levels [${qa.levels.join(', ')}] に含まれるため QA レビューが必要です。QA レビュー担当が qa_reviewed_by と qa_reviewed_at (YYYY-MM-DD) を記入してから seal してください`);
       return 1;
     }
   } else if (!asString(frontmatter.data.approved_by)) {

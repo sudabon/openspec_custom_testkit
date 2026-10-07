@@ -5,6 +5,7 @@ import { installedE2eRoot } from './e2e-root.mjs';
 import { git, headRevision, parseNameStatus } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
+import { effortErrors } from './effort.mjs';
 import { mockContractMaxAgeDays, mutationThreshold } from './policy.mjs';
 import { checkRegistry, mockFreshnessErrors } from './registry.mjs';
 import { quarantineAlternativeErrors, quarantineFor, utcDate } from './flaky.mjs';
@@ -307,6 +308,9 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
   if (level === 'high' && !reviews.some(review => review.includes_domain_owner === true)) {
     errors.push('high のレビューにドメイン担当が含まれていません');
   }
+
+  // Effort records are optional; only their structure is checked.
+  errors.push(...effortErrors(data.effort));
 
   const history = records(data.oracle_changes, 'oracle_changes', errors);
   if (history.length) {

@@ -201,10 +201,13 @@ artifacts:
 
       Risk / Failure Mode / Oracle には R1, F1, O1 のようにIDを振り、tasks.md と evidence.md から参照できるようにする。
 
-      frontmatter の approved_by / approved_at / oracle_digest は空のままにする。
+      frontmatter の approved_by / approved_at / qa_reviewed_by / qa_reviewed_at / oracle_digest は空のままにする。
       これらは人間(と scripts/qe-gate.sh seal)だけが埋める。Agentが埋めてはならない。
       approved_at は人間が YYYY-MM-DD で記入する。low でも空のまま実装へ進んではならない。
-      作成後、人間にレビューと承認を依頼する。
+      risk_level が quality-policy.md の qa_review_required_levels(行が無ければ [medium, high])に含まれるときは、
+      承認の前に QA レビュー担当が openspec/roles/qa-reviewer.md の観点で確認し、qa_reviewed_by / qa_reviewed_at(YYYY-MM-DD)を記入する。
+      QA の指摘は Failure Mode と Test Oracle の修正提案として受け取り、quality.md の修正は承認者の承認を経る。
+      作成後、人間に QA レビュー(必要な Level のとき)、レビュー、承認を依頼する。
     requires:
       - specs
 
@@ -400,14 +403,17 @@ apply:
     品質ルール(Reward Hacking 防止。すべて MUST):
     0. 開始前に quality.md を確認する。approved_by または approved_at が空、または oracle_digest が空なら
        実装を始めず、人間に承認と seal を依頼して停止する。low でも例外にしない。
+       risk_level が quality-policy.md の qa_review_required_levels(行が無ければ [medium, high])に含まれ、
+       qa_reviewed_by または qa_reviewed_at が空なら、実装を始めず人間に QA レビューを依頼して停止する。
     1. `## 1. Oracle` と `## 4. Falsification` は別コンテキストに委譲する。渡す入力は role の allowlist に限る。
        design と実装会話は渡さない。
     2. 実装タスクでは oracle_paths を変更・削除・skip しない。E2E 層の Oracle を TP と別に再実装しない。
     3. テストを通すための特別扱いをしない: テスト入力での分岐、アサーションの緩和、
        skip/only/xfail の追加、テスト対象そのもののモック化、期待値を実装から逆算すること。
-    4. `scripts/qe-gate.sh seal` を実行しない。approved_by / approved_at / oracle_digest を編集しない。
+    4. `scripts/qe-gate.sh seal` を実行しない。approved_by / approved_at / qa_reviewed_by / qa_reviewed_at / oracle_digest を編集しない。
     5. 「全テストPass」を完了とみなさない。完了は全 tasks と、evidence の構造および実行記録が揃うこと。
     6. 仕様の曖昧さを推測で埋めない。specs / quality.md / test-plan.md の更新提案として人間に返す。
     7. qa-handoff.md の「QA 実施結果」欄(実施者・実施日・判定・所見)は人間だけが記入する。Agent は記入しない。
+    8. evidence の effort(人間の作業時間の記録)は人間だけが記入する。Agent は所要分を推測で埋めない。
     evidence.md は apply の必須 artifact ではない。tasks の Evidence グループで作成する。
     qa-handoff.md も apply の必須 artifact ではない。tasks の QA Handoff グループで作成する。

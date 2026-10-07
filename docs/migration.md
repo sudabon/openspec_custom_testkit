@@ -93,6 +93,22 @@ update 後の最初の plan gate で、進行中の統合 `e2e: required` change
 
 戻すときは kit を前の版へ update する。登録表に追記した行は残っても無害である。
 
+## QA レビューと工数記録の追加
+
+kit の update で、quality テンプレートの `qa_reviewed_by` / `qa_reviewed_at`、schema の quality / apply instruction、`openspec/roles/qa-reviewer.md`、evidence テンプレートの `effort` の説明、`scripts/lib/effort.mjs`、`CODEOWNERS.example` の QA の割り当て例を配布する。既存 change の quality.md は再生成しない。
+
+`quality-policy.md` は上書きしないので、役割表の分割と `qa_review_required_levels` の行は自動では入らない。行が無い場合、統合 schema の change は初期値 `[medium, high]` で QA レビューを求められ、doctor がその旨を表示する。update の直後に、進行中の medium / high の統合 change が一斉に止まらないよう、次の順で段階的に有効化する。
+
+1. update の前に、人間が `quality-policy.md` に `qa_review_required_levels: []` を独立した行として追記する（QA レビューを要求しない）。policy は CODEOWNERS の保護対象なので、この変更も人間のレビューを通る。
+2. kit を update する。`[]` の間も、統合 schema の承認・seal・独立反証は従来どおり必須である。
+3. 配布版の `quality-policy.md` を参考に役割表を分け、QA レビュー担当を決める。`.github/CODEOWNERS` に `CODEOWNERS.example` の QA の行を写し、ブランチ保護で Require review from Code Owners を有効にする。
+4. 進行中の medium / high の change ごとに、QA レビュー担当が `openspec/roles/qa-reviewer.md` で確認し、quality.md に `qa_reviewed_by: ""` と `qa_reviewed_at: ""` の行を足して記入する。seal 済みの change でも、この欄の追加では `oracle_digest` は変わらず、再 seal は要らない。
+5. 進行中の change の QA レビューが揃ったら、`qa_review_required_levels: [medium, high]`（または組織で決めた Level）に戻す。
+
+不正値（`[critical]`、角括弧の無い値、インデントや箇条書きの付いた行、複数行など）は「不要」とみなされず、doctor・gate・seal が失敗する。`effort` は任意なので、既存の evidence は変更しなくてよい。旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
+
+戻すときは kit を前の版へ update する。quality.md に足した QA レビュー欄と evidence の `effort` は、旧版の gate では無視される。
+
 ## 既知の旧ファイル
 
 旧 stamp の版が QE 0.1.2 または E2E 0.2.0 で、内容が baseline に E2E root 変換を適用したバイトと一致するファイルだけを自動で置き換える。不明な版と独自編集は差分を表示して残す。必須ゲートが残ると install は 0 でも doctor は非ゼロになる。旧 stamp は読まない限り変更しない。

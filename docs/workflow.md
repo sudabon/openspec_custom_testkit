@@ -4,16 +4,56 @@
 
 統合 schema では low を含むすべての Risk で、次を人間が行う。
 
-1. `quality.md` の `approved_by` と `approved_at`（YYYY-MM-DD）を記入する。
-2. Oracle を読んで `scripts/qe-gate.sh seal <change>` を実行する。
-3. 反証の Residual を承認する。medium 以上は Human Code Review、high はドメイン担当を含める。
-4. QA handoff が必要な change では、QA が手動確認範囲と探索チャーターを実施し、`qa-handoff.md` の QA 実施結果を記入する。
+1. risk_level が policy の `qa_review_required_levels`（初期値 `[medium, high]`）に含まれる change では、承認の前に QA レビュー担当が quality.md と specs を確認し、`qa_reviewed_by` と `qa_reviewed_at`（YYYY-MM-DD）を記入する（「QA レビュー」の節）。
+2. `quality.md` の `approved_by` と `approved_at`（YYYY-MM-DD）を記入する。
+3. Oracle を読んで `scripts/qe-gate.sh seal <change>` を実行する。
+4. 反証の Residual を承認する。medium 以上は Human Code Review、high はドメイン担当を含める。
+5. QA handoff が必要な change では、QA が手動確認範囲と探索チャーターを実施し、`qa-handoff.md` の QA 実施結果を記入する。
 
-Agent は承認欄、`oracle_digest`、seal を埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。誰が実行したかの保証は CODEOWNERS とブランチ保護に依存する。
+Agent は承認欄、QA レビュー欄、`oracle_digest`、seal を埋めない。evidence の `effort` の所要分も推測で埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。誰が実行したかの保証は CODEOWNERS とブランチ保護に依存する。
 
 役割の入力範囲は `openspec/roles/oracle-writer.md` と `openspec/roles/falsifier.md` が正本である。Claude の adapter は `.claude/agents/` からその定義を参照する。design と実装会話は Oracle の期待値に渡さない。別セッションを起動できない環境では、同じ会話の続きで Oracle や反証を書かず、人間に別セッションの開始を依頼して止まる。
 
 E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体テストとして再実装しない。Unit 層の Oracle に TP-ID は不要である。
+
+## QA レビュー
+
+QA レビューは quality.md の承認前に一度だけ行う工程である。目的は、実装前に QA のテスト設計の観点（同値分割・境界値・デシジョンテーブル・状態遷移・エラー推測・シナリオの網羅）を Failure Modes と Test Oracles に入れ、後工程の手動テストのやり直しを減らすことにある。
+
+人間の役割は `openspec/quality-policy.md` の役割表で、quality.md 承認者・Oracle seal 実施者・QA レビュー担当・コードレビュー担当に分かれている。手順は次のとおり。
+
+1. Agent が quality.md（と test-plan.md）を作り、承認欄・QA レビュー欄を空のまま人間に渡す。
+2. QA レビュー担当が `openspec/roles/qa-reviewer.md` のチェックリストで、specs・quality.md・test-plan.md・quality-policy.md だけを読んで確認する。design.md と実装は読まない。該当しない技法は理由を書いて省略する。
+3. 指摘は Failure Mode と Test Oracle の追加・修正の提案として返す。quality.md への反映は作成者と承認者が決める。QA レビュー担当は期待値を自分で確定しない。
+4. 反映を確認したら、QA レビュー担当が `qa_reviewed_by` と `qa_reviewed_at` を記入する。
+5. 承認者が `approved_by` と `approved_at` を記入する。反映で quality.md が変わった後に記入済みの欄があれば、承認者と QA レビュー担当が改めて記入する。
+6. seal 実施者が `scripts/qe-gate.sh seal <change>` を実行する。
+
+QA レビューを必須にする Level は policy の `qa_review_required_levels` で決まる。行が無ければ `[medium, high]`（doctor が初期値の適用を表示する）。必須の Level では次のとおり検査する。
+
+- seal は QA レビュー欄が揃っていなければ digest を書き込まずに失敗する。
+- plan / final gate は、実装タスクが進んだ change と final の検査で欄の欠落を失敗にする。タスクが一つも完了していない計画段階では、承認欄と同じく警告に留める。
+- 片方だけの記入や `YYYY-MM-DD` でない日付は、段階にかかわらず失敗にする。
+- `qa_review_required_levels` の不正値は「不要」とみなさず、doctor・gate・seal が失敗する。
+
+QA レビュー欄は quality.md frontmatter にあり、`oracle_paths` 配下ではないので、欄を足しても `oracle_digest` は変わらない。必須でない Level でも、記入すれば gate は記録として表示する。QA レビューの設定は、統合 schema の全 Risk 必須の承認・seal・独立反証を外さない。旧 `quality-driven` と `spec-driven-e2e` には適用しない。kit は記入者の本人確認をせず、承認者と QA レビュー担当が別人であることも強制しない。`.github/CODEOWNERS.example` の QA チームの割り当てとブランチ保護で担保する。
+
+## 人間の検証工数の記録と集計
+
+QA の作業がレビュー担当へ移っただけなのか、全体として減ったのかを見るため、evidence の Execution Records に任意の `effort` 配列で、人間の作業時間を記録できる。各要素は `activity`（`approval` / `seal` / `qa-review` / `falsification-review` / `code-review` / `manual-test` / `other`）、`minutes`（0 以上の数値）、`recorded_by`（記入者）を持つ。`manual-test` は qa-handoff.md の手動確認範囲と探索チャーターの実施時間を記録する先である。
+
+- `effort` が無くても、空でもゲートは失敗しない。あるときは、未知の活動種別・負数や数値でない所要分・記入者の欠落を、要素の位置（`effort[1]` など）を示して構造エラーにする。
+- 所要分は人間が記入する。Agent は推測で埋めない。
+
+archive 済みの統合 change から集計する:
+
+```bash
+node scripts/testkit-gate.mjs effort                      # 表形式
+node scripts/testkit-gate.mjs effort --since 2026-10-01   # archive フォルダの日付で絞り込む
+node scripts/testkit-gate.mjs effort --format json
+```
+
+出力は活動種別ごと・risk_level ごとの合計分・記録件数・change 数、記録あり件数と平均、未記録の件数と change id、記録率、破損件数である。`effort` の無い change は 0 分として合算せず「未記録」として別に数え、平均の分母に入れない。記録率が 50% 未満なら、集計が一部しか表していないことを表示する。evidence を読めない change（Execution Records の欠落・JSON の破損・`effort` の構造エラー）は黙って除外せず、change id と理由を出して終了コード 1 にする。対象は `openspec/changes/archive/` の統合 schema の change だけで、進行中の change と旧 schema の change は数えない。終了コードは 0（集計完了）/ 1（破損あり）/ 2（引数不正）/ 3（内部エラー）。
 
 ## 計画と適用
 

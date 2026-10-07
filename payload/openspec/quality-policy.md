@@ -7,7 +7,10 @@
 
 | 役割 | 担当 | 責務 |
 |------|------|------|
-| 正しさの定義 | 人間 | quality.md の承認、Oracle の seal、Residual Risk の受容 |
+| quality.md 承認者 | 人間 | quality.md の承認(`approved_by` / `approved_at`)と Residual Risk の受容。正しさの定義を確定する |
+| Oracle seal 実施者 | 人間 | Oracle を読んで `scripts/qe-gate.sh seal` を実行する |
+| QA レビュー担当 | 人間(QA エンジニア) | quality.md 承認前に、quality.md と specs のシナリオを `openspec/roles/qa-reviewer.md` のテスト設計の観点で確認し、`qa_reviewed_by` / `qa_reviewed_at` を記入する |
+| コードレビュー担当 | 人間 | 実装後の Human Code Review(medium 以上で必須、high はドメイン担当を含む) |
 | 実装 | 実装Agent | 実装、補助テストの生成、失敗解析 |
 | Oracle作成 | qe-oracle-writer(別コンテキスト) | specs と quality.md だけを入力に Oracle テストを作成 |
 | 反証 | qe-falsifier(別コンテキスト) | 実装が間違っていることを証明するテストを作成 |
@@ -42,8 +45,19 @@ mutation_threshold_high: 70
 e2e_lint_mode: enforce
 e2e_lint_scope: changed
 mock_contract_max_age_days: 90
+qa_review_required_levels: [medium, high]
 
 統合 schema `quality-driven-e2e` では low を含む全 Risk で、人間の承認、Oracle seal、独立反証が必須です。`QE_SEAL_REQUIRED_LEVELS` と `QE_SCHEMA` ではこの条件を外せません。上の表で low が「任意」のままの旧 policy は、統合 schema の doctor を通しません。
+
+### QA レビュー
+
+QA レビュー担当は quality.md の承認前に一度だけ、`openspec/roles/qa-reviewer.md` のチェックリストで quality.md と specs のシナリオを確認する。指摘は Failure Mode と Test Oracle の追加・修正の提案として返し、quality.md の修正は承認者の承認を経る。確認を終えたら QA レビュー担当が quality.md frontmatter の `qa_reviewed_by` と `qa_reviewed_at`(YYYY-MM-DD)を記入する。
+
+- QA レビューを必須にする Risk Level は `qa_review_required_levels` で設定する。`[medium, high]` のように low / medium / high を角括弧で列挙し、インデント・箇条書き記号・バッククォートを付けない独立した行として書く。`[]` は QA レビューを要求しない。
+- 行が無い場合は `[medium, high]` として扱い、doctor がその旨を表示する。不正値・書式違い・複数行は「不要」とみなさず、doctor・gate・seal が失敗する。環境変数での上書きはない。
+- 必須の Risk Level では、seal は QA レビュー欄が揃うまで digest を書き込まない。gate は、実装タスクが進んだ change と final の検査で欠落を失敗にし、それより前は警告にする。値が不正(片方だけ・日付不正)な場合はいつでも失敗にする。
+- この設定は統合 schema の全 Risk 必須の人間承認・Oracle seal・独立反証を外さない。QA レビューはその上に加える条件である。
+- 旧 `quality-driven` と `spec-driven-e2e` には適用しない。kit は記入者の本人確認をしない。承認者と QA レビュー担当が別人であることも強制しない(CODEOWNERS とブランチ保護に依存する)。
 
 ### Manual 層と QA handoff
 
@@ -81,6 +95,8 @@ mock_contract_max_age_days: 90
 ## 4. Agent が変更してはいけないもの
 
 - quality.md frontmatter の `approved_by` / `approved_at` / `oracle_digest`
+- quality.md frontmatter の `qa_reviewed_by` / `qa_reviewed_at`
+- evidence の `effort` の所要分(人間が記入する。推測で埋めない)
 - qa-handoff.md の QA 実施結果欄(実施者・実施日・判定・所見)
 - seal 済みの `oracle_paths` 配下
 - このファイル、`openspec/schemas/`、`scripts/qe-gate.sh`、`.github/workflows/`
