@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
 import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { hasBoundedToken, parseTable, planTables, section, withoutFencedCode } from './markdown.mjs';
+import { hasBoundedToken, markdownProse, parseTable, planSections, planTables, section } from './markdown.mjs';
 import { listFiles } from './files.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 
@@ -84,18 +84,34 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
-function testPlanTables(planText) {
-  return planTables(section(withoutFencedCode(planText).text, '## E2E観点一覧'));
+// Same prose and sections as the coverage map, so the gate, the reporter and
+// coverage agree on which TP rows exist.
+function testPlanStructure(planText) {
+  const prose = markdownProse(planText, { tables: true });
+  const tables = planSections(prose.text)
+    .filter(item => item.heading === '## E2E観点一覧')
+    .flatMap(item => planTables(item.body));
+  const errors = [];
+  if (prose.unclosedFence) errors.push('test-plan のコードフェンスが閉じられていません（閉じていないフェンス以降の TP 行を読めません）');
+  // Tables without a delimiter row stay accepted when they start with the TP-ID header.
+  const tpTable = table => table.firstCells.includes('TP-ID');
+  for (const table of tables) {
+    if (!tpTable(table)) errors.push(table.separator
+      ? `E2E観点一覧 に TP-ID 列の無い表があります: ${table.firstLine}（TP 以外の表は別の節に置いてください）`
+      : `E2E観点一覧 に TP-ID の見出し行で始まらない表があります: ${table.firstLine}（空行やコードフェンスで表を分けないでください。分ける場合は見出し行と区切り行を付けます）`);
+  }
+  return { tables: tables.filter(tpTable), errors };
 }
 
 export function tpRows(planText) {
-  return testPlanTables(planText).flatMap(table => table.rows).filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
+  return testPlanStructure(planText).tables.flatMap(table => table.rows).filter(row => /^TP-\d{3}$/.test(row['TP-ID']));
 }
 
 export function testPlanRowErrors(planText) {
-  return testPlanTables(planText).flatMap(table => table.rows)
-    .filter(row => !/^TP-\d{3}$/.test(row['TP-ID'] ?? ''))
-    .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`);
+  const { tables, errors } = testPlanStructure(planText);
+  return [...errors, ...tables.flatMap(table => table.rows)
+    .filter(row => !/^TP-\d{3}$/.test(row['TP-ID']))
+    .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`)];
 }
 
 // Reserve project-related names (including the existing Projets typo), preserving custom columns.
@@ -103,7 +119,7 @@ const PROJECT_HEADER_VARIANT = /projec?t|プロジェクト/;
 
 export function testPlanHeaderErrors(planText) {
   const errors = [];
-  for (const { headers } of testPlanTables(planText)) {
+  for (const { headers } of testPlanStructure(planText).tables) {
     const seen = new Set();
     for (const header of headers) {
       const normalized = header.normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();

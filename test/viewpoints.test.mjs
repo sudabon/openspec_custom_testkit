@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan, VIEWPOINTS } from '../payload/scripts/lib/plan-check.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
+import { planRows } from '../payload/scripts/lib/coverage-map.mjs';
 import { gitRepo } from './support.mjs';
 
 function write(repo, rel, text) {
@@ -436,6 +437,55 @@ test('later tables still validate their own headers and TP IDs', () => {
     assert.equal(report.exitCode, 2);
     assert.match(report.stderr, pattern);
   }
+});
+
+const hiddenRow = '| TP-002 | demo | Hidden | R1 | O1 | app | click | 2 |\n';
+
+test('TP rows cut off from their table header cannot disappear', () => {
+  const naRequired = plan => plan.replace('e2e: required', 'e2e: not-applicable');
+  for (const [name, plan, pattern] of [
+    ['unclosed fence between rows', requiredPlan() + '```text\n' + hiddenRow + '| TP-X | demo | Bad | R1 | O1 | app | click | 3 |\n', /コードフェンスが閉じられていません/],
+    ['unclosed tilde fence before a misspelled header', requiredPlan() + '~~~\n| TP-ID | Project |\n|-|-|\n| TP-002 | chromium |\n', /コードフェンスが閉じられていません/],
+    ['unclosed fence hiding rows under not-applicable', naRequired(requiredPlan()).replace('## E2E観点一覧\n', '```\n## E2E観点一覧\n'), /コードフェンスが閉じられていません/],
+    ['blank line before a single row', requiredPlan() + '\n' + hiddenRow, /TP-ID の見出し行で始まらない表があります: \| TP-002/],
+    ['blank line before several rows', requiredPlan() + '\n' + hiddenRow + hiddenRow.replace('TP-002', 'TP-003'), /TP-ID の見出し行で始まらない表があります: \| TP-002/],
+    ['closed fence between rows', requiredPlan() + '```\nexample\n```\n' + hiddenRow, /TP-ID の見出し行で始まらない表があります: \| TP-002/],
+  ]) {
+    const checked = check({ viewpoints: table(fullRows), plan });
+    assert.ok(checked.errors.some(line => pattern.test(line)), `${name}: ${checked.errors.join(' / ')}`);
+    const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+    assert.equal(report.exitCode, 2, `${name}: ${report.stdout}`);
+    assert.match(report.stderr, pattern, name);
+  }
+});
+
+test('auxiliary tables without a TP-ID column name the table instead of each row', () => {
+  const plan = requiredPlan() + '\n### メモ\n| 項目 | 内容 |\n|---|---|\n| 前提 | ログイン済み |\n';
+  const checked = check({ viewpoints: table(fullRows), plan });
+  assert.deepEqual(checked.errors.filter(line => /E2E観点一覧/.test(line)), ['demo: E2E観点一覧 に TP-ID 列の無い表があります: | 項目 | 内容 |（TP 以外の表は別の節に置いてください）']);
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+  assert.equal(report.exitCode, 2);
+  assert.match(report.stderr, /TP-ID 列の無い表があります: \| 項目 \| 内容 \|/);
+  assert.doesNotMatch(report.stderr, /TP-ID \(空\)/);
+});
+
+test('only the line after the header is a delimiter row', () => {
+  const plan = requiredPlan() + '| - | - | - | - | - | - | - | - |\n';
+  const checked = check({ viewpoints: table(fullRows), plan });
+  assert.ok(checked.errors.some(line => /TP-ID - は不正/.test(line)), checked.errors.join(' / '));
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+  assert.equal(report.exitCode, 2);
+  assert.match(report.stderr, /TP-ID - は不正/);
+});
+
+test('a top-level heading ends E2E観点一覧 for the gate, the reporter and coverage alike', () => {
+  const plan = requiredPlan() + '\n# Appendix\n| TP-ID | Requirement |\n|---|---|\n| TP-009 | demo |\n';
+  const checked = check({ viewpoints: table(fullRows), plan });
+  assert.deepEqual(checked.errors, []);
+  assert.deepEqual(checked.requiredTags, ['TP-001']);
+  const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
+  assert.equal(report.exitCode, 0, report.stderr || report.stdout);
+  assert.deepEqual(planRows(plan, { legacy: false }).rows.filter(row => row.kind === 'tp').map(row => row.id), ['TP-001']);
 });
 
 test('report TP-ID validation follows frontmatter even for legacy schemas', () => {

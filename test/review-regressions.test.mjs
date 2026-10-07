@@ -230,7 +230,7 @@ test('reporter and gate read TP-IDs from the same table column', () => {
     }
     const report = buildReport({ changeId: 'demo', planText: plan, results: { suites: [] } });
     assert.equal(report.exitCode, 2);
-    assert.match(report.stderr, /TP-ID \(空\).*不正/);
+    assert.match(report.stderr, /TP-ID 列の無い表/);
     assert.equal(report.stdout, '');
   } finally { repo.cleanup(); }
 });
