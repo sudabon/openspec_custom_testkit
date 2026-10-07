@@ -11,13 +11,12 @@ import { selectChanges } from './lib/select.mjs';
 import { isE2eRequired } from './lib/critical.mjs';
 import { reportInputs } from './lib/flaky.mjs';
 import { readRiskLevel } from './lib/change-metadata.mjs';
-import { appendGithubOutput } from './lib/entry.mjs';
+import { appendGithubOutput, isMain } from './lib/entry.mjs';
 import { executionBlock } from './lib/evidence-check.mjs';
 import { escapeHtml } from './lib/markdown.mjs';
 import { errorCode } from './lib/files.mjs';
 import { sha256File } from './lib/hash.mjs';
 import { parseTasks, taskState } from './lib/tasks.mjs';
-import { pathToFileURL } from 'node:url';
 
 const MAX_OUTPUT_MIB = 64;
 // GitHub caps one step's summary at 1 MiB. Rows beyond the count limit and sections beyond the byte budget
@@ -408,7 +407,7 @@ function writeGithubOutputs(env, { stepSummary, summaryFile, meta }, lines) {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   const result = runCiJob(process.env);
   for (const line of result.lines) console.log(line);
   process.exit(result.code);

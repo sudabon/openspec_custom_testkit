@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FORK_BASE, LEGACY_STAMPS, isCritical } from '../payload/scripts/lib/critical.mjs';
 import { sha256 } from '../payload/scripts/lib/hash.mjs';
+import { isMain } from '../payload/scripts/lib/entry.mjs';
 
 const SOURCES = {
   qe: {
@@ -107,6 +108,6 @@ function main(argv) {
   return 0;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMain(import.meta.url)) {
   process.exitCode = main(process.argv.slice(2));
 }

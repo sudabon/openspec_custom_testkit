@@ -20,10 +20,10 @@
 | `frontmatter.mjs` | YAML の解析、mapping と独自 tag の判定、日付 |
 | `markdown.mjs` | 表と節の解析、test-plan の節見出し、表のセルと HTML のエスケープ |
 | `files.mjs` / `git.mjs` | ファイル一覧と fs エラーの判定、git の呼び出し |
-| `entry.mjs` | エントリポイントの repo 解決、`GITHUB_OUTPUT` への追記、結果の出力 |
+| `entry.mjs` | symlink を実体パスへ解決する直接実行判定（`isMain`）、エントリポイントの repo 解決、`GITHUB_OUTPUT` への追記、結果の出力 |
 | `seal.mjs` | `quality.md` の読み込み、seal を止める条件（承認・QA レビュー）、QA レビュー要否の判定（`qaReviewNeeded`。不正な Risk Level は要とみなす） |
 
-E2E 規約の lint は `e2e-lint.mjs` を入口とし、実装を `e2e-lint/` の6つのモジュールに分けている。入口は公開 API（`RULES`、`WEAK_MATCHERS`、`analyzeSource`、`lintSource`、`lintRepo`、`lintChange`、`formatLintReport`）を再 export するだけで、import 元はこのパスを使い続ける。依存は表の上から下への一方向で、下の層は上の層を import しない。
+E2E 規約の lint は `e2e-lint.mjs` を入口とし、実装を `e2e-lint/` の6つのモジュールに分けている。入口は公開 API（`RULES`、`WEAK_MATCHERS`、`analyzeSource`、`lintSource`、`lintRepo`、`lintChange`、`formatLintReport`）を再 export するだけで、import 元はこのパスを使い続ける。表は最下層の lexer から順に並べており、依存は表の下の行から上の行への一方向である。上の行のモジュールは下の行のモジュールを import しない。
 
 | モジュール | 持つもの |
 |---|---|
@@ -34,7 +34,7 @@ E2E 規約の lint は `e2e-lint.mjs` を入口とし、実装を `e2e-lint/` �
 | `e2e-lint/helpers.mjs` | ファイルをまたぐ helper と fixture の解決、アサーションの指摘、`lintSource` |
 | `e2e-lint/repo.mjs` | repo の走査と状態（`createLintState`）、強制範囲、policy、抑止の承認判定 |
 
-ゲートの中核の関数は、入力を読む関数・個々の検査をする `check*` 関数・結果をまとめる関数に分けている。`check*` は失敗や警告を戻り値で返し、呼び出し元が呼ぶ順に連結するので、出力の順序は呼び出し元を読めば分かる。`testkit-gate.mjs`、`e2e-report.mjs`、`check-test-plan.mjs`、`ci-job.mjs` は `main` を export し、直接実行されたときだけ動く。テストからは `main(argv, env, io)` を呼んで終了コードを受け取れる。
+ゲートの中核の関数は、入力を読む関数・個々の検査をする `check*` 関数・結果をまとめる関数に分けている。`check*` は失敗や警告を戻り値で返し、呼び出し元が呼ぶ順に連結するので、出力の順序は呼び出し元を読めば分かる。`testkit-gate.mjs`、`e2e-report.mjs`、`check-test-plan.mjs` は `main` を export し、テストから `main(argv, env, io)` を呼んで終了コードを受け取れる。`ci-job.mjs` は `runCiJob(env, deps)` を export し、終了コードを含む結果オブジェクトを返す。これらの CLI は `isMain(import.meta.url)` で直接実行を判定し、symlink 経由でも起動する。
 
 実装ごとに挙動が違う箇所は、`readChangeMetadata(..., { strict })` や `policyKeyLine(..., { stripComment })` のように、呼び出し元ごとに今の挙動を引数で固定している。
 

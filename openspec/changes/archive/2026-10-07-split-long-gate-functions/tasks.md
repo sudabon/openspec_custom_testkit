@@ -30,4 +30,4 @@
 ## 6. 配布物と統合確認
 
 - [x] 6.1 `seal.mjs` を `REQUIRED_MODULES`、pack の必須一覧、`docs/architecture.md` に追加する。distribution のテストが通ることを確認する
-- [x] 6.2 `npm run lint`、`npm test`、`npm run test:smoke`、`node scripts/build-manifest.mjs --check` がすべて成功することを確認する。既存の assert を変更していないことを PR に記載する
+- [x] 6.2 `npm run lint`、`npm test`、`npm run test:smoke`、`node scripts/build-manifest.mjs --check` がすべて成功することを確認する。既存の assert の意図的な変更を記録する：`e2e-lint.test.mjs` は実装の移動に合わせて参照先を `e2e-lint/repo.mjs` に変更し、`install.test.mjs` は共有する `.claude/settings.json` を ignore しない判定へ変更した（`settings.local.json` は引き続き ignore を検証）

@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -15,7 +15,17 @@ const FIXTURES = fileURLToPath(new URL('./fixtures/publishing/', import.meta.url
 const fixture = name => readFileSync(join(FIXTURES, name), 'utf8');
 // Captured from the code before the split. Regenerate only for an intended output change, never to make a refactor pass.
 const EXPECTED_PATH = fileURLToPath(new URL('./fixtures/output-baseline.json', import.meta.url));
-const EXPECTED = existsSync(EXPECTED_PATH) ? JSON.parse(readFileSync(EXPECTED_PATH, 'utf8')) : null;
+// Opt in explicitly: UPDATE_OUTPUT_BASELINE=1 node --test test/output-baseline.test.mjs
+const UPDATE = process.env.UPDATE_OUTPUT_BASELINE === '1';
+const EXPECTED = UPDATE ? null : JSON.parse(readFileSync(EXPECTED_PATH, 'utf8'));
+const generated = { ci: {} };
+after(() => {
+  if (UPDATE) {
+    assert.equal(Object.keys(generated.ci).length, Object.keys(CI_CASES).length);
+    assert.ok(generated.install, 'installer snapshot was not generated');
+    writeFileSync(EXPECTED_PATH, `${JSON.stringify(generated, null, 2)}\n`);
+  }
+});
 
 function normalize(text, { repo, runDir }) {
   let out = String(text);
@@ -120,7 +130,7 @@ for (const [name, spec] of Object.entries(CI_CASES)) {
     const calls = [];
     const ran = runCiJob({ ...env, ...spec.env }, { cwd: repo.dir, execFile: fakeExec(calls, spec) });
     const snapshot = ciSnapshot(ran, repo, calls);
-    if (!EXPECTED) { console.log(`@@ ${JSON.stringify({ ci: name, snapshot })}`); return; }
+    if (UPDATE) { generated.ci[name] = snapshot; return; }
     assert.deepEqual(snapshot, EXPECTED.ci[name]);
   });
 }
@@ -178,6 +188,6 @@ test('installer output baseline: dry-run, install, repeat, and edited files', as
   const plain = tempDir('tk-install-');
   t.after(() => rmSync(plain, { recursive: true, force: true }));
   out.nonGit = await install(['install'], plain);
-  if (!EXPECTED) { console.log(`@@ ${JSON.stringify({ install: out })}`); return; }
+  if (UPDATE) { generated.install = out; return; }
   assert.deepEqual(out, EXPECTED.install);
 });

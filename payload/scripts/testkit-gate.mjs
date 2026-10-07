@@ -1,11 +1,10 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
 import { isE2eRequired } from './lib/critical.mjs';
 import { parseCoverageArgs, runCoverage } from './lib/coverage-map.mjs';
 import { doctor } from './lib/doctor.mjs';
 import { runEffort } from './lib/effort.mjs';
 import { formatLintReport, lintRepo } from './lib/e2e-lint.mjs';
-import { appendGithubOutput, emit, processIo, resolveRepo } from './lib/entry.mjs';
+import { appendGithubOutput, emit, processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { selectChanges } from './lib/select.mjs';
 
@@ -157,6 +156,6 @@ function commandCheck(repo, selected, args, env, io) {
   return failures ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   process.exit(main(process.argv.slice(2), process.env, processIo));
 }

@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { errorCode } from './lib/files.mjs';
-import { emit, processIo, resolveRepo } from './lib/entry.mjs';
+import { emit, processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { reportInputs } from './lib/flaky.mjs';
 import { buildReport, parseReporterArgs } from './lib/report.mjs';
 import { changeSchema, resolveNamed } from './lib/select.mjs';
@@ -80,6 +79,6 @@ function readReportInputs(repo, change, parsed, io) {
   return { report: { ...inputs, planText, results } };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   process.exit(main(process.argv.slice(2), process.env, processIo));
 }

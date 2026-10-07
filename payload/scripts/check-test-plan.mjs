@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
 import { isE2eRequired, SCHEMA_QE } from './lib/critical.mjs';
 import { evaluateChange } from './lib/evaluate.mjs';
-import { processIo, resolveRepo } from './lib/entry.mjs';
+import { processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { selectChanges } from './lib/select.mjs';
 
 const NOT_A_REPO = Symbol('not a repository');
@@ -50,6 +49,6 @@ export function main(argv = process.argv.slice(2), env = process.env, io = proce
   return failed;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   process.exit(main(process.argv.slice(2), process.env, processIo));
 }

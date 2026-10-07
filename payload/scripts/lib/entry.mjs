@@ -1,5 +1,17 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { toplevel } from './git.mjs';
+
+// Node resolves module URLs to real paths, while argv[1] may still contain symlinks.
+export function isMain(url) {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(fileURLToPath(url)) === realpathSync(process.argv[1]);
+  } catch (err) {
+    if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return false;
+    throw err;
+  }
+}
 
 // Console and exit of an entry point. Callers may pass their own io instead.
 export const processIo = {
