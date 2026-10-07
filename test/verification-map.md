@@ -125,4 +125,4 @@ requirement 6、scenario 18。各 scenario は一度だけ載せる。検証は�
 
 scenario 以外の補助テスト: policy 値の読み取り（`qa_review_required_levels reads lists, ...`）、doctor の初期値表示、plan / final gate の欠落・日付不正、template と schema の instruction、正しい `effort` の受理、template のままの evidence、集計対象の限定、`--since` と引数検査、記録率の低さの表示。
 
-PR #12 の補助回帰テスト（test/qa-review.test.mjs）: risk_level 不正時の seal 拒否、policy キーのハイフン・大文字、effort の空配列と null、既定 schema、同一活動の change 数、config 破損、期間外破損の除外、日付不明フォルダ、evidence 欠落、unknown の理由、JSON の低記録率警告、evidence 検査の I/O エラーと内部例外の区別。
+PR #12 の補助回帰テスト（test/qa-review.test.mjs）: risk_level 不正時の seal 拒否、policy キーのハイフン・大文字、effort の空配列と null、既定 schema、同一活動の change 数、config 破損とエラー内の相対パス、空・コメントのみの config、期間外破損の除外、日付不明フォルダ、evidence 欠落、unknown の理由、JSON の低記録率警告、evidence 検査の I/O エラーと内部例外の区別。

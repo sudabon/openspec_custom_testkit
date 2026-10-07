@@ -693,6 +693,26 @@ test('effort uses the integrated config default and counts repeated activities o
   } finally { repo.cleanup(); }
 });
 
+test('empty and comment-only configs leave the default schema unspecified', () => {
+  const repo = gitRepo();
+  try {
+    archived(repo, '2026-10-01-default', { schema: null, effort: [{ activity: 'seal', minutes: 999, recorded_by: 'x' }] });
+    archived(repo, '2026-10-02-explicit', { effort: [{ activity: 'seal', minutes: 10, recorded_by: 'x' }] });
+    archived(repo, '2026-10-03-legacy', { schema: 'quality-driven' });
+    for (const config of ['', '# only comment\n']) {
+      write(repo, 'openspec/config.yaml', config);
+      const out = effortCli(repo.dir, '--format', 'json');
+      assert.equal(out.status, 0, out.stderr);
+      assert.equal(out.stderr, '');
+      const report = JSON.parse(out.stdout);
+      assert.equal(report.targets, 1);
+      assert.deepEqual(report.recorded.ids, ['explicit']);
+      assert.equal(report.total_minutes, 10);
+      assert.equal(report.broken.count, 0);
+    }
+  } finally { repo.cleanup(); }
+});
+
 test('broken config reports dependent archives without excluding explicit schemas', () => {
   const repo = gitRepo();
   try {
@@ -708,7 +728,7 @@ test('broken config reports dependent archives without excluding explicit schema
       assert.deepEqual(report.unrecorded.ids, ['explicit']);
       assert.equal(report.broken.count, 1);
       assert.equal(report.broken.changes[0].id, 'default');
-      assert.match(report.broken.changes[0].reason, /config.yaml.*既定 schema/);
+      assert.match(report.broken.changes[0].reason, /^openspec\/config\.yaml .*既定 schema/);
       assert.match(out.stderr, /default/);
     }
   } finally { repo.cleanup(); }

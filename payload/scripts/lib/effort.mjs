@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { readConfigDocument } from './environment.mjs';
 import { executionBlock } from './evidence-check.mjs';
@@ -57,11 +57,11 @@ function defaultSchema(repo) {
   const config = readConfigDocument(repo);
   if (config.text == null) return { schema: null };
   const parsed = config.parsed;
-  if (parsed.errors.length || parsed.alias || parsed.tagged || !isRecord(parsed.data)
-      || (parsed.data.schema != null && typeof parsed.data.schema !== 'string')) {
-    return { error: `${config.located.path} を解釈できないため既定 schema を判定できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
+  if (parsed.errors.length || parsed.alias || parsed.tagged || (parsed.data != null && !isRecord(parsed.data))
+      || (parsed.data?.schema != null && typeof parsed.data.schema !== 'string')) {
+    return { error: `${relative(repo, config.located.path)} を解釈できないため既定 schema を判定できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
   }
-  return { schema: asString(parsed.data.schema) || null };
+  return { schema: asString(parsed.data?.schema) || null };
 }
 
 function schemaOf(repo, dir, fallback) {
