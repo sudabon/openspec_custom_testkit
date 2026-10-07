@@ -1,17 +1,12 @@
 #!/usr/bin/env node
-import { PathError, USAGE, UsageError, main } from './lib/cli.mjs';
+import { USAGE, UsageError, exitCodeFor, main } from './lib/cli.mjs';
 
 try {
   process.exitCode = await main();
 } catch (err) {
-  if (err instanceof UsageError) {
-    console.error(`エラー: ${err.message}\n\n${USAGE}`);
-    process.exitCode = 2;
-  } else if (err instanceof PathError || err?.code === 'BROKEN_STAMP' || err?.code === 'PATH') {
-    console.error(`エラー: ${err.message}`);
-    process.exitCode = 1;
-  } else {
-    console.error(`エラー: ${err?.stack ?? err}`);
-    process.exitCode = 1;
-  }
+  const code = exitCodeFor(err);
+  // Known errors print their message; anything else prints the stack for a bug report.
+  const detail = code == null ? (err?.stack ?? err) : err.message;
+  console.error(`エラー: ${detail}${err instanceof UsageError ? `\n\n${USAGE}` : ''}`);
+  process.exitCode = code ?? 1;
 }

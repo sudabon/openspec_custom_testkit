@@ -19,6 +19,7 @@ jobs:
           node-version: ${{ matrix.node }}
       - run: npm ci
       - run: npm run lint
+      - run: node scripts/build-manifest.mjs --check
       - name: Install OpenSpec CLI
         run: npm install -g @fission-ai/openspec@1.13.1
       - run: npm test

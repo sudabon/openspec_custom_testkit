@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { main, normalizeE2eRoot } from '../lib/cli.mjs';
@@ -14,12 +14,7 @@ import { plannedIds, buildReport } from '../payload/scripts/lib/report.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { capture, gitRepo } from './support.mjs';
-
-function write(repo, path, text) {
-  mkdirSync(join(repo.dir, path, '..'), { recursive: true });
-  writeFileSync(join(repo.dir, path), text);
-}
+import { capture, gitRepo, runGate, writeIn } from './support.mjs';
 
 const script = rel => fileURLToPath(new URL(`../payload/scripts/${rel}`, import.meta.url));
 
@@ -40,13 +35,13 @@ test('installer refuses the repository root as the E2E root', async () => {
 test('gates re-validate the E2E root read back from current and legacy stamps', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/a.spec.ts', 'test("@demo @TP-001", () => {});');
-    write(repo, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: './tests/e2e/' }));
+    writeIn(repo.dir, 'tests/e2e/a.spec.ts', 'test("@demo @TP-001", () => {});');
+    writeIn(repo.dir, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: './tests/e2e/' }));
     assert.equal(installedE2eRoot(repo.dir), 'tests/e2e');
     assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']), []);
     for (const [file, e2eRoot] of [['.openspec-custom-testkit.json', '../../elsewhere'], ['.openspec-custom-testkit.json', '.'], ['.openspec-e2e-kit.json', '/etc']]) {
       rmSync(join(repo.dir, '.openspec-custom-testkit.json'), { force: true });
-      write(repo, file, JSON.stringify({ e2eRoot }));
+      writeIn(repo.dir, file, JSON.stringify({ e2eRoot }));
       assert.throws(() => installedE2eRoot(repo.dir), error => error.code === 'BROKEN_STAMP' && error.message.includes(file));
       assert.match(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']).join('\n'), /e2eRoot が不正です/);
     }
@@ -57,7 +52,7 @@ test('an invalid recorded E2E root blocks doctor and install until --e2e-root re
   const repo = gitRepo();
   const legacyOnly = gitRepo();
   try {
-    write(repo, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: '.' }));
+    writeIn(repo.dir, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: '.' }));
     assert.match(doctor(repo.dir).failures.join('\n'), /\.openspec-custom-testkit\.json の e2eRoot が不正です/);
     const blocked = await capture(main, ['install', '--dry-run', '--target', repo.dir]);
     assert.equal(blocked.code, 1, blocked.text);
@@ -67,7 +62,7 @@ test('an invalid recorded E2E root blocks doctor and install until --e2e-root re
     assert.match(repaired.text, /不正なため使いません/);
     assert.equal(installedE2eRoot(repo.dir), 'tests/e2e');
 
-    write(legacyOnly, '.openspec-e2e-kit.json', JSON.stringify({ version: '0.2.0', e2eRoot: '/abs/e2e' }));
+    writeIn(legacyOnly.dir, '.openspec-e2e-kit.json', JSON.stringify({ version: '0.2.0', e2eRoot: '/abs/e2e' }));
     assert.equal((await capture(main, ['install', '--dry-run', '--target', legacyOnly.dir])).code, 1);
     const legacy = await capture(main, ['install', '--dry-run', '--target', legacyOnly.dir, '--e2e-root', 'e2e']);
     assert.equal(legacy.code, 0, legacy.text);
@@ -81,9 +76,9 @@ test('an invalid recorded E2E root blocks doctor and install until --e2e-root re
 test('testkit-gate rejects --base and --phase without a value instead of scanning every change', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/unrelated/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/unrelated/.openspec.yaml', 'schema: quality-driven-e2e\n');
     for (const args of [['check', '--phase', 'final', '--base'], ['check', '--base', ''], ['check', '--phase'], ['select', '--base']]) {
-      const result = spawnSync(process.execPath, [script('testkit-gate.mjs'), ...args], { cwd: repo.dir, encoding: 'utf8' });
+      const result = runGate(repo.dir, args);
       assert.equal(result.status, 2, args.join(' '));
       assert.match(result.stderr, /--(base|phase) には/);
       assert.doesNotMatch(result.stdout, /unrelated/);
@@ -117,8 +112,8 @@ test('CI keeps large passing output and reports an output overflow as undecidabl
 test('quality: false skips archived legacy QE evidence, and quality: true checks it once', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-09-22-legacy/quality.md', '| R1 | low |\n');
-    write(repo, 'openspec/changes/archive/2026-09-22-legacy/evidence.md', 'R1\n');
+    writeIn(repo.dir, 'openspec/changes/archive/2026-09-22-legacy/quality.md', '| R1 | low |\n');
+    writeIn(repo.dir, 'openspec/changes/archive/2026-09-22-legacy/evidence.md', 'R1\n');
     const legacy = {
       id: 'legacy', path: 'openspec/changes/archive/2026-09-22-legacy', schema: 'quality-driven', scope: 'legacy-qe',
       lifecycle: 'archived', qe: true, e2e: 'not-applicable', errors: [], tasksText: '- [ ] 1.1 open\n',
@@ -135,8 +130,8 @@ test('quality: false skips archived legacy QE evidence, and quality: true checks
 test('integrated seal is enforced for unnumbered and CRLF implementation tasks; legacy keeps the numbered rule', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/oracle/demo/oracle.test.mjs', 'test\n');
-    write(repo, 'openspec/changes/demo/quality.md', '---\nrisk_level: low\napproved_by: "FIXTURE-DUMMY-APPROVAL"\napproved_at: "2026-09-22"\noracle_paths: ["tests/oracle/demo"]\noracle_digest: ""\n---\n## Risk Register\n| ID | Level |\n|----|-------|\n| R1 | low |\n');
+    writeIn(repo.dir, 'tests/oracle/demo/oracle.test.mjs', 'test\n');
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', '---\nrisk_level: low\napproved_by: "FIXTURE-DUMMY-APPROVAL"\napproved_at: "2026-09-22"\noracle_paths: ["tests/oracle/demo"]\noracle_digest: ""\n---\n## Risk Register\n| ID | Level |\n|----|-------|\n| R1 | low |\n');
     const failures = (tasksText, schema = 'quality-driven-e2e') => evaluateChange(repo.dir, {
       id: 'demo', path: 'openspec/changes/demo', schema, scope: schema === 'quality-driven' ? 'legacy-qe' : 'integrated',
       lifecycle: 'active', qe: true, e2e: 'not-applicable', errors: [], tasksText,
@@ -160,15 +155,15 @@ test('integrated seal is enforced for unnumbered and CRLF implementation tasks; 
 test('legacy digest ignores oracle_paths overlap and still accepts seals written by upstream qe-gate.sh', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/oracle/a.test.mjs', 'a');
-    write(repo, 'tests/oracle/core/b.test.mjs', 'b');
+    writeIn(repo.dir, 'tests/oracle/a.test.mjs', 'a');
+    writeIn(repo.dir, 'tests/oracle/core/b.test.mjs', 'b');
     const merged = legacyDigest(repo.dir, ['tests/oracle']);
     const overlapping = legacyDigest(repo.dir, ['tests/oracle/core', 'tests/oracle']);
     assert.equal(overlapping.digest, merged.digest);
     assert.deepEqual(overlapping.files, merged.files);
     assert.equal(merged.compatDigest, undefined);
     const quality = recorded => `---\nrisk_level: medium\napproved_by: "FIXTURE-DUMMY-APPROVAL"\noracle_paths: ["tests/oracle", "tests/oracle/core"]\noracle_digest: "${recorded}"\n---\n## Risk Register\n| ID | Level |\n|----|-------|\n| R1 | medium |\n`;
-    write(repo, 'openspec/changes/legacy/quality.md', quality(''));
+    writeIn(repo.dir, 'openspec/changes/legacy/quality.md', quality(''));
     const upstreamGate = fileURLToPath(new URL('../upstream/baselines/qe/payload/scripts/qe-gate.sh', import.meta.url));
     const upstream = execFileSync('bash', [upstreamGate, 'digest', 'legacy'], { cwd: repo.dir, encoding: 'utf8' }).trim();
     assert.equal(overlapping.compatDigest, upstream);
@@ -178,10 +173,10 @@ test('legacy digest ignores oracle_paths overlap and still accepts seals written
       lifecycle: 'active', qe: true, e2e: 'not-applicable', errors: [], tasksText: '- [x] 2.1 impl\n- [ ] 3.1 evidence\n',
     };
     for (const recorded of [upstream, merged.digest]) {
-      write(repo, 'openspec/changes/legacy/quality.md', quality(recorded));
+      writeIn(repo.dir, 'openspec/changes/legacy/quality.md', quality(recorded));
       assert.deepEqual(evaluateChange(repo.dir, legacy, { phase: 'plan', env: {} }).failures, []);
     }
-    write(repo, 'openspec/changes/legacy/quality.md', quality('sha256:deadbeef'));
+    writeIn(repo.dir, 'openspec/changes/legacy/quality.md', quality('sha256:deadbeef'));
     assert.match(evaluateChange(repo.dir, legacy, { phase: 'plan', env: {} }).failures.join('\n'), /再 seal/);
   } finally { repo.cleanup(); }
 });
@@ -189,8 +184,8 @@ test('legacy digest ignores oracle_paths overlap and still accepts seals written
 test('reporter resolves plans from the repository root, including archives, and rejects path-like ids', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/archive/2026-09-22-shop/test-plan.md', '---\ne2e: required\n---\n## E2E観点一覧\n| TP-ID |\n|-------|\n| TP-001 |\n');
-    write(repo, 'app/results.json', JSON.stringify({
+    writeIn(repo.dir, 'openspec/changes/archive/2026-09-22-shop/test-plan.md', '---\ne2e: required\n---\n## E2E観点一覧\n| TP-ID |\n|-------|\n| TP-001 |\n');
+    writeIn(repo.dir, 'app/results.json', JSON.stringify({
       stats: { startTime: new Date().toISOString() },
       suites: [{ specs: [{ title: 'buy', tags: ['@shop', '@TP-001'], tests: [{ status: 'expected', results: [{ status: 'passed' }] }] }] }],
     }));
@@ -209,7 +204,7 @@ test('qe-gate seal and digest reject path-like change names before touching file
   const repo = gitRepo();
   try {
     const quality = '---\napproved_by: "FIXTURE-DUMMY-APPROVAL"\noracle_paths: ["outside"]\noracle_digest: ""\n---\n';
-    write(repo, 'outside/quality.md', quality);
+    writeIn(repo.dir, 'outside/quality.md', quality);
     for (const command of ['seal', 'digest']) {
       const result = spawnSync(process.execPath, [script('qe-gate.mjs'), command, '../../outside'], { cwd: repo.dir, encoding: 'utf8' });
       assert.equal(result.status, 2, command);
@@ -225,7 +220,7 @@ test('reporter and gate read TP-IDs from the same table column', () => {
     const change = { id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', scope: 'integrated', e2e: 'required', skipSpecs: true };
     const plan = '---\ne2e: required\n---\n## E2E観点一覧\n| ID | Requirement |\n|----|-------------|\n| TP-001 | demo |\n';
     for (const [text, expected] of [[plan, []], [plan.replace('| ID |', '| TP-ID |'), ['TP-001']]]) {
-      write(repo, 'openspec/changes/demo/test-plan.md', text);
+      writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', text);
       assert.deepEqual(plannedIds(text).ids, expected);
       assert.deepEqual(tpRows(text).map(row => row['TP-ID']), expected);
       assert.deepEqual(checkTestPlan(repo.dir, change).requiredTags, expected);
@@ -240,10 +235,10 @@ test('reporter and gate read TP-IDs from the same table column', () => {
 test('tag presence reads only test sources once per gate run', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/README.md', '@demo @TP-001');
-    write(repo, 'tests/e2e/trace.zip', Buffer.from([0, 0xff, 0xfe, 0x40]));
+    writeIn(repo.dir, 'tests/e2e/README.md', '@demo @TP-001');
+    writeIn(repo.dir, 'tests/e2e/trace.zip', Buffer.from([0, 0xff, 0xfe, 0x40]));
     assert.match(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']).join('\n'), /@demo が tests\/e2e にありません/);
-    write(repo, 'tests/e2e/demo.spec.ts', 'test("x", { tag: ["@demo", "@TP-001"] }, () => {});');
+    writeIn(repo.dir, 'tests/e2e/demo.spec.ts', 'test("x", { tag: ["@demo", "@TP-001"] }, () => {});');
     const cache = {};
     assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001'], cache), []);
     const corpus = cache.tagCorpus;
@@ -276,8 +271,8 @@ test('report freshness rejects invalid numeric limits at the library boundary', 
 test('manifest digest describes a file set independent of order and overlap', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'oracle/a', 'a');
-    write(repo, 'oracle/b', 'b');
+    writeIn(repo.dir, 'oracle/a', 'a');
+    writeIn(repo.dir, 'oracle/b', 'b');
     const canonical = manifestDigest(repo.dir, ['oracle']);
     assert.deepEqual(manifestDigest(repo.dir, ['oracle/b', 'oracle/a']), canonical);
     assert.deepEqual(manifestDigest(repo.dir, ['oracle', 'oracle/a']), canonical);
@@ -294,7 +289,7 @@ test('dangling links produce actionable gate failures in Oracle, specs and E2E t
     assert.match(digest.path, /dangling/);
     const errors = checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']);
     assert.match(errors.join('\n'), /dangling/);
-    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
     mkdirSync(join(repo.dir, 'openspec/changes/demo/specs'), { recursive: true });
     symlinkSync('missing', join(repo.dir, 'openspec/changes/demo/specs/dangling'));
     const plan = checkTestPlan(repo.dir, { id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', e2e: 'required' });
@@ -316,7 +311,7 @@ test('missing test-plan is reported once per change', () => {
 test('CI validates selection and max age before dependency setup', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'package-lock.json', '{}');
+    writeIn(repo.dir, 'package-lock.json', '{}');
     for (const env of [{ BASE_REF: 'missing' }, { BASE_REF: 'HEAD', REPORT_MAX_AGE: '5m' }, { BASE_REF: 'HEAD', REPORT_MAX_AGE: '-1' }]) {
       const calls = [];
       const result = runCiJob({ ...env, SETUP_MODE: 'npm', E2E_COMMAND: 'e2e' }, { cwd: repo.dir, execFile: (...args) => { calls.push(args); return ''; } });
@@ -330,9 +325,9 @@ test('CI finalization of one change leaves fresh proposals in plan phase', () =>
   const repo = gitRepo();
   try {
     const base = repo.git(['rev-parse', 'HEAD']).trim();
-    write(repo, 'openspec/changes/archive/2026-09-22-done/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/fresh/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/fresh/proposal.md', '# Proposal');
+    writeIn(repo.dir, 'openspec/changes/archive/2026-09-22-done/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/fresh/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/fresh/proposal.md', '# Proposal');
     repo.commit();
     const result = runCiJob({ BASE_REF: base, SETUP_MODE: 'caller', GATE_PHASE: 'plan' }, { cwd: repo.dir });
     assert.ok(result.lines.includes('▶ fresh (active/plan)'), result.lines.join('\n'));
@@ -373,14 +368,14 @@ test('seal replaces only the scalar with mixed and CR-only line endings', () => 
 test('linked directories retain E2E tags, scenarios and Oracle contents without recursion loops', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'shared/a.spec.ts', 'test("@demo @TP-001", () => {});');
-    write(repo, 'shared/spec.md', '#### Scenario: linked scenario\n');
+    writeIn(repo.dir, 'shared/a.spec.ts', 'test("@demo @TP-001", () => {});');
+    writeIn(repo.dir, 'shared/spec.md', '#### Scenario: linked scenario\n');
     mkdirSync(join(repo.dir, 'tests/e2e'), { recursive: true });
     symlinkSync('../../shared', join(repo.dir, 'tests/e2e/linked'));
     symlinkSync('.', join(repo.dir, 'shared/cycle'));
     assert.deepEqual(checkTagPresence(repo.dir, { id: 'demo' }, ['TP-001']), []);
     assert.deepEqual(manifestDigest(repo.dir, ['tests/e2e']).files, ['tests/e2e/linked/a.spec.ts', 'tests/e2e/linked/spec.md']);
-    write(repo, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '---\ne2e: required\n---\n');
     symlinkSync('../../../shared', join(repo.dir, 'openspec/changes/demo/specs'));
     const plan = checkTestPlan(repo.dir, { id: 'demo', path: 'openspec/changes/demo', schema: 'quality-driven-e2e', e2e: 'required' });
     assert.ok(plan.errors.some(line => line.includes('シナリオ未割当: linked scenario')));
@@ -390,8 +385,8 @@ test('linked directories retain E2E tags, scenarios and Oracle contents without 
 test('unreadable Oracle files and directories report their exact path and error code', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'oracle/first', 'ok');
-    write(repo, 'oracle/locked/file', 'secret');
+    writeIn(repo.dir, 'oracle/first', 'ok');
+    writeIn(repo.dir, 'oracle/locked/file', 'secret');
     for (const path of ['oracle/locked', 'oracle/locked/file']) {
       chmodSync(join(repo.dir, path), 0);
       try {
@@ -412,7 +407,7 @@ test('unreadable Oracle files and directories report their exact path and error 
 test('blank risk levels are invalid instead of being dropped from the maximum', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', `---
 risk_level: low
 approved_by: "FIXTURE-DUMMY-APPROVAL"
 approved_at: "2026-09-22"
@@ -437,8 +432,8 @@ oracle_digest: ""
 test('QE_SCHEMA sends a custom schema through the legacy quality checks', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/custom/.openspec.yaml', 'schema: custom-qe\n');
-    write(repo, 'openspec/changes/custom/tasks.md', '- [x] 1.1 done\n');
+    writeIn(repo.dir, 'openspec/changes/custom/.openspec.yaml', 'schema: custom-qe\n');
+    writeIn(repo.dir, 'openspec/changes/custom/tasks.md', '- [x] 1.1 done\n');
     const selected = selectChanges({ repo: repo.dir, names: ['custom'], env: { QE_SCHEMA: 'custom-qe' } });
     assert.equal(selected.changes[0].qe, true);
     assert.equal(selected.changes[0].scope, 'out-of-scope');

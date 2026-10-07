@@ -1,5 +1,15 @@
 import { parseDocument, visit } from './vendor/yaml.mjs';
 
+// A YAML node carrying a tag outside the core schema (for example `!secret`).
+export function isCustomTag(node) {
+  return Boolean(node?.tag) && !String(node.tag).startsWith('tag:yaml.org,2002:');
+}
+
+// A parsed value that is a mapping (object), not null, a scalar or a sequence.
+export function isPlainMapping(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function parseYamlText(text) {
   let doc;
   try {
@@ -15,14 +25,8 @@ export function parseYamlText(text) {
       Alias() {
         alias = true;
       },
-      Scalar(_key, node) {
-        if (node?.tag && !String(node.tag).startsWith('tag:yaml.org,2002:')) tagged = true;
-      },
-      Map(_key, node) {
-        if (node?.tag && !String(node.tag).startsWith('tag:yaml.org,2002:')) tagged = true;
-      },
-      Seq(_key, node) {
-        if (node?.tag && !String(node.tag).startsWith('tag:yaml.org,2002:')) tagged = true;
+      Value(_key, node) {
+        if (isCustomTag(node)) tagged = true;
       },
     });
   } catch {
@@ -99,4 +103,9 @@ export function validDate(value) {
   const [year, month, day] = value.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+// YYYY-MM-DD of a timestamp in UTC.
+export function utcDate(now) {
+  return new Date(now).toISOString().slice(0, 10);
 }

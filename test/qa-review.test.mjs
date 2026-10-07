@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
@@ -10,42 +10,19 @@ import { checkEvidence } from '../payload/scripts/lib/evidence-check.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { splitFrontmatter } from '../payload/scripts/lib/frontmatter.mjs';
 import { sha256File } from '../payload/scripts/lib/hash.mjs';
+import { qaReviewNeeded, sealBlockers } from '../payload/scripts/lib/seal.mjs';
 // Namespace import: a missing export fails only the tests that use it, not the whole file.
 import * as policy from '../payload/scripts/lib/policy.mjs';
-import { gitRepo } from './support.mjs';
+import { changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
 const QE_GATE = fileURLToPath(new URL('payload/scripts/qe-gate.mjs', root));
-const TESTKIT_GATE = fileURLToPath(new URL('payload/scripts/testkit-gate.mjs', root));
 const payload = rel => readFileSync(new URL(`payload/${rel}`, root), 'utf8');
 const POLICY_BASE = 'mutation_threshold_high: 70\n| Oracle の seal | 必須 | 必須 | 必須 |\n| Falsification レビュー | 必須 | 必須 | 必須 |\n';
 const STARTED = '- [x] 1.1 oracle\n- [x] 2.1 implement\n- [ ] 3.1 falsify\n';
 const DONE = '- [x] 1.1 a\n- [x] 2.1 b\n- [x] 3.1 c\n- [x] 4.1 d\n- [x] 5.1 e\n';
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'demo',
-    path: 'openspec/changes/demo',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'not-applicable',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    fallback: false,
-    skipSpecs: true,
-    pendingPlan: false,
-    tasksText: null,
-    ...over,
-  };
-}
+const change = (over = {}) => changeFixture({ e2e: 'not-applicable', skipSpecs: true, ...over });
 
 function quality(level, { approved = true, digest = '', qa = null } = {}) {
   const qaLines = qa ? `qa_reviewed_by: "${qa.by ?? ''}"\nqa_reviewed_at: "${qa.at ?? ''}"\n` : '';
@@ -79,10 +56,10 @@ oracle_digest: "${digest}"
 
 function setup({ policy = POLICY_BASE, schema = 'quality-driven-e2e' } = {}) {
   const repo = gitRepo();
-  write(repo, 'openspec/config.yaml', 'schema: spec-driven\n');
-  write(repo, 'openspec/quality-policy.md', policy);
-  write(repo, 'tests/oracle/demo/oracle.test.mjs', 'oracle\n');
-  write(repo, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\n`);
+  writeIn(repo.dir, 'openspec/config.yaml', 'schema: spec-driven\n');
+  writeIn(repo.dir, 'openspec/quality-policy.md', policy);
+  writeIn(repo.dir, 'tests/oracle/demo/oracle.test.mjs', 'oracle\n');
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\n`);
   const digest = digestForSchema(repo.dir, schema, ['tests/oracle/demo']).digest;
   return { repo, digest };
 }
@@ -128,7 +105,7 @@ test('qa_review_required_levels reads lists, defaults when missing and rejects i
 test('QA setting cannot weaken integrated approval and seal gates', () => {
   const { repo } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: []\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { approved: false }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { approved: false }));
     const result = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.ok(result.failures.some(line => line.includes('未承認')), JSON.stringify(result.failures));
     assert.ok(result.failures.some(line => line.includes('seal')), JSON.stringify(result.failures));
@@ -141,12 +118,12 @@ test('QA setting cannot weaken integrated approval and seal gates', () => {
 test('invalid QA level setting fails doctor, gate and seal instead of meaning not required', () => {
   const { repo, digest } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: [critical]\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { digest, qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { digest, qa: {} }));
     const result = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.ok(result.failures.some(line => line.includes('qa_review_required_levels')), JSON.stringify(result.failures));
     const checked = doctor(repo.dir);
     assert.ok(checked.failures.some(line => line.includes('qa_review_required_levels が不正です')), JSON.stringify(checked.failures));
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { qa: {} }));
     const sealed = seal(repo.dir);
     assert.equal(sealed.status, 1, sealed.stdout + sealed.stderr);
     assert.match(sealed.stderr, /qa_review_required_levels/);
@@ -172,19 +149,19 @@ test('doctor shows that the default QA levels apply when the policy has no setti
 test('seal is blocked without the required QA review', () => {
   const { repo } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: [medium]\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { qa: {} }));
     const sealed = seal(repo.dir);
     assert.equal(sealed.status, 1, sealed.stdout + sealed.stderr);
     assert.match(sealed.stderr, /QA レビュー/);
     assert.match(sealed.stderr, /medium/);
     assert.equal(splitFrontmatter(readFileSync(join(repo.dir, 'openspec/changes/demo/quality.md'), 'utf8')).data.oracle_digest, '');
 
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-02-30' } }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-02-30' } }));
     const badDate = seal(repo.dir);
     assert.equal(badDate.status, 1, badDate.stdout + badDate.stderr);
     assert.match(badDate.stderr, /QA レビュー/);
 
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-10-01' } }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-10-01' } }));
     const ok = seal(repo.dir);
     assert.equal(ok.status, 0, ok.stdout + ok.stderr);
     assert.match(splitFrontmatter(readFileSync(join(repo.dir, 'openspec/changes/demo/quality.md'), 'utf8')).data.oracle_digest, /^manifest-sha256:/);
@@ -196,22 +173,22 @@ test('seal is blocked without the required QA review', () => {
 test('plan and final gates fail on a missing or invalid required QA review', () => {
   const { repo, digest } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: [medium, high]\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest }));
     const started = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.equal(qaFailures(started).length, 1, JSON.stringify(started.failures));
     assert.match(qaFailures(started)[0], /medium/);
     const final = evaluateChange(repo.dir, change({ tasksText: DONE }), { phase: 'final', plan: false });
     assert.equal(qaFailures(final).length, 1, JSON.stringify(final.failures));
 
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { by: 'FIXTURE-DUMMY-QA', at: '2026/10/01' } }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { by: 'FIXTURE-DUMMY-QA', at: '2026/10/01' } }));
     const planning = evaluateChange(repo.dir, change(), { phase: 'plan', plan: false });
     assert.equal(qaFailures(planning).length, 1, JSON.stringify(planning.failures));
 
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { at: '2026-10-01' } }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { at: '2026-10-01' } }));
     const noReviewer = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.equal(qaFailures(noReviewer).length, 1, JSON.stringify(noReviewer.failures));
 
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-10-01' } }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: { by: 'FIXTURE-DUMMY-QA', at: '2026-10-01' } }));
     const reviewed = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.deepEqual(qaFailures(reviewed), []);
     assert.ok(reviewed.oks.some(line => line.includes('QA レビュー済み')), JSON.stringify(reviewed.oks));
@@ -223,7 +200,7 @@ test('plan and final gates fail on a missing or invalid required QA review', () 
 test('a missing QA review before implementation is a warning, like a missing approval', () => {
   const { repo } = setup();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('high', { approved: false }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('high', { approved: false }));
     const result = evaluateChange(repo.dir, change(), { phase: 'plan', plan: false });
     assert.deepEqual(qaFailures(result), []);
     assert.ok(result.warnings.some(line => line.includes('QA レビュー')), JSON.stringify(result.warnings));
@@ -235,15 +212,15 @@ test('a missing QA review before implementation is a warning, like a missing app
 test('QA review is not required for a level outside the policy', () => {
   const { repo, digest } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: [high]\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { digest, qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { digest, qa: {} }));
     const result = evaluateChange(repo.dir, change({ tasksText: DONE }), { phase: 'plan', plan: false });
     assert.deepEqual(qaFailures(result), []);
     assert.deepEqual(result.warnings.filter(line => line.includes('QA レビュー')), []);
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { qa: {} }));
     const sealed = seal(repo.dir);
     assert.equal(sealed.status, 0, sealed.stdout + sealed.stderr);
     // Other human gates are still checked.
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', { approved: false, digest, qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', { approved: false, digest, qa: {} }));
     const unapproved = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.ok(unapproved.failures.some(line => line.includes('未承認')), JSON.stringify(unapproved.failures));
   } finally {
@@ -254,10 +231,10 @@ test('QA review is not required for a level outside the policy', () => {
 test('adding empty QA fields keeps an existing seal valid', () => {
   const { repo, digest } = setup({ policy: `${POLICY_BASE}qa_review_required_levels: []\n` });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest }));
     const before = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.ok(before.oks.includes('Oracle は seal 時から変更されていません'), JSON.stringify(before));
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: {} }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium', { digest, qa: {} }));
     assert.equal(digestForSchema(repo.dir, 'quality-driven-e2e', ['tests/oracle/demo']).digest, digest);
     const after = evaluateChange(repo.dir, change({ tasksText: STARTED }), { phase: 'plan', plan: false });
     assert.ok(after.oks.includes('Oracle は seal 時から変更されていません'), JSON.stringify(after));
@@ -270,15 +247,15 @@ test('adding empty QA fields keeps an existing seal valid', () => {
 test('legacy schemas are not asked for the QA review', () => {
   const { repo, digest } = setup({ schema: 'quality-driven' });
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('high', { digest }));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('high', { digest }));
     const legacy = evaluateChange(repo.dir, change({ schema: 'quality-driven', scope: 'legacy-qe', tasksText: DONE }), { phase: 'plan', plan: false });
     assert.deepEqual(qaFailures(legacy), []);
     assert.deepEqual(legacy.warnings.filter(line => line.includes('QA レビュー')), []);
-    write(repo, 'openspec/changes/demo/quality.md', quality('high'));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('high'));
     const sealed = seal(repo.dir);
     assert.equal(sealed.status, 0, sealed.stdout + sealed.stderr);
 
-    write(repo, 'openspec/changes/e2e/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/e2e/.openspec.yaml', 'schema: spec-driven-e2e\n');
     const e2e = evaluateChange(repo.dir, change({ id: 'e2e', path: 'openspec/changes/e2e', schema: 'spec-driven-e2e', scope: 'legacy-e2e', qe: false, e2e: 'required', tasksText: DONE }), { phase: 'plan', plan: false });
     assert.deepEqual(qaFailures(e2e), []);
   } finally {
@@ -339,10 +316,10 @@ test('QA findings are returned as proposals and approval fields are re-entered b
 
 function evidenceSetup({ effort } = {}) {
   const repo = gitRepo();
-  write(repo, 'tests/oracle/demo/oracle.txt', 'oracle\n');
-  write(repo, 'test-results/run.json', '{}\n');
+  writeIn(repo.dir, 'tests/oracle/demo/oracle.txt', 'oracle\n');
+  writeIn(repo.dir, 'test-results/run.json', '{}\n');
   const revision = repo.git(['rev-parse', 'HEAD']).trim();
-  write(repo, 'openspec/changes/demo/quality.md', quality('low'));
+  writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low'));
   const data = {
     format_version: 1,
     runs: [{ id: 'run-1', command: 'node --test', started_at: '2026-10-01T00:00:00.000Z', revision, exit_code: 0, source: 'test-results/run.json', source_sha256: sha256File(join(repo.dir, 'test-results/run.json')) }],
@@ -354,7 +331,7 @@ function evidenceSetup({ effort } = {}) {
     residuals: [],
     ...(effort === undefined ? {} : { effort }),
   };
-  write(repo, 'openspec/changes/demo/evidence.md', `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`);
+  writeIn(repo.dir, 'openspec/changes/demo/evidence.md', `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(data)}\n\`\`\`\n`);
   return repo;
 }
 
@@ -416,8 +393,8 @@ test('the untouched evidence template is still unexecuted and documents effort',
   assert.match(template, /推測で埋めない/);
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low'));
-    write(repo, 'openspec/changes/demo/evidence.md', template);
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low'));
+    writeIn(repo.dir, 'openspec/changes/demo/evidence.md', template);
     const { errors } = checkEvidence(repo.dir, change(), { digest: '', policyText: POLICY_BASE });
     assert.ok(errors.some(line => line.includes('R1 の結果が未実行')), JSON.stringify(errors));
     assert.equal(errors.some(line => line.includes('effort')), false, JSON.stringify(errors));
@@ -430,16 +407,16 @@ test('the untouched evidence template is still unexecuted and documents effort',
 
 function archived(repo, folder, { schema = 'quality-driven-e2e', level = 'medium', effort, records = true, raw = null } = {}) {
   const dir = `openspec/changes/archive/${folder}`;
-  if (schema) write(repo, `${dir}/.openspec.yaml`, `schema: ${schema}\n`);
-  write(repo, `${dir}/quality.md`, quality(level));
+  if (schema) writeIn(repo.dir, `${dir}/.openspec.yaml`, `schema: ${schema}\n`);
+  writeIn(repo.dir, `${dir}/quality.md`, quality(level));
   const data = { format_version: 1, runs: [], risk_results: [], ...(effort === undefined ? {} : { effort }) };
   const block = raw ?? JSON.stringify(data, null, 2);
-  write(repo, `${dir}/evidence.md`, records ? `# Evidence\n## Execution Records\n\`\`\`json\n${block}\n\`\`\`\n` : '# Evidence\n');
+  writeIn(repo.dir, `${dir}/evidence.md`, records ? `# Evidence\n## Execution Records\n\`\`\`json\n${block}\n\`\`\`\n` : '# Evidence\n');
 }
 
 function effortRepo() {
   const repo = gitRepo();
-  write(repo, 'openspec/config.yaml', 'schema: spec-driven\n');
+  writeIn(repo.dir, 'openspec/config.yaml', 'schema: spec-driven\n');
   archived(repo, '2026-08-01-add-cart', { level: 'medium', effort: [
     { activity: 'qa-review', minutes: 30, recorded_by: 'qa' },
     { activity: 'code-review', minutes: 20, recorded_by: 'dev' },
@@ -453,7 +430,7 @@ function effortRepo() {
   return repo;
 }
 
-const effortCli = (cwd, ...args) => spawnSync(process.execPath, [TESTKIT_GATE, 'effort', ...args], { cwd, encoding: 'utf8' });
+const effortCli = (cwd, ...args) => runGate(cwd, ['effort', ...args]);
 
 test('unrecorded changes are counted apart and never averaged as zero', () => {
   const repo = effortRepo();
@@ -525,8 +502,8 @@ test('only archived changes of the integrated schema are aggregated', () => {
     archived(repo, '2026-09-10-legacy-qe', { schema: 'quality-driven', effort: [{ activity: 'seal', minutes: 999, recorded_by: 'x' }] });
     archived(repo, '2026-09-11-legacy-e2e', { schema: 'spec-driven-e2e', raw: 'broken' });
     archived(repo, '2026-09-12-no-metadata', { schema: null, effort: [{ activity: 'seal', minutes: 999, recorded_by: 'x' }] });
-    write(repo, 'openspec/changes/active-one/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/active-one/evidence.md', '# Evidence\n## Execution Records\n```json\n{"format_version":1,"effort":[{"activity":"seal","minutes":999,"recorded_by":"x"}]}\n```\n');
+    writeIn(repo.dir, 'openspec/changes/active-one/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/active-one/evidence.md', '# Evidence\n## Execution Records\n```json\n{"format_version":1,"effort":[{"activity":"seal","minutes":999,"recorded_by":"x"}]}\n```\n');
     const out = effortCli(repo.dir, '--format', 'json');
     assert.equal(out.status, 0, out.stdout + out.stderr);
     const report = JSON.parse(out.stdout);
@@ -560,7 +537,7 @@ test('--since filters by archive date and arguments are validated', () => {
 test('a low recording rate is called out in the output', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/config.yaml', 'schema: spec-driven\n');
+    writeIn(repo.dir, 'openspec/config.yaml', 'schema: spec-driven\n');
     archived(repo, '2026-09-01-one', { effort: [{ activity: 'seal', minutes: 5, recorded_by: 'x' }] });
     archived(repo, '2026-09-02-two', {});
     archived(repo, '2026-09-03-three', {});
@@ -569,7 +546,7 @@ test('a low recording rate is called out in the output', () => {
     assert.match(table.stdout, /記録率が低い/);
     const empty = gitRepo();
     try {
-      write(empty, 'openspec/config.yaml', 'schema: spec-driven\n');
+      writeIn(empty.dir, 'openspec/config.yaml', 'schema: spec-driven\n');
       const none = effortCli(empty.dir, '--format', 'json');
       assert.equal(none.status, 0, none.stderr);
       const report = JSON.parse(none.stdout);
@@ -601,7 +578,7 @@ test('CODEOWNERS example assigns QA owners and states the identity limit', () =>
 test('approved plans require QA even before the first completed task, including scope-only integration', () => {
   const { repo } = setup();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('medium'));
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('medium'));
     for (const schema of ['quality-driven-e2e', 'custom-schema']) {
       const result = evaluateChange(repo.dir, change({ schema, qe: false }), { phase: 'plan', plan: false });
       assert.equal(qaFailures(result).length, 1, JSON.stringify(result));
@@ -615,7 +592,7 @@ test('gate and seal require the QA date to precede or equal approval', () => {
   try {
     for (const at of ['2026-09-30', '2026-10-01', '2026-10-02']) {
       const text = quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at } });
-      write(repo, 'openspec/changes/demo/quality.md', text);
+      writeIn(repo.dir, 'openspec/changes/demo/quality.md', text);
       for (const phase of ['plan', 'final']) {
         const result = evaluateChange(repo.dir, change(), { phase, plan: false });
         assert.equal(qaFailures(result).length, at === '2026-10-02' ? 1 : 0, JSON.stringify(result));
@@ -636,7 +613,7 @@ test('seal does not bypass required QA when risk_level is invalid', () => {
   try {
     for (const level of ['', 'critical']) {
       const text = quality(level);
-      write(repo, 'openspec/changes/demo/quality.md', text);
+      writeIn(repo.dir, 'openspec/changes/demo/quality.md', text);
       const out = seal(repo.dir);
       assert.equal(out.status, 1, out.stdout + out.stderr);
       assert.match(out.stderr, /QA レビュー/);
@@ -679,7 +656,7 @@ test('empty effort arrays pass evidence checks and count as unrecorded, while nu
 test('effort uses the integrated config default and counts repeated activities once per change', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/config.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/config.yaml', 'schema: quality-driven-e2e\n');
     archived(repo, '2026-10-01-default', { schema: null, effort: [
       { activity: 'qa-review', minutes: 10, recorded_by: 'x' },
       { activity: 'qa-review', minutes: 20, recorded_by: 'y' },
@@ -700,7 +677,7 @@ test('empty and comment-only configs leave the default schema unspecified', () =
     archived(repo, '2026-10-02-explicit', { effort: [{ activity: 'seal', minutes: 10, recorded_by: 'x' }] });
     archived(repo, '2026-10-03-legacy', { schema: 'quality-driven' });
     for (const config of ['', '# only comment\n']) {
-      write(repo, 'openspec/config.yaml', config);
+      writeIn(repo.dir, 'openspec/config.yaml', config);
       const out = effortCli(repo.dir, '--format', 'json');
       assert.equal(out.status, 0, out.stderr);
       assert.equal(out.stderr, '');
@@ -720,7 +697,7 @@ test('broken config reports dependent archives without excluding explicit schema
     archived(repo, '2026-10-02-explicit');
     archived(repo, '2026-10-03-legacy', { schema: 'quality-driven' });
     for (const config of ['schema: [', '- invalid', 'schema: [quality-driven-e2e]', 'schema: &s quality-driven-e2e\nother: *s']) {
-      write(repo, 'openspec/config.yaml', config);
+      writeIn(repo.dir, 'openspec/config.yaml', config);
       const out = effortCli(repo.dir, '--format', 'json');
       assert.equal(out.status, 1, out.stderr);
       const report = JSON.parse(out.stdout);
@@ -738,7 +715,7 @@ test('since excludes old broken metadata and folder names before validation', ()
   const repo = gitRepo();
   try {
     archived(repo, '2026-09-01-old');
-    write(repo, 'openspec/changes/archive/2026-09-01-old/.openspec.yaml', 'schema: [');
+    writeIn(repo.dir, 'openspec/changes/archive/2026-09-01-old/.openspec.yaml', 'schema: [');
     archived(repo, '2026-09-02-');
     archived(repo, '2026-10-01-current');
     const all = effortCli(repo.dir, '--format', 'json');
@@ -769,7 +746,7 @@ test('missing evidence is broken and unknown risk levels retain effort with a re
       archived(repo, folder, { effort });
       const path = `openspec/changes/archive/${folder}/quality.md`;
       if (text === null) rmSync(join(repo.dir, path));
-      else write(repo, path, text);
+      else writeIn(repo.dir, path, text);
     }
     const json = effortCli(repo.dir, '--format', 'json');
     assert.equal(json.status, 1, json.stderr);
@@ -806,7 +783,7 @@ test('evidence reports I/O failures but propagates programming errors from quara
       const { errors } = checkEvidence(repo.dir, selected, options);
       assert.ok(errors.some(line => /確認できません.*EISDIR/.test(line)), errors.join('\n'));
       rmSync(join(repo.dir, path), { recursive: true });
-      write(repo, path, '# parser-failure-fixture\n');
+      writeIn(repo.dir, path, '# parser-failure-fixture\n');
       const original = String.prototype.split;
       const bug = new TypeError(`${stage} parser failure`);
       const mocked = t.mock.method(String.prototype, 'split', function (...args) {
@@ -817,4 +794,28 @@ test('evidence reports I/O failures but propagates programming errors from quara
       finally { mocked.mock.restore(); }
     } finally { repo.cleanup(); }
   }
+});
+
+test('qaReviewNeeded treats an unreadable risk level as needing review whenever any level does', () => {
+  assert.equal(qaReviewNeeded('high', ['medium', 'high']), true);
+  assert.equal(qaReviewNeeded('low', ['medium', 'high']), false);
+  assert.equal(qaReviewNeeded('', ['high']), true);
+  assert.equal(qaReviewNeeded('HIGH', ['high']), true);
+  assert.equal(qaReviewNeeded('', []), false);
+});
+
+test('sealBlockers stops at the first blocker and reads the policy only after approval', () => {
+  const integrated = changeFixture();
+  const legacy = changeFixture({ schema: 'quality-driven', scope: 'legacy' });
+  const approved = { approved_by: 'pm', approved_at: '2026-10-02', risk_level: 'high' };
+  const unread = () => assert.fail('policy must not be read before approval');
+  assert.deepEqual(sealBlockers(legacy, { approved_by: 'pm' }, unread), []);
+  assert.match(sealBlockers(legacy, {}, unread)[0], /approved_by を記入/);
+  assert.match(sealBlockers(integrated, { approved_by: 'pm' }, unread)[0], /approved_by と approved_at/);
+  assert.match(sealBlockers(integrated, approved, '')[0], /QA レビューが必要です/);
+  assert.match(sealBlockers(integrated, approved, '- qa_review_required_levels: [high]\n')[0], /qa_review_required_levels が不正です/);
+  assert.deepEqual(sealBlockers(integrated, { ...approved, risk_level: 'low' }, ''), []);
+  const reviewed = { ...approved, qa_reviewed_by: 'qa', qa_reviewed_at: '2026-10-03' };
+  assert.deepEqual(sealBlockers(integrated, reviewed, ''), ['QA レビュー日は承認日以前である必要があります (qa_reviewed_at <= approved_at)']);
+  assert.deepEqual(sealBlockers(integrated, { ...reviewed, qa_reviewed_at: '2026-10-01' }, ''), []);
 });

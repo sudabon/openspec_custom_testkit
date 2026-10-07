@@ -1,4 +1,14 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseTable, section } from './markdown.mjs';
+
+export const POLICY_PATH = 'openspec/quality-policy.md';
+
+// The policy text, or null when the file is missing. Read errors propagate to the caller.
+export function readPolicyText(repo) {
+  const path = join(repo, POLICY_PATH);
+  return existsSync(path) ? readFileSync(path, 'utf8') : null;
+}
 
 const SAMPLE = `次を openspec/quality-policy.md のゲート表と機械可読行に追記してください（kit は --force でもこのファイルを上書きしません）:
 
@@ -50,24 +60,44 @@ export function policyIssues(policyText) {
 
 export const RISK_LEVELS = ['low', 'medium', 'high'];
 
+// The single `key: value` line at the start of a line. `nearMiss` is the regex source of a setting-like key stem;
+// a line that matches it with indentation, a bullet, backticks or another spelling is a format error rather than
+// prose, while prose that mentions the key mid-sentence is ignored. Returns { missing: true }, { error: 'format' },
+// { error: 'multiple' } or { value }. stripComment removes a trailing ` # comment` from the value.
+export function policyKeyLine(policyText, key, { nearMiss, stripComment = true }) {
+  const pattern = new RegExp(`^[ \\t]*(?:[-*+]\\s+)?\`*${nearMiss}[\\w-]*\\b`, 'i');
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => pattern.test(line));
+  if (candidates.some(line => !line.startsWith(`${key}:`))) return { error: 'format' };
+  if (!candidates.length) return { missing: true };
+  if (candidates.length > 1) return { error: 'multiple' };
+  const value = candidates[0].slice(key.length + 1);
+  return { value: (stripComment ? value.replace(/[ \t]+#.*$/, '') : value).trim() };
+}
+
+// `[medium, high]` into distinct levels, or { error } with the detail to show.
+export function parseLevelList(value) {
+  const list = value.match(/^\[(.*)\]$/);
+  if (!list) return { error: value || '空' };
+  const items = list[1].trim() ? list[1].split(',').map(item => item.trim()) : [];
+  const bad = items.filter(item => !RISK_LEVELS.includes(item));
+  if (bad.length) return { error: bad.map(item => item || '空の要素').join(', ') };
+  return { levels: [...new Set(items)] };
+}
+
 // `flaky_fail_levels: [high]` at the start of a line. Missing means no policy (flaky counts as pass).
 // A value that cannot be read is an input error: silently ignoring it would look like an active policy.
 export function flakyFailLevels(policyText) {
   const invalid = detail => ({ levels: [], error: `quality-policy.md の flaky_fail_levels が不正です (${detail})。[high] や [medium, high] のように low / medium / high を角括弧で列挙してください` });
-  // Reject setting-like near misses, while allowing prose that mentions the key mid-sentence.
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky[-_]fail[-_]level[\w-]*\b/i.test(line));
-  if (candidates.some(line => !/^flaky_fail_levels:/.test(line))) {
+  // Unlike the other keys, a trailing # comment is kept as part of the value (preserved behavior).
+  const line = policyKeyLine(policyText, 'flaky_fail_levels', { nearMiss: 'flaky[-_]fail[-_]level', stripComment: false });
+  if (line.error === 'format') {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、flaky_fail_levels: [high] の形式で独立した行に書いてください');
   }
-  const lines = candidates.map(line => line.slice('flaky_fail_levels:'.length).trim());
-  if (!lines.length) return { levels: [], error: null };
-  if (lines.length > 1) return invalid('複数の行があります');
-  const list = lines[0].match(/^\[(.*)\]$/);
-  if (!list) return invalid(lines[0] || '空');
-  const items = list[1].trim() ? list[1].split(',').map(item => item.trim()) : [];
-  const bad = items.filter(item => !RISK_LEVELS.includes(item));
-  if (bad.length) return invalid(bad.map(item => item || '空の要素').join(', '));
-  return { levels: [...new Set(items)], error: null };
+  if (line.missing) return { levels: [], error: null };
+  if (line.error === 'multiple') return invalid('複数の行があります');
+  const list = parseLevelList(line.value);
+  if (list.error) return invalid(list.error);
+  return { levels: list.levels, error: null };
 }
 
 export const E2E_LINT_DEFAULTS = { mode: 'enforce', scope: 'changed' };
@@ -97,15 +127,12 @@ export const MOCK_CONTRACT_MAX_AGE_DEFAULT = 90;
 // be read is an input error instead of silently falling back to a looser or stricter limit.
 export function mockContractMaxAgeDays(policyText) {
   const invalid = detail => ({ days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: `quality-policy.md の mock_contract_max_age_days が不正です (${detail})。mock_contract_max_age_days: 90 のように正の整数の日数を独立した行に書いてください` });
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock[-_]contract[-_]max[-_]age[\w-]*\b/i.test(line));
-  if (candidates.some(line => !/^mock_contract_max_age_days:/.test(line))) {
-    return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けないでください');
-  }
-  if (!candidates.length) return { days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: null };
-  if (candidates.length > 1) return invalid('複数の行があります');
-  const value = candidates[0].slice('mock_contract_max_age_days:'.length).replace(/[ \t]+#.*$/, '').trim();
-  if (!/^[1-9]\d*$/.test(value)) return invalid(value || '空');
-  return { days: Number(value), error: null };
+  const line = policyKeyLine(policyText, 'mock_contract_max_age_days', { nearMiss: 'mock[-_]contract[-_]max[-_]age' });
+  if (line.error === 'format') return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けないでください');
+  if (line.missing) return { days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: null };
+  if (line.error === 'multiple') return invalid('複数の行があります');
+  if (!/^[1-9]\d*$/.test(line.value)) return invalid(line.value || '空');
+  return { days: Number(line.value), error: null };
 }
 
 export const QA_REVIEW_DEFAULT_LEVELS = ['medium', 'high'];
@@ -115,17 +142,13 @@ export const QA_REVIEW_DEFAULT_LEVELS = ['medium', 'high'];
 // never "QA review not required".
 export function qaReviewRequiredLevels(policyText) {
   const invalid = detail => ({ levels: [...QA_REVIEW_DEFAULT_LEVELS], error: `quality-policy.md の qa_review_required_levels が不正です (${detail})。[medium, high] や [] のように low / medium / high を角括弧で列挙し、独立した行に書いてください`, defaulted: false });
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*qa[-_]review[-_]required[-_]level[\w-]*\b/i.test(line));
-  if (candidates.some(line => !/^qa_review_required_levels:/.test(line))) {
+  const line = policyKeyLine(policyText, 'qa_review_required_levels', { nearMiss: 'qa[-_]review[-_]required[-_]level' });
+  if (line.error === 'format') {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、qa_review_required_levels: [medium, high] の形式で書いてください');
   }
-  if (!candidates.length) return { levels: [...QA_REVIEW_DEFAULT_LEVELS], error: null, defaulted: true };
-  if (candidates.length > 1) return invalid('複数の行があります');
-  const value = candidates[0].slice('qa_review_required_levels:'.length).replace(/[ \t]+#.*$/, '').trim();
-  const list = value.match(/^\[(.*)\]$/);
-  if (!list) return invalid(value || '空');
-  const items = list[1].trim() ? list[1].split(',').map(item => item.trim()) : [];
-  const bad = items.filter(item => !RISK_LEVELS.includes(item));
-  if (bad.length) return invalid(bad.map(item => item || '空の要素').join(', '));
-  return { levels: [...new Set(items)], error: null, defaulted: false };
+  if (line.missing) return { levels: [...QA_REVIEW_DEFAULT_LEVELS], error: null, defaulted: true };
+  if (line.error === 'multiple') return invalid('複数の行があります');
+  const list = parseLevelList(line.value);
+  if (list.error) return invalid(list.error);
+  return { levels: list.levels, error: null, defaulted: false };
 }

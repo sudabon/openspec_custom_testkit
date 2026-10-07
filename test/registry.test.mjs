@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { main } from '../lib/cli.mjs';
@@ -14,35 +13,13 @@ import { MOCK_CONTRACT_MAX_AGE_DEFAULT, mockContractMaxAgeDays, policyIssues } f
 import {
   IDEMPOTENCY_NOTE, checkRegistry, fixtureElements, mockFreshnessErrors, parseFixtureRegistry, parseMockRegistry, qualifiedTp,
 } from '../payload/scripts/lib/registry.mjs';
-import { capture, gitRepo } from './support.mjs';
+import { capture, changeFixture, gitRepo, runGate, tempDir, writeIn } from './support.mjs';
 
 const PAYLOAD = new URL('../payload/', import.meta.url);
 const read = rel => readFileSync(new URL(rel, PAYLOAD), 'utf8');
 const NOW = Date.parse('2026-10-07T03:00:00.000Z');
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'add-checkout',
-    path: 'openspec/changes/add-checkout',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'required',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    skipSpecs: true,
-    pendingPlan: false,
-    tasksText: '- [ ] 1.1 plan\n',
-    ...over,
-  };
-}
+const change = (over = {}) => changeFixture({ id: 'add-checkout', path: 'openspec/changes/add-checkout', skipSpecs: true, tasksText: '- [ ] 1.1 plan\n', ...over });
 
 const QUALITY = `---
 risk_level: low
@@ -91,10 +68,10 @@ function mockReadme(rows) {
 
 function repoWith({ planText, fixtures, mocks } = {}) {
   const repo = gitRepo();
-  write(repo, 'openspec/changes/add-checkout/quality.md', QUALITY);
-  write(repo, 'openspec/changes/add-checkout/test-plan.md', planText ?? plan('なし'));
-  if (fixtures) write(repo, 'tests/e2e/fixtures/README.md', fixtures);
-  if (mocks) write(repo, 'tests/e2e/mocks/README.md', mocks);
+  writeIn(repo.dir, 'openspec/changes/add-checkout/quality.md', QUALITY);
+  writeIn(repo.dir, 'openspec/changes/add-checkout/test-plan.md', planText ?? plan('なし'));
+  if (fixtures) writeIn(repo.dir, 'tests/e2e/fixtures/README.md', fixtures);
+  if (mocks) writeIn(repo.dir, 'tests/e2e/mocks/README.md', mocks);
   return repo;
 }
 
@@ -160,7 +137,7 @@ test('placeholder Fixture cells fail integrated plans and only warn for legacy p
       const checked = checkTestPlan(repo.dir, change(), { now: NOW });
       assert.match(checked.errors.join('\n'), /TP-001 の Fixture 列: 未記入です。前提が無い場合は なし と書いてください/, cell);
       const legacyPlan = read('openspec/schemas/spec-driven-e2e/templates/test-plan.md').replace('| TP-001 | ... | ... |', `| TP-001 | ... | ${cell} |`);
-      write(repo, 'openspec/changes/add-checkout/test-plan.md', legacyPlan);
+      writeIn(repo.dir, 'openspec/changes/add-checkout/test-plan.md', legacyPlan);
       const legacy = checkTestPlan(repo.dir, change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e' }), { now: NOW });
       assert.deepEqual(legacy.errors, [], cell);
       assert.match(legacy.warnings.join('\n'), /未記入です.*旧 spec-driven-e2e のため警告のみ/, cell);
@@ -182,8 +159,8 @@ test('unreadable registry files report diagnostics and preserve other final-gate
   const repo = repoWith({ planText: plan('seed:a, mock:pay') });
   try {
     for (const kind of ['fixtures', 'mocks']) mkdirSync(join(repo.dir, `tests/e2e/${kind}/README.md`), { recursive: true });
-    write(repo, 'openspec/changes/add-checkout/quality.md', QUALITY.replaceAll('low', 'medium'));
-    write(repo, 'openspec/changes/add-checkout/evidence.md', `## Execution Records\n\`\`\`json\n${JSON.stringify({ format_version: 1, runs: [], risk_results: [], falsification: { performed: true, summary: 'x', counterexamples: [] }, residuals: [] })}\n\`\`\`\n`);
+    writeIn(repo.dir, 'openspec/changes/add-checkout/quality.md', QUALITY.replaceAll('low', 'medium'));
+    writeIn(repo.dir, 'openspec/changes/add-checkout/evidence.md', `## Execution Records\n\`\`\`json\n${JSON.stringify({ format_version: 1, runs: [], risk_results: [], falsification: { performed: true, summary: 'x', counterexamples: [] }, residuals: [] })}\n\`\`\`\n`);
     const checked = evaluateChange(repo.dir, change(), { phase: 'final', now: NOW, tags: false });
     for (const kind of ['fixtures', 'mocks']) assert.ok(checked.failures.some(line => line.includes(`${kind}/README.md の登録表を読み取れません (EISDIR:`)), checked.failures.join('\n'));
     assert.ok(checked.failures.includes('medium の Human Code Review がありません'), 'evidence diagnostics after freshness are retained');
@@ -243,12 +220,12 @@ test('Registry file is missing fails with the README path, under a custom E2E ro
   const repo = repoWith({ planText: plan('seed:admin') });
   try {
     assert.deepEqual(registryErrors(repo), ['add-checkout: tests/e2e/fixtures/README.md がありません。seed:admin を登録する README を作成してください']);
-    write(repo, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: 'e2e' }));
-    write(repo, 'tests/e2e/fixtures/README.md', fixtureReadme([['seed:admin', 'add-checkout:TP-001']]));
+    writeIn(repo.dir, '.openspec-custom-testkit.json', JSON.stringify({ e2eRoot: 'e2e' }));
+    writeIn(repo.dir, 'tests/e2e/fixtures/README.md', fixtureReadme([['seed:admin', 'add-checkout:TP-001']]));
     assert.match(registryErrors(repo).join('\n'), /e2e\/fixtures\/README\.md がありません/);
-    write(repo, 'e2e/fixtures/README.md', fixtureReadme([['seed:admin', 'add-checkout:TP-001']]));
+    writeIn(repo.dir, 'e2e/fixtures/README.md', fixtureReadme([['seed:admin', 'add-checkout:TP-001']]));
     assert.deepEqual(registryErrors(repo), []);
-    write(repo, 'e2e/fixtures/README.md', '# 表なし\n');
+    writeIn(repo.dir, 'e2e/fixtures/README.md', '# 表なし\n');
     assert.match(registryErrors(repo).join('\n'), /e2e\/fixtures\/README\.md に ## fixture 名 → 作られる状態 の表がありません/);
   } finally { repo.cleanup(); }
 });
@@ -257,8 +234,8 @@ test('Legacy E2E change with an unregistered fixture only warns and keeps the ga
   const repo = gitRepo();
   try {
     const legacyPlan = read('openspec/schemas/spec-driven-e2e/templates/test-plan.md').replace('| TP-001 | ... | ... |', '| TP-001 | ... | seed:legacy-user |');
-    write(repo, 'openspec/changes/add-checkout/test-plan.md', legacyPlan);
-    write(repo, 'tests/e2e/checkout.spec.ts', "test('x', { tag: ['@add-checkout', '@TP-001'] }, async () => {});\n");
+    writeIn(repo.dir, 'openspec/changes/add-checkout/test-plan.md', legacyPlan);
+    writeIn(repo.dir, 'tests/e2e/checkout.spec.ts', "test('x', { tag: ['@add-checkout', '@TP-001'] }, async () => {});\n");
     const legacy = change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e', qe: false, e2e: 'required' });
     const checked = checkTestPlan(repo.dir, legacy, { now: NOW });
     assert.deepEqual(checked.errors, []);
@@ -267,7 +244,7 @@ test('Legacy E2E change with an unregistered fixture only warns and keeps the ga
     const evaluated = evaluateChange(repo.dir, legacy, { phase: 'plan', quality: false, plan: true, tags: true, lint: false, env: {}, now: NOW });
     assert.deepEqual(evaluated.failures, []);
     assert.ok(evaluated.planWarnings.some(line => line.includes('旧 spec-driven-e2e のため警告のみ')));
-    write(repo, 'tests/e2e/fixtures/README.md', fixtureReadme([['seed:legacy-user', 'TP-001']]));
+    writeIn(repo.dir, 'tests/e2e/fixtures/README.md', fixtureReadme([['seed:legacy-user', 'TP-001']]));
     const bare = checkTestPlan(repo.dir, legacy, { now: NOW });
     assert.deepEqual(bare.errors, []);
     assert.match(bare.warnings.join('\n'), /add-checkout:TP-001 がありません/);
@@ -280,7 +257,7 @@ test('legacy quality-driven and not-applicable changes are not registry checked'
     const result = checkTestPlan(repo.dir, change({ e2e: 'not-applicable' }), { now: NOW });
     assert.equal(result.registryChecked, false);
     assert.deepEqual(result.errors.filter(line => /README/.test(line)), []);
-    write(repo, 'openspec/changes/add-checkout/test-plan.md', plan('seed:x'));
+    writeIn(repo.dir, 'openspec/changes/add-checkout/test-plan.md', plan('seed:x'));
     const qe = checkTestPlan(repo.dir, change({ schema: 'quality-driven', scope: 'legacy-qe' }), { now: NOW });
     assert.deepEqual(qe.errors, []);
   } finally { repo.cleanup(); }
@@ -322,8 +299,8 @@ test('mock verification dates use UTC even during the early morning in Japan', (
 test('shipped mock examples do not count as registrations', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'tests/e2e/fixtures/README.md', read('tests/e2e/fixtures/README.md'));
-    write(repo, 'tests/e2e/mocks/README.md', read('tests/e2e/mocks/README.md'));
+    writeIn(repo.dir, 'tests/e2e/fixtures/README.md', read('tests/e2e/fixtures/README.md'));
+    writeIn(repo.dir, 'tests/e2e/mocks/README.md', read('tests/e2e/mocks/README.md'));
     const rows = [
       { 'TP-ID': 'TP-001', Fixture: 'seed:user-with-one-order, mock:payment-gateway' },
       { 'TP-ID': 'TP-004', Fixture: '`seed:user-with-one-order`' },
@@ -365,13 +342,13 @@ test('final evidence check applies the policy limit to registered mocks with a f
   });
   try {
     const evidence = residuals => `## Execution Records\n\`\`\`json\n${JSON.stringify({ format_version: 1, runs: [], risk_results: [], falsification: { performed: true, summary: 'x', counterexamples: [] }, residuals })}\n\`\`\`\n`;
-    write(repo, 'openspec/changes/add-checkout/evidence.md', evidence([]));
+    writeIn(repo.dir, 'openspec/changes/add-checkout/evidence.md', evidence([]));
     const stale = line => /モック payment-gateway/.test(line);
     const run = policyText => checkEvidence(repo.dir, change(), { digest: '', policyText, now: NOW }).errors;
     assert.equal(run('').filter(stale).length, 1, 'default 90 days');
     assert.equal(run('mock_contract_max_age_days: 120\n').filter(stale).length, 0);
     assert.match(run('mock_contract_max_age_days: 0\n').join('\n'), /mock_contract_max_age_days が不正/);
-    write(repo, 'openspec/changes/add-checkout/evidence.md', evidence([{ id: 'RES-1', reason: 'payment-gateway の契約照合を延期', impact: 'API 変更を検知できない', approved_by: 'qa-lead', approved_at: '2026-10-01' }]));
+    writeIn(repo.dir, 'openspec/changes/add-checkout/evidence.md', evidence([{ id: 'RES-1', reason: 'payment-gateway の契約照合を延期', impact: 'API 変更を検知できない', approved_by: 'qa-lead', approved_at: '2026-10-01' }]));
     assert.equal(run('').filter(stale).length, 0);
     assert.equal(checkEvidence(repo.dir, change(), { digest: '', policyText: '', now: Date.parse('2026-09-01T00:00:00Z') }).errors.filter(stale).length, 0);
     assert.equal(checkEvidence(repo.dir, change({ e2e: 'not-applicable' }), { digest: '', policyText: '', now: NOW }).errors.filter(stale).length, 0);
@@ -381,15 +358,10 @@ test('final evidence check applies the policy limit to registered mocks with a f
 test('plan gate output says fixture idempotency is not checked', () => {
   const repo = repoWith({ planText: plan('seed:a'), fixtures: fixtureReadme([['seed:a', 'add-checkout:TP-001']]) });
   try {
-    write(repo, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-10-01\n');
-    write(repo, 'openspec/changes/add-checkout/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-10-01\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/tasks.md', '- [ ] 1.1 plan\n');
     repo.commit('change');
-    let output;
-    try {
-      output = execFileSync(process.execPath, [new URL('../payload/scripts/testkit-gate.mjs', import.meta.url).pathname, 'check', '--base', 'HEAD~1', 'add-checkout'], { cwd: repo.dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    } catch (err) {
-      output = err.stdout;
-    }
+    const output = runGate(repo.dir, ['check', '--base', 'HEAD~1', 'add-checkout']).stdout;
     assert.ok(output.split('\n').includes(`  ✓ ${IDEMPOTENCY_NOTE}`), output);
     assert.doesNotMatch(output, /fixtures\/README\.md/);
   } finally { repo.cleanup(); }
@@ -398,7 +370,7 @@ test('plan gate output says fixture idempotency is not checked', () => {
 test('contract-command runs only when set, is recorded and fails the job after saving', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'README.md', 'x\n');
+    writeIn(repo.dir, 'README.md', 'x\n');
     repo.commit('base');
     const env = { BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'unit' };
     const commands = [];
@@ -439,9 +411,9 @@ test('contract-command runs only when set, is recorded and fails the job after s
 test('truncated contract output is recorded but cannot verify evidence', () => {
   const repo = repoWith();
   try {
-    write(repo, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/add-checkout/tasks.md', '- [ ] 1.1 plan\n');
-    write(repo, 'openspec/changes/add-checkout/evidence.md', '## Execution Records\n```json\n{"runs":[{"id":"partial","command":"contract","exit_code":2}]}\n```\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/tasks.md', '- [ ] 1.1 plan\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/evidence.md', '## Execution Records\n```json\n{"runs":[{"id":"partial","command":"contract","exit_code":2}]}\n```\n');
     repo.commit('change');
     let invokedAt;
     let evaluatedManifest;
@@ -488,15 +460,11 @@ test('fixtures README documents both column names that the test-plan templates u
   assert.doesNotMatch(readme, /\| TP-001, TP-004 \|/);
 });
 
-function tempDir() {
-  return mkdtempSync(join(tmpdir(), 'tk-registry-'));
-}
-
 const sha = text => createHash('sha256').update(text).digest('hex');
 
 test('install places mocks README under the E2E root and never overwrites an existing one', async () => {
   for (const root of [null, 'e2e']) {
-    const target = tempDir();
+    const target = tempDir('tk-registry-');
     try {
       const args = ['install', '--force', '--target', target, ...(root ? ['--e2e-root', root] : [])];
       const first = await capture(main, args);
@@ -511,7 +479,7 @@ test('install places mocks README under the E2E root and never overwrites an exi
       assert.match(again.text, new RegExp(`保持: ${base}/mocks/README\\.md`));
     } finally { rmSync(target, { recursive: true, force: true }); }
   }
-  const existing = tempDir();
+  const existing = tempDir('tk-registry-');
   try {
     mkdirSync(join(existing, 'tests/e2e/mocks'), { recursive: true });
     writeFileSync(join(existing, 'tests/e2e/mocks/README.md'), '# 既存\n');
@@ -525,7 +493,7 @@ test('update replaces a known unedited fixtures README and keeps an edited one',
   const previous = readFileSync(new URL('./fixtures/registry/fixtures-README.previous.md', import.meta.url), 'utf8');
   const current = read('tests/e2e/fixtures/README.md');
   for (const edited of [false, true]) {
-    const target = tempDir();
+    const target = tempDir('tk-registry-');
     try {
       execFileSync('git', ['init', '-q', target]);
       const first = await capture(main, ['install', '--target', target]);

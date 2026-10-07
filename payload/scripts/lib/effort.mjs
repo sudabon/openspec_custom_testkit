@@ -1,18 +1,14 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
-import { readConfigDocument } from './environment.mjs';
+import { readChangeMetadata, readDefaultSchema, readRiskLevel } from './change-metadata.mjs';
+import { listArchivedChanges } from './changes.mjs';
 import { executionBlock } from './evidence-check.mjs';
-import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
-import { byteCompare } from './hash.mjs';
+import { isPlainMapping as isRecord, validDate } from './frontmatter.mjs';
 import { RISK_LEVELS } from './policy.mjs';
 
 export const EFFORT_ACTIVITIES = ['approval', 'seal', 'qa-review', 'falsification-review', 'code-review', 'manual-test', 'other'];
 const LOW_RECORDING_RATE = 0.5;
-
-function isRecord(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 // `effort` is optional. When present, every element must be a complete human record.
 export function effortErrors(value) {
@@ -54,34 +50,26 @@ export function parseEffortArgs(argv) {
 }
 
 function defaultSchema(repo) {
-  const config = readConfigDocument(repo);
-  if (config.text == null) return { schema: null };
-  const parsed = config.parsed;
-  if (parsed.errors.length || parsed.alias || parsed.tagged || (parsed.data != null && !isRecord(parsed.data))
-      || (parsed.data?.schema != null && typeof parsed.data.schema !== 'string')) {
-    return { error: `${relative(repo, config.located.path)} を解釈できないため既定 schema を判定できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
+  const config = readDefaultSchema(repo, { strict: true });
+  if (config.invalid) {
+    return { error: `${relative(repo, config.path)} を解釈できないため既定 schema を判定できません${config.errors[0] ? ` (${config.errors[0]})` : ''}` };
   }
-  return { schema: asString(parsed.data?.schema) || null };
+  return { schema: config.schema };
 }
 
 function schemaOf(repo, dir, fallback) {
-  const path = join(repo, dir, '.openspec.yaml');
-  if (!existsSync(path)) return fallback;
-  const parsed = parseYamlText(readFileSync(path, 'utf8'));
-  if (parsed.errors.length || parsed.alias || parsed.tagged || !isRecord(parsed.data)) {
-    return { error: `.openspec.yaml を解釈できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
-  }
-  if (parsed.data.schema != null && typeof parsed.data.schema !== 'string') return { error: '.openspec.yaml の schema は文字列である必要があります' };
-  return asString(parsed.data.schema) ? { schema: asString(parsed.data.schema) } : fallback;
+  const metadata = readChangeMetadata(repo, dir, { strict: true });
+  if (metadata.missing) return fallback;
+  if (metadata.problem === 'schema') return { error: '.openspec.yaml の schema は文字列である必要があります' };
+  if (metadata.problem) return { error: `.openspec.yaml を解釈できません${metadata.errors[0] ? ` (${metadata.errors[0]})` : ''}` };
+  return metadata.schema ? { schema: metadata.schema } : fallback;
 }
 
 function riskLevelOf(repo, dir) {
-  const path = join(repo, dir, 'quality.md');
-  if (!existsSync(path)) return { level: 'unknown', reason: 'quality.md がありません' };
-  const parsed = splitFrontmatter(readFileSync(path, 'utf8'));
-  if (parsed.error) return { level: 'unknown', reason: `quality.md の frontmatter が不正です: ${parsed.error}` };
-  const level = asString(parsed.data?.risk_level);
-  return RISK_LEVELS.includes(level) ? { level } : { level: 'unknown', reason: `quality.md の risk_level が不正です: ${level || '(空)'}` };
+  const risk = readRiskLevel(repo, dir);
+  if (!risk.exists) return { level: 'unknown', reason: 'quality.md がありません' };
+  if (risk.error) return { level: 'unknown', reason: `quality.md の frontmatter が不正です: ${risk.error}` };
+  return risk.level !== 'unknown' ? { level: risk.level } : { level: 'unknown', reason: `quality.md の risk_level が不正です: ${risk.declared || '(空)'}` };
 }
 
 // One archived change: recorded (with entries), unrecorded, or broken with a reason.
@@ -98,29 +86,45 @@ function readEffort(repo, dir) {
 }
 
 export function buildEffort(repo, { since = null } = {}) {
-  const root = join(repo, 'openspec/changes/archive');
-  const folders = existsSync(root)
-    ? readdirSync(root, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name).sort(byteCompare)
-    : [];
+  const { recorded, unrecorded, broken, warnings } = collectEffort(repo, since);
+  const { total, byActivity, byLevel } = tallyEffort(recorded);
+  // Unrecorded changes are not zero minutes, so they stay out of the averages and the rate's numerator.
+  const judged = recorded.length + unrecorded.length;
+  const rate = judged ? recorded.length / judged : null;
+  if (rate != null && rate < LOW_RECORDING_RATE) warnings.push(`記録率が低いため（${Math.round(rate * 100)}%）、合計と比率は人間の作業時間の一部しか表していません`);
+  return {
+    since,
+    targets: judged + broken.length,
+    recorded: { count: recorded.length, ids: recorded.map(change => change.id) },
+    unrecorded: { count: unrecorded.length, ids: unrecorded },
+    broken: { count: broken.length, changes: broken },
+    recording_rate: rate,
+    warnings,
+    total_minutes: total,
+    average_minutes_per_recorded_change: recorded.length ? total / recorded.length : null,
+    by_activity: byActivity,
+    by_risk_level: byLevel,
+  };
+}
+
+// Archived integrated changes sorted into recorded, unrecorded and broken.
+function collectEffort(repo, since) {
   const fallback = defaultSchema(repo);
   const recorded = [];
   const unrecorded = [];
   const broken = [];
   const warnings = [];
-  for (const folder of folders) {
+  for (const { folder, date, id: named, dir } of listArchivedChanges(repo)) {
     // A reliable date prefix can exclude an old archive even if its metadata or id is broken.
-    const date = folder.match(/^(\d{4}-\d{2}-\d{2})(?=-|$)/)?.[1];
     if (since && validDate(date) && date < since) continue;
-    const dir = `openspec/changes/archive/${folder}`;
-    const named = folder.match(/^(\d{4}-\d{2}-\d{2})-(.+)$/);
-    const id = named ? named[2] : folder;
+    const id = named ?? folder;
     const schema = schemaOf(repo, dir, fallback);
     if (schema.error) {
       broken.push({ id, archive: folder, reason: schema.error });
       continue;
     }
     if (schema.schema !== SCHEMA_INTEGRATED) continue;
-    if (!named || !validDate(named[1])) {
+    if (!named || !validDate(date)) {
       broken.push({ id, archive: folder, reason: 'archive フォルダ名は YYYY-MM-DD-<id> が必要です' });
       continue;
     }
@@ -133,7 +137,10 @@ export function buildEffort(repo, { since = null } = {}) {
       recorded.push({ id, archive: folder, level: risk.level, entries: read.entries });
     }
   }
+  return { recorded, unrecorded, broken, warnings };
+}
 
+function tallyEffort(recorded) {
   const tally = () => ({ minutes: 0, entries: 0, changes: 0 });
   const byActivity = Object.fromEntries(EFFORT_ACTIVITIES.map(activity => [activity, tally()]));
   const byLevel = Object.fromEntries(RISK_LEVELS.map(level => [level, tally()]));
@@ -153,23 +160,7 @@ export function buildEffort(repo, { since = null } = {}) {
       seen.add(entry.activity);
     }
   }
-  // Unrecorded changes are not zero minutes, so they stay out of the averages and the rate's numerator.
-  const judged = recorded.length + unrecorded.length;
-  const rate = judged ? recorded.length / judged : null;
-  if (rate != null && rate < LOW_RECORDING_RATE) warnings.push(`記録率が低いため（${Math.round(rate * 100)}%）、合計と比率は人間の作業時間の一部しか表していません`);
-  return {
-    since,
-    targets: judged + broken.length,
-    recorded: { count: recorded.length, ids: recorded.map(change => change.id) },
-    unrecorded: { count: unrecorded.length, ids: unrecorded },
-    broken: { count: broken.length, changes: broken },
-    recording_rate: rate,
-    warnings,
-    total_minutes: total,
-    average_minutes_per_recorded_change: recorded.length ? total / recorded.length : null,
-    by_activity: byActivity,
-    by_risk_level: byLevel,
-  };
+  return { total, byActivity, byLevel };
 }
 
 function number(value) {

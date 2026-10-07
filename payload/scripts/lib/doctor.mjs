@@ -1,10 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
-import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, policyIssues, qaReviewRequiredLevels } from './policy.mjs';
+import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, POLICY_PATH, policyIssues, qaReviewRequiredLevels, readPolicyText } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
   const failures = [];
@@ -33,10 +33,9 @@ export function doctor(repo, options = {}) {
       failures.push(err.message);
     }
   }
-  const policyPath = join(repo, 'openspec/quality-policy.md');
-  if (!existsSync(policyPath)) failures.push('openspec/quality-policy.md がありません');
+  const policyText = readPolicyText(repo);
+  if (policyText == null) failures.push(`${POLICY_PATH} がありません`);
   else {
-    const policyText = readFileSync(policyPath, 'utf8');
     const issues = policyIssues(policyText);
     if (issues.length) failures.push(...issues);
     const lint = e2eLintPolicy(policyText);

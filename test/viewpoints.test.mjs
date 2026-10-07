@@ -1,39 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan, VIEWPOINTS } from '../payload/scripts/lib/plan-check.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
 import { planRows } from '../payload/scripts/lib/coverage-map.mjs';
-import { gitRepo } from './support.mjs';
+import { changeFixture, gitRepo, writeIn } from './support.mjs';
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'demo',
-    path: 'openspec/changes/demo',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'required',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    fallback: false,
-    skipSpecs: true,
-    pendingPlan: false,
-    tasksText: null,
-    ...over,
-  };
-}
+const change = (over = {}) => changeFixture({ skipSpecs: true, ...over });
 
 function table(rows) {
   return `## Non-functional Viewpoints
@@ -108,15 +85,15 @@ alternative_verification:
 
 function stamp(repo, since) {
   const features = since === 'none' ? {} : { features: { nonfunctionalViewpoints: since == null ? {} : { since } } };
-  write(repo, '.openspec-custom-testkit.json', JSON.stringify({ version: '0.1.0', e2eRoot: 'tests/e2e', ...features }));
+  writeIn(repo.dir, '.openspec-custom-testkit.json', JSON.stringify({ version: '0.1.0', e2eRoot: 'tests/e2e', ...features }));
 }
 
 function setup({ viewpoints, plan = requiredPlan(), created = '2026-10-10', since = '2026-10-01' }) {
   const layer = plan.includes('e2e: not-applicable') ? 'Unit' : 'E2E';
   const repo = gitRepo();
-  write(repo, 'openspec/changes/demo/.openspec.yaml', `schema: quality-driven-e2e\n${created == null ? '' : `created: ${created}\n`}`);
-  write(repo, 'openspec/changes/demo/quality.md', quality(viewpoints, layer));
-  write(repo, 'openspec/changes/demo/test-plan.md', plan);
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: quality-driven-e2e\n${created == null ? '' : `created: ${created}\n`}`);
+  writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality(viewpoints, layer));
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', plan);
   stamp(repo, since);
   return repo;
 }
@@ -262,7 +239,7 @@ test('metadata diagnostics distinguish missing files, malformed content and inva
     const repo = setup({ viewpoints: '', created: '2026-09-30' });
     try {
       if (content == null) rmSync(join(repo.dir, path));
-      else write(repo, path, content);
+      else writeIn(repo.dir, path, content);
       const result = checkTestPlan(repo.dir, change());
       assert.ok(result.errors.some(line => pattern.test(line)), `${path}: ${result.errors.join(' / ')}`);
       assert.deepEqual(result.warnings, []);
@@ -312,10 +289,10 @@ test('check-test-plan CLI emits only plan warnings and rejects a missing quality
   for (const missingQuality of [false, true]) {
     const repo = setup({ viewpoints: '', plan: naPlan, created: '2026-09-30', since: '2026-10-10' });
     try {
-      write(repo, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-09-30\nskip_specs: true\n');
-      write(repo, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 a\n');
+      writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-09-30\nskip_specs: true\n');
+      writeIn(repo.dir, 'openspec/changes/demo/tasks.md', '- [ ] 1.1 a\n');
       // This unfinished change creates an evaluateChange warning, outside checkTestPlan.
-      write(repo, 'openspec/changes/pending/.openspec.yaml', 'schema: quality-driven-e2e\n');
+      writeIn(repo.dir, 'openspec/changes/pending/.openspec.yaml', 'schema: quality-driven-e2e\n');
       if (missingQuality) rmSync(join(repo.dir, 'openspec/changes/demo/quality.md'));
       repo.commit();
       const cli = spawnSync(process.execPath, [fileURLToPath(new URL('../payload/scripts/check-test-plan.mjs', import.meta.url)), 'HEAD^'], { cwd: repo.dir, encoding: 'utf8' });
@@ -333,8 +310,8 @@ test('legacy schemas are not asked for the register', () => {
   for (const schema of ['quality-driven', 'spec-driven-e2e']) {
     const repo = setup({ viewpoints: '', created: '2026-10-10', since: '2026-10-01' });
     try {
-      write(repo, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\ncreated: 2026-10-10\n`);
-      write(repo, 'openspec/changes/demo/test-plan.md', '## E2E観点一覧\n| TP-ID |\n| TP-001 |\n');
+      writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\ncreated: 2026-10-10\n`);
+      writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', '## E2E観点一覧\n| TP-ID |\n| TP-001 |\n');
       const result = checkTestPlan(repo.dir, change({ schema, scope: schema === 'quality-driven' ? 'legacy-qe' : 'legacy-e2e' }));
       assert.ok(!result.errors.some(line => line.includes('Non-functional') || line.includes('観点')), result.errors.join(' / '));
     } finally {

@@ -1,11 +1,16 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
-import { asString, parseYamlText } from './frontmatter.mjs';
-import { listFiles } from './files.mjs';
+import { readChangeMetadata } from './change-metadata.mjs';
+import { ARCHIVE_ROOT, CHANGES_ROOT, listActiveChanges, listArchivedChanges } from './changes.mjs';
+import { asString, isCustomTag, isPlainMapping } from './frontmatter.mjs';
+import { errorCode, isFsError, listFiles } from './files.mjs';
+import { TP_ID } from './ids.mjs';
 import { readConfigDocument } from './environment.mjs';
-import { byteCompare } from './hash.mjs';
-import { delegatedHeading, markdownProse, planSections, planTables, tpReferences } from './markdown.mjs';
+import {
+  DELEGATED_SECTION, delegatedHeading, hasScenarioColumn, isPlaceholderCell, markdownCell, markdownProse, planSections, planTables,
+  scenarioCell, TP_SECTION, tpReferences,
+} from './markdown.mjs';
 import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
@@ -20,31 +25,20 @@ export const LEGACY_UNRESOLVED = '旧形式・対応不明';
 export const NOT_RUN = '未実行';
 const DECLARED_RESULT = '宣言のみ（実行結果は未照合）';
 
-const TP_ID = /^TP-\d{3}$/;
-const ARCHIVE_FOLDER = /^\d{4}-\d{2}-\d{2}-(.+)$/;
-
 class InvalidCoverageInputError extends Error {}
 class CoverageReadError extends InvalidCoverageInputError {}
 
 function readInput(path, read) {
   try { return read(); }
   catch (err) {
-    if (!err.code || !Number.isInteger(err.errno)) throw err;
+    if (!isFsError(err)) throw err;
     throw new CoverageReadError(`ファイルを読めません: ${path} (${err.code})`, { cause: err });
   }
 }
 
-function norm(value) {
-  return String(value ?? '').trim();
-}
-
 // Test plans sometimes repeat the heading prefix; it is not part of the name.
 function requirementName(value) {
-  return norm(value).replace(/^Requirement:\s*/, '');
-}
-
-function placeholder(value) {
-  return value === '' || value === '...' || value === '…';
+  return asString(value).replace(/^Requirement:\s*/, '');
 }
 
 function readText(repo, rel) {
@@ -137,13 +131,10 @@ export function listMainScenarios(repo, names = new Map()) {
 
 function schemaOf(repo, dir) {
   const rel = `${dir}/.openspec.yaml`;
-  if (!existsSync(join(repo, rel))) return null;
-  const parsed = parseYamlText(readText(repo, rel));
-  if (parsed.errors.length || parsed.alias || parsed.tagged || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)
-    || (parsed.data.schema != null && typeof parsed.data.schema !== 'string')) {
-    throw new InvalidCoverageInputError(`${rel} が不正です: ${parsed.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);
-  }
-  return asString(parsed.data?.schema) || null;
+  const metadata = readInput(rel, () => readChangeMetadata(repo, dir, { strict: true }));
+  if (metadata.missing) return null;
+  if (metadata.problem) throw new InvalidCoverageInputError(`${rel} が不正です: ${metadata.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);
+  return metadata.schema;
 }
 
 function hasFrontmatter(text) {
@@ -169,59 +160,67 @@ function delegatedList(line) {
 export function planRows(text, { legacy }) {
   const prose = proseText(text, { tables: true });
   const sections = planSections(prose);
-  const table = sections.filter(item => item.heading === '## E2E観点一覧')
+  const tp = tpRowsOf(sections);
+  const delegated = legacy ? [] : delegatedRows(sections);
+  const tableIds = new Set(tp.map(row => row.id));
+  const textOnly = tpReferences(prose).filter(id => !tableIds.has(id));
+  const hasSections = sections.some(item => item.heading === TP_SECTION || item.heading === DELEGATED_SECTION);
+  return { rows: [...tp, ...delegated], textOnly, hasSections };
+}
+
+function tpRowsOf(sections) {
+  const table = sections.filter(item => item.heading === TP_SECTION)
     .flatMap(item => planTables(item.body).flatMap(table => table.rows));
-  const tp = [];
-  for (const row of table) {
-    const id = norm(row['TP-ID'] ?? row['TP ID']);
-    const scenario = norm(row.Scenario ?? row['対応シナリオ']);
+  return table.map(row => {
+    const id = asString(row['TP-ID'] ?? row['TP ID']);
+    const scenario = scenarioCell(row);
     const reason = !('TP-ID' in row) ? 'TP-ID 列を解析できません（列名は TP-ID）'
       : !TP_ID.test(id) ? `TP-ID が不正です: ${id || '(空)'}（TP-NNN が必要です）`
-      : !('Scenario' in row || '対応シナリオ' in row) ? 'シナリオ列を解析できません（列名は Scenario または 対応シナリオ）'
-      : placeholder(scenario) ? 'シナリオ名がありません' : null;
-    tp.push({ kind: 'tp', id, requirement: requirementName(row.Requirement), scenario, parsable: !reason, reason });
-  }
+      : !hasScenarioColumn(row) ? 'シナリオ列を解析できません（列名は Scenario または 対応シナリオ）'
+      : isPlaceholderCell(scenario) ? 'シナリオ名がありません' : null;
+    return { kind: 'tp', id, requirement: requirementName(row.Requirement), scenario, parsable: !reason, reason };
+  });
+}
+
+function unparsedDelegated(reason, row = {}) {
+  return { kind: 'delegated', id: '対象外', requirement: requirementName(row.Requirement), scenario: scenarioCell(row), parsable: false, reason };
+}
+
+// Rows of the delegated-scenario table. A misspelled or repeated heading, a header-only table and a bullet list
+// each become unparsable rows so that the map reports them instead of dropping the declaration.
+function delegatedRows(sections) {
   const delegated = [];
   let delegatedSections = 0;
-  if (!legacy) for (const { heading, body } of sections) {
+  for (const { heading, body } of sections) {
     if (!delegatedHeading(heading)) continue;
     const tables = planTables(body);
     const rows = tables.flatMap(table => table.rows);
     let reason = null;
-    if (heading !== '## 対象外シナリオ') reason = `対象外の表の見出しを解析できません: ${heading}（## 対象外シナリオ が必要です）`;
-    else if (delegatedSections++) reason = '対象外の表の見出しが重複しています: ## 対象外シナリオ';
+    if (heading !== DELEGATED_SECTION) reason = `対象外の表の見出しを解析できません: ${heading}（${DELEGATED_SECTION} が必要です）`;
+    else if (delegatedSections++) reason = `対象外の表の見出しが重複しています: ${DELEGATED_SECTION}`;
     if (reason) {
-      for (const row of rows.length ? rows : [{}]) delegated.push({
-        kind: 'delegated', id: '対象外', requirement: requirementName(row.Requirement),
-        scenario: norm(row.Scenario ?? row['対応シナリオ']), parsable: false, reason,
-      });
+      for (const row of rows.length ? rows : [{}]) delegated.push(unparsedDelegated(reason, row));
       continue;
     }
     for (const { headers } of tables) {
-      if (headers.length) continue;
-      delegated.push({ kind: 'delegated', id: '対象外', requirement: '', scenario: '', parsable: false,
-        reason: '対象外シナリオを表として解析できません（ヘッダ行だけでなく区切り行が必要です）' });
+      if (!headers.length) delegated.push(unparsedDelegated('対象外シナリオを表として解析できません（ヘッダ行だけでなく区切り行が必要です）'));
     }
     for (const line of body.split('\n').filter(delegatedList)) {
-      delegated.push({ kind: 'delegated', id: '対象外', requirement: '', scenario: '', parsable: false,
-        reason: `対象外シナリオを表として解析できません（箇条書きではなく表が必要です）: ${line.trim()}` });
+      delegated.push(unparsedDelegated(`対象外シナリオを表として解析できません（箇条書きではなく表が必要です）: ${line.trim()}`));
     }
     delegated.push(...rows.map(row => ({
       kind: 'delegated',
       id: '対象外',
       requirement: requirementName(row.Requirement),
-      scenario: norm(row.Scenario ?? row['対応シナリオ']),
-      oracle: norm(row.Oracle),
-      layer: norm(row.Layer),
-      method: norm(row.Method),
-      parsable: !placeholder(norm(row.Scenario ?? row['対応シナリオ'])),
-      reason: !('Scenario' in row || '対応シナリオ' in row) ? 'シナリオ列を解析できません（列名は Scenario または 対応シナリオ）' : null,
+      scenario: scenarioCell(row),
+      oracle: asString(row.Oracle),
+      layer: asString(row.Layer),
+      method: asString(row.Method),
+      parsable: !isPlaceholderCell(scenarioCell(row)),
+      reason: !hasScenarioColumn(row) ? 'シナリオ列を解析できません（列名は Scenario または 対応シナリオ）' : null,
     })));
   }
-  const tableIds = new Set(tp.map(row => row.id));
-  const textOnly = tpReferences(prose).filter(id => !tableIds.has(id));
-  const hasSections = sections.some(item => item.heading === '## E2E観点一覧' || item.heading === '## 対象外シナリオ');
-  return { rows: [...tp, ...delegated], textOnly, hasSections };
+  return delegated;
 }
 
 function deltaIndex(repo, dir) {
@@ -302,177 +301,196 @@ function reqKey(capability, requirement) {
 }
 
 export function listArchives(repo) {
-  const root = join(repo, 'openspec/changes/archive');
-  if (!existsSync(root)) return [];
-  return readInput(root, () => readdirSync(root, { withFileTypes: true }))
-    .filter(entry => entry.isDirectory())
-    .map(entry => entry.name)
-    // Folders are YYYY-MM-DD-<id>, so byte order is date order with the name as the tie-breaker.
-    .sort(byteCompare)
-    .map(folder => {
-      const id = folder.match(ARCHIVE_FOLDER)?.[1];
+  return readInput(join(repo, ARCHIVE_ROOT), () => listArchivedChanges(repo))
+    .map(({ folder, id, dir }) => {
       if (!id) throw new InvalidCoverageInputError(`archive フォルダ名は YYYY-MM-DD-<id> が必要です: ${folder}`);
-      return { folder, id, dir: `openspec/changes/archive/${folder}` };
+      return { folder, id, dir };
     });
 }
 
 function listActive(repo) {
-  const root = join(repo, 'openspec/changes');
-  if (!existsSync(root)) return [];
-  return readInput(root, () => readdirSync(root, { withFileTypes: true }))
-    .filter(entry => entry.isDirectory() && entry.name !== 'archive')
-    .map(entry => entry.name)
-    .sort(byteCompare)
-    .map(id => ({ id, dir: `openspec/changes/${id}` }));
-}
-
-function customTag(node) {
-  return Boolean(node?.tag) && !String(node.tag).startsWith('tag:yaml.org,2002:');
+  return readInput(join(repo, CHANGES_ROOT), () => listActiveChanges(repo));
 }
 
 // Config keys other than schema belong to other tools and may use their own tags.
 function schemaTagged(doc) {
-  return customTag(doc?.contents) || customTag(doc?.get?.('schema', true));
+  return isCustomTag(doc?.contents) || isCustomTag(doc?.get?.('schema', true));
 }
 
 export function buildCoverage(repo, { env = process.env } = {}) {
   if (!existsSync(join(repo, 'openspec'))) throw new InvalidCoverageInputError(`openspec/ がありません: ${repo}`);
   const mainNames = new Map();
   const main = listMainScenarios(repo, mainNames);
+  const schemas = validateConfig(repo, env);
+  const archives = listArchives(repo).map((entry, order) => ({ ...readChange(repo, entry.dir, entry.id, order, schemas), folder: entry.folder }));
+  trackArchiveNames(archives);
+  const active = readActiveChanges(repo, schemas, mainNames);
+  const warnings = [...archives.flatMap(change => change.warnings), ...active.warnings];
+
+  const definitions = latestDefinitions(archives);
+  const owners = scenarioOwners(archives);
+  const notes = activeNotes(active.changes);
+  const scenarios = main.map(entry => classifyScenario(entry, owners, notes, definitions.latest));
+  const mainKeys = new Set(main.map(entry => key(entry.capability, entry.requirement, entry.scenario)));
+  const orphans = collectOrphans(archives, mainKeys, definitions.gone);
+  const { unresolved, legacyUnresolved } = collectUnresolved(archives);
+  return { scenarios, orphans, unresolved, legacyUnresolved, archives: archives.length, warnings: [...new Set(warnings)] };
+}
+
+function validateConfig(repo, env) {
   const config = readInput('openspec/config.yaml または config.yml', () => readConfigDocument(repo));
   const configPath = relative(repo, config.located.path);
   if (config.parsed && (config.parsed.errors.length || schemaTagged(config.parsed.doc)
-    || (config.parsed.data != null && (typeof config.parsed.data !== 'object' || Array.isArray(config.parsed.data)))
+    || (config.parsed.data != null && !isPlainMapping(config.parsed.data))
     || (config.parsed.data?.schema != null && typeof config.parsed.data.schema !== 'string'))) {
     throw new InvalidCoverageInputError(`${configPath} が不正です: ${config.parsed.errors.join('; ') || 'schema を持つ YAML mapping が必要です'}`);
   }
-  const schemas = {
+  return {
     defaultSchema: asString(config.parsed?.data?.schema) || null,
     configPath, qeSchema: env.QE_SCHEMA ?? SCHEMA_QE,
   };
-  const archives = listArchives(repo).map((entry, order) => ({ ...readChange(repo, entry.dir, entry.id, order, schemas), folder: entry.folder }));
-  // Archive names must only be compared with names observed up to that point.
-  // The present-day main spec and future additions cannot diagnose historical typos.
-  const names = new Map();
-  const knownNames = capability => {
-    if (!names.has(capability)) names.set(capability, new Set());
-    return names.get(capability);
-  };
-  const checkNames = change => {
-    for (const file of change.delta) {
-      const known = new Set(knownNames(file.capability));
-      // A rename may carry a MODIFIED definition of its new name in the same delta.
-      for (const rename of file.renames) {
-        known.delete(rename.from);
-        known.add(rename.to);
-      }
-      for (const req of file.requirements) {
-        if (req.op === 'MODIFIED' && !known.has(req.name)) {
-          const match = [...known].find(name => name.toLowerCase() === req.name.toLowerCase());
-          if (match) throw new InvalidCoverageInputError(`${change.dir}/specs/${file.capability}/spec.md: MODIFIED の Requirement 名の大小文字が一致しません: ${req.name} / ${match}`);
-        }
+}
+
+function knownNames(names, capability) {
+  if (!names.has(capability)) names.set(capability, new Set());
+  return names.get(capability);
+}
+
+// A MODIFIED requirement whose name differs from a known one only in case is a typo, not a new requirement.
+function checkRequirementNames(change, names) {
+  for (const file of change.delta) {
+    const known = new Set(knownNames(names, file.capability));
+    // A rename may carry a MODIFIED definition of its new name in the same delta.
+    for (const rename of file.renames) {
+      known.delete(rename.from);
+      known.add(rename.to);
+    }
+    for (const req of file.requirements) {
+      if (req.op === 'MODIFIED' && !known.has(req.name)) {
+        const match = [...known].find(name => name.toLowerCase() === req.name.toLowerCase());
+        if (match) throw new InvalidCoverageInputError(`${change.dir}/specs/${file.capability}/spec.md: MODIFIED の Requirement 名の大小文字が一致しません: ${req.name} / ${match}`);
       }
     }
-  };
+  }
+}
+
+// Archive names must only be compared with names observed up to that point.
+// The present-day main spec and future additions cannot diagnose historical typos.
+function trackArchiveNames(archives) {
+  const names = new Map();
   for (const change of archives) {
-    checkNames(change);
+    checkRequirementNames(change, names);
     for (const file of change.delta) for (const rename of file.renames) {
-      knownNames(file.capability).delete(rename.from);
-      knownNames(file.capability).add(rename.to);
+      knownNames(names, file.capability).delete(rename.from);
+      knownNames(names, file.capability).add(rename.to);
     }
     for (const file of change.delta) for (const req of file.requirements) {
-      const known = knownNames(file.capability);
+      const known = knownNames(names, file.capability);
       if (req.op === 'REMOVED') known.delete(req.name);
       else known.add(req.name);
     }
   }
-  // Active changes are checked against current main names, independently of other WIP.
-  names.clear();
-  for (const [capability, requirements] of mainNames) names.set(capability, requirements);
-  const warnings = archives.flatMap(change => change.warnings);
-  const active = [];
+}
+
+// Active changes are checked against current main names, independently of other WIP.
+// An active change with invalid input is left out of the notes rather than failing the map.
+function readActiveChanges(repo, schemas, mainNames) {
+  const names = new Map(mainNames);
+  const changes = [];
+  const warnings = [];
   for (const entry of listActive(repo)) {
     try {
       const change = readChange(repo, entry.dir, entry.id, Infinity, schemas);
-      checkNames(change);
-      active.push(change);
+      checkRequirementNames(change, names);
+      changes.push(change);
       warnings.push(...change.warnings);
     } catch (err) {
       if (!(err instanceof InvalidCoverageInputError) || err instanceof CoverageReadError) throw err;
       warnings.push(`進行中の change ${entry.id} を注記から除外しました: ${err.message}`);
     }
   }
+  return { changes, warnings };
+}
 
-  // Latest change that defined each requirement, and what later removed or renamed it.
-  const latestDef = new Map();
+// Latest change that defined each requirement, and what later removed or renamed it.
+function latestDefinitions(archives) {
+  const latest = new Map();
   const gone = new Map();
   for (const change of archives) {
     for (const file of change.delta) {
       for (const requirement of file.requirements) {
         const at = reqKey(file.capability, requirement.name);
         if (requirement.op === 'ADDED' || requirement.op === 'MODIFIED') {
-          latestDef.set(at, { ...change, operation: requirement.op });
+          latest.set(at, { ...change, operation: requirement.op });
           gone.delete(at);
         } else if (requirement.op === 'REMOVED') {
-          latestDef.delete(at);
+          latest.delete(at);
           gone.set(at, `REMOVED（${change.id}）`);
         }
       }
       for (const rename of file.renames) {
         const from = reqKey(file.capability, rename.from);
-        latestDef.delete(from);
+        latest.delete(from);
         gone.set(from, `RENAMED → ${rename.to}（${change.id}）`);
-        latestDef.set(reqKey(file.capability, rename.to), { ...change, operation: 'RENAMED' });
+        latest.set(reqKey(file.capability, rename.to), { ...change, operation: 'RENAMED' });
       }
     }
   }
+  return { latest, gone };
+}
 
-  // The most recently archived change with rows for a scenario owns its mapping.
-  const mapping = new Map();
+// The most recently archived change with rows for a scenario owns its mapping.
+function scenarioOwners(archives) {
+  const owners = new Map();
   for (const change of archives) {
     for (const row of change.rows) {
       const at = key(row.capability, row.requirement, row.scenario);
-      const held = mapping.get(at);
-      if (!held || held.change.order < change.order) mapping.set(at, { change, rows: [row] });
+      const held = owners.get(at);
+      if (!held || held.change.order < change.order) owners.set(at, { change, rows: [row] });
       else if (held.change === change) held.rows.push(row);
     }
   }
-  const activeNotes = new Map();
+  return owners;
+}
+
+function activeNotes(active) {
+  const notes = new Map();
   for (const change of active) {
     for (const row of change.rows) {
       const at = key(row.capability, row.requirement, row.scenario);
-      const list = activeNotes.get(at) ?? [];
+      const list = notes.get(at) ?? [];
       if (!list.includes(change.id)) list.push(change.id);
-      activeNotes.set(at, list);
+      notes.set(at, list);
     }
   }
+  return notes;
+}
 
-  const mainKeys = new Set();
-  const scenarios = main.map(entry => {
-    const at = key(entry.capability, entry.requirement, entry.scenario);
-    mainKeys.add(at);
-    const held = mapping.get(at);
-    const row = { ...entry, classification: CLASS.none, source: null, tps: [], result: null, active: activeNotes.get(at) ?? [] };
-    if (!held) return row;
-    const tps = held.rows.filter(item => item.kind === 'tp');
-    const declared = held.rows.filter(item => item.kind === 'delegated');
-    const def = latestDef.get(reqKey(entry.capability, entry.requirement));
-    const staleBy = def && def.order > held.change.order ? def.id : null;
-    row.source = { change: held.change.id, archive: held.change.folder };
-    if (tps.length) {
-      row.tps = tps.map(item => ({ change: held.change.id, id: item.id }));
-      row.source.tps = tps.map(item => item.id);
-    } else {
-      row.source.declared = declared.map(item => ({ oracle: item.oracle, layer: item.layer, method: item.method }));
-    }
-    if (staleBy) {
-      row.classification = CLASS.stale;
-      row.source.modifiedBy = staleBy;
-      row.source.operation = def.operation;
-    } else row.classification = tps.length ? CLASS.e2e : CLASS.declared;
-    return row;
-  });
+function classifyScenario(entry, owners, notes, latest) {
+  const at = key(entry.capability, entry.requirement, entry.scenario);
+  const held = owners.get(at);
+  const row = { ...entry, classification: CLASS.none, source: null, tps: [], result: null, active: notes.get(at) ?? [] };
+  if (!held) return row;
+  const tps = held.rows.filter(item => item.kind === 'tp');
+  const declared = held.rows.filter(item => item.kind === 'delegated');
+  const def = latest.get(reqKey(entry.capability, entry.requirement));
+  const staleBy = def && def.order > held.change.order ? def.id : null;
+  row.source = { change: held.change.id, archive: held.change.folder };
+  if (tps.length) {
+    row.tps = tps.map(item => ({ change: held.change.id, id: item.id }));
+    row.source.tps = tps.map(item => item.id);
+  } else {
+    row.source.declared = declared.map(item => ({ oracle: item.oracle, layer: item.layer, method: item.method }));
+  }
+  if (staleBy) {
+    row.classification = CLASS.stale;
+    row.source.modifiedBy = staleBy;
+    row.source.operation = def.operation;
+  } else row.classification = tps.length ? CLASS.e2e : CLASS.declared;
+  return row;
+}
 
+function collectOrphans(archives, mainKeys, gone) {
   const orphans = [];
   for (const change of archives) {
     for (const row of change.rows) {
@@ -489,18 +507,22 @@ export function buildCoverage(repo, { env = process.env } = {}) {
       });
     }
   }
+  return orphans;
+}
+
+function collectUnresolved(archives) {
   const unresolved = [];
   const legacyUnresolved = [];
   for (const change of archives) {
+    const list = change.legacy ? legacyUnresolved : unresolved;
     for (const row of change.unresolved) {
-      const item = { change: change.id, archive: change.folder, id: row.id, requirement: row.requirement, scenario: row.scenario, reason: row.reason };
-      (change.legacy ? legacyUnresolved : unresolved).push(item);
+      list.push({ change: change.id, archive: change.folder, id: row.id, requirement: row.requirement, scenario: row.scenario, reason: row.reason });
     }
     for (const id of change.textOnly) {
-      (change.legacy ? legacyUnresolved : unresolved).push({ change: change.id, archive: change.folder, id, requirement: '', scenario: '', reason: 'TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）' });
+      list.push({ change: change.id, archive: change.folder, id, requirement: '', scenario: '', reason: 'TP-ID を対応表の行として解析できません（表の外、見出しまたは列名を確認）' });
     }
   }
-  return { scenarios, orphans, unresolved, legacyUnresolved, archives: archives.length, warnings: [...new Set(warnings)] };
+  return { unresolved, legacyUnresolved };
 }
 
 const RANK = { fail: 3, [NOT_RUN]: 2, pass: 1 };
@@ -573,10 +595,6 @@ export function summarize(model) {
   return summary;
 }
 
-function cell(value) {
-  return String(value ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
-}
-
 function sourceText(row) {
   const parts = [];
   if (row.source?.tps) parts.push(`${row.source.change} ${row.source.tps.join(', ')}`);
@@ -609,7 +627,7 @@ export function renderMarkdown(model, summary = summarize(model)) {
     lines.push('| capability | Requirement | Scenario | 分類 | 出所 | 結果 |');
     lines.push('|------------|-------------|----------|------|------|------|');
     for (const row of model.scenarios) {
-      lines.push(`| ${cell(row.capability)} | ${cell(row.requirement)} | ${cell(row.scenario)} | ${row.classification} | ${cell(sourceText(row))} | ${cell(resultText(row, model.withResults))} |`);
+      lines.push(`| ${markdownCell(row.capability)} | ${markdownCell(row.requirement)} | ${markdownCell(row.scenario)} | ${row.classification} | ${markdownCell(sourceText(row))} | ${markdownCell(resultText(row, model.withResults))} |`);
     }
   }
   if (model.orphans.length) {
@@ -617,7 +635,7 @@ export function renderMarkdown(model, summary = summarize(model)) {
     lines.push('| change | TP-ID | capability | Requirement | Scenario | 理由 |');
     lines.push('|--------|-------|------------|-------------|----------|------|');
     for (const row of model.orphans) {
-      lines.push(`| ${cell(row.change)} | ${row.id} | ${cell(row.capability)} | ${cell(row.requirement)} | ${cell(row.scenario)} | ${cell(row.reason)} |`);
+      lines.push(`| ${markdownCell(row.change)} | ${row.id} | ${markdownCell(row.capability)} | ${markdownCell(row.requirement)} | ${markdownCell(row.scenario)} | ${markdownCell(row.reason)} |`);
     }
   }
   for (const [title, list] of [[UNRESOLVED, model.unresolved], [LEGACY_UNRESOLVED, model.legacyUnresolved]]) {
@@ -626,10 +644,10 @@ export function renderMarkdown(model, summary = summarize(model)) {
     lines.push('| change | 行 | Requirement | Scenario | 理由 |');
     lines.push('|--------|----|-------------|----------|------|');
     for (const row of list) {
-      lines.push(`| ${cell(row.change)} | ${cell(row.id)} | ${cell(row.requirement)} | ${cell(row.scenario)} | ${cell(row.reason)} |`);
+      lines.push(`| ${markdownCell(row.change)} | ${markdownCell(row.id)} | ${markdownCell(row.requirement)} | ${markdownCell(row.scenario)} | ${markdownCell(row.reason)} |`);
     }
   }
-  if (model.warnings?.length) lines.push('', '## 警告', '', ...model.warnings.map(warning => `- ${cell(warning)}`));
+  if (model.warnings?.length) lines.push('', '## 警告', '', ...model.warnings.map(warning => `- ${markdownCell(warning)}`));
   lines.push('', '## 集計', '');
   lines.push(`- シナリオ: ${summary.scenarios} 件（archive 済み change ${model.archives} 件から集計）`);
   for (const label of [CLASS.e2e, CLASS.declared, CLASS.none, CLASS.stale]) lines.push(`- ${label}: ${summary[label]}`);
@@ -705,7 +723,7 @@ function coverageOutput({ repo, resultsPath = null, maxAge = null, strict = fals
     try {
       raw = readResults ? readResults(resultsPath) : readFileSync(resultsPath, 'utf8');
     } catch (err) {
-      return { exitCode: 2, stdout: '', stderr: `Playwright JSON レポートを読めません: ${resultsPath} (${err.code ?? err.message})\n` };
+      return { exitCode: 2, stdout: '', stderr: `Playwright JSON レポートを読めません: ${resultsPath} (${errorCode(err)})\n` };
     }
     try {
       results = JSON.parse(raw);

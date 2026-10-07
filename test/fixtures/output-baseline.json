@@ -1,0 +1,503 @@
+{
+  "ci": {
+    "every stage runs and the first failing exit code wins": {
+      "code": 4,
+      "calls": [
+        "bash -c setup",
+        "bash -c echo test",
+        "bash -c mutate",
+        "bash -c contract",
+        "bash -c run-e2e",
+        "bash -c run-regression"
+      ],
+      "lines": [
+        "setup-mode=caller: npm ci は実行しません。runtime・依存・browser・DB は setup-command の担当です。",
+        "setup ok",
+        "echo test ok",
+        "bash -c mutate failed",
+        "mutate out",
+        "mutate err",
+        "bash -c contract failed",
+        "contract out",
+        "contract err",
+        "run-e2e ok",
+        "実行開始: <time> (<age>) / 所要 <dur>",
+        "",
+        "| TP-ID | テスト | 結果 | フレーク |",
+        "|-------|-------|------|---------|",
+        "| TP-001 | 一覧を表示する | pass |  |",
+        "",
+        "合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0",
+        "",
+        "⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行",
+        "run-regression ok",
+        "# シナリオ対応表",
+        "",
+        "openspec/specs にシナリオが 0 件です。",
+        "",
+        "## 集計",
+        "",
+        "- シナリオ: 0 件（archive 済み change 0 件から集計）",
+        "- 保護（E2E）: 0",
+        "- 保護（他層の宣言）: 0",
+        "- 未保護: 0",
+        "- 要再確認: 0",
+        "- 孤立: 0 TP",
+        "- 対応不明: 0 行 / 旧形式・対応不明: 0 行",
+        "- 実行で確認済み: 0 / fail: 0 / 未実行: 0",
+        "- 保護率（E2E）: 算出しません（シナリオ 0 件）",
+        "- 保護率（他層の宣言を含む）: 算出しません（シナリオ 0 件）",
+        "- 保護率（実行で確認済み）: 算出しません（シナリオ 0 件）",
+        "- 要対応: 0",
+        "▶ demo (active/plan)",
+        "! quality.md 未承認(実装開始前に人間の承認が必要)",
+        "! risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)",
+        "! Oracle が空です",
+        "✗ risk_level high は Risk Register の最大値 (なし) と一致しません",
+        "✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）",
+        "✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）"
+      ],
+      "riskLevel": "high",
+      "phase": "plan",
+      "e2eRan": true,
+      "stepSummary": "## openspec-custom-testkit E2E\n\n### demo\n\n実行開始: <time> (<age>) / 所要 <dur>\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\n\n| TP-ID | テスト | project | 結果 | フレーク | 添付 |\n|-------|--------|---------|------|----------|------|\n| TP-001 | 一覧を表示する | chromium | pass |  | 添付なし |\n",
+      "stepSummaryFile": "## openspec-custom-testkit E2E\n\n### demo\n\n実行開始: <time> (<age>) / 所要 <dur>\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\n\n| TP-ID | テスト | project | 結果 | フレーク | 添付 |\n|-------|--------|---------|------|----------|------|\n| TP-001 | 一覧を表示する | chromium | pass |  | 添付なし |\n",
+      "githubOutput": "risk_level=high\nrun_dir=<run>\ne2e_ran=true\nsummary_file=<repo>/test-results/testkit/<summary>/step-summary.md\n",
+      "summaryTxt": "setup-mode=caller: npm ci は実行しません。runtime・依存・browser・DB は setup-command の担当です。\nsetup ok\necho test ok\nbash -c mutate failed\nmutate out\nmutate err\nbash -c contract failed\ncontract out\ncontract err\nrun-e2e ok\n実行開始: <time> (<age>) / 所要 <dur>\n\n| TP-ID | テスト | 結果 | フレーク |\n|-------|-------|------|---------|\n| TP-001 | 一覧を表示する | pass |  |\n\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\nrun-regression ok\n# シナリオ対応表\n\nopenspec/specs にシナリオが 0 件です。\n\n## 集計\n\n- シナリオ: 0 件（archive 済み change 0 件から集計）\n- 保護（E2E）: 0\n- 保護（他層の宣言）: 0\n- 未保護: 0\n- 要再確認: 0\n- 孤立: 0 TP\n- 対応不明: 0 行 / 旧形式・対応不明: 0 行\n- 実行で確認済み: 0 / fail: 0 / 未実行: 0\n- 保護率（E2E）: 算出しません（シナリオ 0 件）\n- 保護率（他層の宣言を含む）: 算出しません（シナリオ 0 件）\n- 保護率（実行で確認済み）: 算出しません（シナリオ 0 件）\n- 要対応: 0\n▶ demo (active/plan)\n! quality.md 未承認(実装開始前に人間の承認が必要)\n! risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)\n! Oracle が空です\n✗ risk_level high は Risk Register の最大値 (なし) と一致しません\n✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）\n✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）\nexit 4\n",
+      "runFiles": [
+        "./contract.log",
+        "./coverage.json",
+        "./coverage.md",
+        "./demo.report.txt",
+        "./demo.summary.md",
+        "./manifest.json",
+        "./mutation.log",
+        "./regression-results.json",
+        "./results.json",
+        "./test.log"
+      ],
+      "manifest": {
+        "run_ids": [
+          "R-test"
+        ],
+        "runs": [
+          {
+            "id": "R-test",
+            "command": "echo test",
+            "exit_code": 0,
+            "change_id": "demo"
+          }
+        ],
+        "executions": [
+          {
+            "id": "<id>-test",
+            "command": "echo test",
+            "exit_code": 0
+          },
+          {
+            "id": "<id>-mutation",
+            "command": "mutate",
+            "exit_code": 4
+          },
+          {
+            "id": "<id>-contract",
+            "command": "contract",
+            "exit_code": 5
+          },
+          {
+            "id": "<id>-e2e",
+            "command": "run-e2e",
+            "exit_code": 0
+          },
+          {
+            "id": "<id>-regression",
+            "command": "run-regression",
+            "exit_code": 0
+          }
+        ]
+      }
+    },
+    "missing commands for a final high-risk E2E change are reported in order": {
+      "code": 1,
+      "calls": [],
+      "lines": [
+        "setup-mode=caller: npm ci は実行しません。runtime・依存・browser・DB は setup-command の担当です。",
+        "最終検証では test-command を空にできません",
+        "risk_level=high では mutation-command が必要です",
+        "E2E required の change がありますが e2e-command がありません",
+        "▶ demo (active/final)",
+        "! quality.md 未承認(実装開始前に人間の承認が必要)",
+        "! structure: fail",
+        "! execution: unverified",
+        "✗ risk_level high は Risk Register の最大値 (なし) と一致しません",
+        "✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）",
+        "✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）",
+        "✗ risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)",
+        "✗ 空の Oracle 集合は seal できません",
+        "✗ 未完了タスクが残っています",
+        "✗ format_version は 1 である必要があります",
+        "✗ run R-test の started_at がありません",
+        "✗ run R-test の revision がありません",
+        "✗ run R-test の source がありません",
+        "✗ run R-test の source_sha256 がありません",
+        "✗ run R-test の source はリポジトリ内の相対パスだけを受け付けます",
+        "✗ run R-other の started_at がありません",
+        "✗ run R-other の revision がありません",
+        "✗ run R-other の source がありません",
+        "✗ run R-other の source_sha256 がありません",
+        "✗ run R-other の source はリポジトリ内の相対パスだけを受け付けます",
+        "✗ 独立反証の実施記録がありません",
+        "✗ high の Mutation コマンドが未指定です",
+        "✗ high の Mutation 結果がありません",
+        "✗ Mutation 閾値は 70% 以上である必要があります",
+        "✗ high の Human Code Review がありません",
+        "✗ high のレビューにドメイン担当が含まれていません",
+        "✗ demo: quality.md に ## Non-functional Viewpoints がありません（.openspec.yaml の created がありません。導入前の change として扱えません）",
+        "✗ demo: R1 は Risk Register にありません",
+        "✗ demo: O1 は Test Oracles にありません",
+        "✗ demo: R1 は Risk Register にありません",
+        "✗ demo: O1 は Test Oracles にありません",
+        "✗ demo: R1 は Risk Register にありません",
+        "✗ demo: O1 は Test Oracles にありません",
+        "✗ demo: R1 は Risk Register にありません",
+        "✗ demo: O1 は Test Oracles にありません",
+        "✗ demo: R1 は Risk Register にありません",
+        "✗ demo: O1 は Test Oracles にありません",
+        "✗ demo: required なのに quality の層選択に E2E がありません",
+        "✗ demo: tests/e2e/fixtures/README.md がありません。none を登録する README を作成してください",
+        "✗ demo: @demo が tests/e2e にありません",
+        "✗ demo: @TP-001 が @demo と同一テスト文脈にありません",
+        "✗ demo: @TP-002 が @demo と同一テスト文脈にありません",
+        "✗ demo: @TP-003 が @demo と同一テスト文脈にありません",
+        "✗ demo: @TP-004 が @demo と同一テスト文脈にありません",
+        "✗ demo: @TP-005 が @demo と同一テスト文脈にありません",
+        "✗ e2e-lint unreadable tests/e2e E2E ルートを参照できません: tests/e2e (ENOENT)",
+        "✗ e2e-lint missing-tag tests/e2e demo: TP-001 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）",
+        "✗ e2e-lint missing-tag tests/e2e demo: TP-002 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）",
+        "✗ e2e-lint missing-tag tests/e2e demo: TP-003 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）",
+        "✗ e2e-lint missing-tag tests/e2e demo: TP-004 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）",
+        "✗ e2e-lint missing-tag tests/e2e demo: TP-005 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）"
+      ],
+      "riskLevel": "high",
+      "phase": "final",
+      "e2eRan": false,
+      "stepSummary": "## openspec-custom-testkit E2E\n\nE2E は実行していません。E2E required の change (demo) がありますが、e2e-command が空です。\n",
+      "stepSummaryFile": "## openspec-custom-testkit E2E\n\nE2E は実行していません。E2E required の change (demo) がありますが、e2e-command が空です。\n",
+      "githubOutput": "risk_level=high\nrun_dir=\ne2e_ran=false\nsummary_file=<repo>/test-results/testkit/<summary>/step-summary.md\n",
+      "summaryTxt": "setup-mode=caller: npm ci は実行しません。runtime・依存・browser・DB は setup-command の担当です。\n最終検証では test-command を空にできません\nrisk_level=high では mutation-command が必要です\nE2E required の change がありますが e2e-command がありません\n▶ demo (active/final)\n! quality.md 未承認(実装開始前に人間の承認が必要)\n! structure: fail\n! execution: unverified\n✗ risk_level high は Risk Register の最大値 (なし) と一致しません\n✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）\n✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）\n✗ risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)\n✗ 空の Oracle 集合は seal できません\n✗ 未完了タスクが残っています\n✗ format_version は 1 である必要があります\n✗ run R-test の started_at がありません\n✗ run R-test の revision がありません\n✗ run R-test の source がありません\n✗ run R-test の source_sha256 がありません\n✗ run R-test の source はリポジトリ内の相対パスだけを受け付けます\n✗ run R-other の started_at がありません\n✗ run R-other の revision がありません\n✗ run R-other の source がありません\n✗ run R-other の source_sha256 がありません\n✗ run R-other の source はリポジトリ内の相対パスだけを受け付けます\n✗ 独立反証の実施記録がありません\n✗ high の Mutation コマンドが未指定です\n✗ high の Mutation 結果がありません\n✗ Mutation 閾値は 70% 以上である必要があります\n✗ high の Human Code Review がありません\n✗ high のレビューにドメイン担当が含まれていません\n✗ demo: quality.md に ## Non-functional Viewpoints がありません（.openspec.yaml の created がありません。導入前の change として扱えません）\n✗ demo: R1 は Risk Register にありません\n✗ demo: O1 は Test Oracles にありません\n✗ demo: R1 は Risk Register にありません\n✗ demo: O1 は Test Oracles にありません\n✗ demo: R1 は Risk Register にありません\n✗ demo: O1 は Test Oracles にありません\n✗ demo: R1 は Risk Register にありません\n✗ demo: O1 は Test Oracles にありません\n✗ demo: R1 は Risk Register にありません\n✗ demo: O1 は Test Oracles にありません\n✗ demo: required なのに quality の層選択に E2E がありません\n✗ demo: tests/e2e/fixtures/README.md がありません。none を登録する README を作成してください\n✗ demo: @demo が tests/e2e にありません\n✗ demo: @TP-001 が @demo と同一テスト文脈にありません\n✗ demo: @TP-002 が @demo と同一テスト文脈にありません\n✗ demo: @TP-003 が @demo と同一テスト文脈にありません\n✗ demo: @TP-004 が @demo と同一テスト文脈にありません\n✗ demo: @TP-005 が @demo と同一テスト文脈にありません\n✗ e2e-lint unreadable tests/e2e E2E ルートを参照できません: tests/e2e (ENOENT)\n✗ e2e-lint missing-tag tests/e2e demo: TP-001 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）\n✗ e2e-lint missing-tag tests/e2e demo: TP-002 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）\n✗ e2e-lint missing-tag tests/e2e demo: TP-003 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）\n✗ e2e-lint missing-tag tests/e2e demo: TP-004 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）\n✗ e2e-lint missing-tag tests/e2e demo: TP-005 を @demo と同じテストに持つ有効なテストがありません（skip / fixme / fail のテストは数えません）\nexit 1\n",
+      "runFiles": null,
+      "manifest": null
+    },
+    "npm setup installs the browser before the commands": {
+      "code": 1,
+      "calls": [
+        "npm ci",
+        "npx playwright install --with-deps chromium",
+        "bash -c echo test",
+        "bash -c mutate",
+        "bash -c run-e2e"
+      ],
+      "lines": [
+        "ci ok",
+        "chromium ok",
+        "echo test ok",
+        "mutate ok",
+        "run-e2e ok",
+        "実行開始: <time> (<age>) / 所要 <dur>",
+        "",
+        "| TP-ID | テスト | 結果 | フレーク |",
+        "|-------|-------|------|---------|",
+        "| TP-001 | 一覧を表示する | pass |  |",
+        "",
+        "合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0",
+        "",
+        "⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行",
+        "▶ demo (active/plan)",
+        "! quality.md 未承認(実装開始前に人間の承認が必要)",
+        "! risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)",
+        "! Oracle が空です",
+        "✗ risk_level high は Risk Register の最大値 (なし) と一致しません",
+        "✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）",
+        "✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）"
+      ],
+      "riskLevel": "high",
+      "phase": "plan",
+      "e2eRan": true,
+      "stepSummary": "## openspec-custom-testkit E2E\n\n### demo\n\n実行開始: <time> (<age>) / 所要 <dur>\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\n\n| TP-ID | テスト | project | 結果 | フレーク | 添付 |\n|-------|--------|---------|------|----------|------|\n| TP-001 | 一覧を表示する | chromium | pass |  | 添付なし |\n",
+      "stepSummaryFile": "## openspec-custom-testkit E2E\n\n### demo\n\n実行開始: <time> (<age>) / 所要 <dur>\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\n\n| TP-ID | テスト | project | 結果 | フレーク | 添付 |\n|-------|--------|---------|------|----------|------|\n| TP-001 | 一覧を表示する | chromium | pass |  | 添付なし |\n",
+      "githubOutput": "risk_level=high\nrun_dir=<run>\ne2e_ran=true\nsummary_file=<repo>/test-results/testkit/<summary>/step-summary.md\n",
+      "summaryTxt": "ci ok\nchromium ok\necho test ok\nmutate ok\nrun-e2e ok\n実行開始: <time> (<age>) / 所要 <dur>\n\n| TP-ID | テスト | 結果 | フレーク |\n|-------|-------|------|---------|\n| TP-001 | 一覧を表示する | pass |  |\n\n合計 1 件: pass 1 / fail 0 / skip 0 / フレーク 0\n\n⚠ カバレッジ欠落: TP-002, TP-003, TP-004, TP-005 に対応するテストが未実装/未実行\n▶ demo (active/plan)\n! quality.md 未承認(実装開始前に人間の承認が必要)\n! risk_level=high は qa_review_required_levels [medium, high] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)\n! Oracle が空です\n✗ risk_level high は Risk Register の最大値 (なし) と一致しません\n✗ Test Layer Mapping の表に Layer 列がありません（見出しが `Layer` で始まる列を置きます）\n✗ quality.md に `## Residual Risk` がありません（保証しないことが無ければ `- なし` と書きます）\nexit 1\n",
+      "runFiles": [
+        "./demo.report.txt",
+        "./demo.summary.md",
+        "./manifest.json",
+        "./mutation.log",
+        "./results.json",
+        "./test.log"
+      ],
+      "manifest": {
+        "run_ids": [
+          "R-test"
+        ],
+        "runs": [
+          {
+            "id": "R-test",
+            "command": "echo test",
+            "exit_code": 0,
+            "change_id": "demo"
+          }
+        ],
+        "executions": [
+          {
+            "id": "<id>-test",
+            "command": "echo test",
+            "exit_code": 0
+          },
+          {
+            "id": "<id>-mutation",
+            "command": "mutate",
+            "exit_code": 0
+          },
+          {
+            "id": "<id>-e2e",
+            "command": "run-e2e",
+            "exit_code": 0
+          }
+        ]
+      }
+    },
+    "an early setup failure stops before any command": {
+      "code": 1,
+      "calls": [],
+      "lines": [
+        "未対応の setup-mode です: invalid"
+      ],
+      "riskLevel": null,
+      "phase": null,
+      "e2eRan": null,
+      "stepSummary": "## openspec-custom-testkit E2E\n\n入力・セットアップの確認で停止しました（終了コード 1）。E2E は実行していません。\n\n<pre>未対応の setup-mode です: invalid</pre>\n",
+      "stepSummaryFile": "## openspec-custom-testkit E2E\n\n入力・セットアップの確認で停止しました（終了コード 1）。E2E は実行していません。\n\n<pre>未対応の setup-mode です: invalid</pre>\n",
+      "githubOutput": "run_dir=\ne2e_ran=false\nsummary_file=<repo>/test-results/testkit/<summary>/step-summary.md\n",
+      "summaryTxt": "未対応の setup-mode です: invalid\nexit 1\n",
+      "runFiles": null,
+      "manifest": null
+    }
+  },
+  "install": {
+    "dryRun": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 導入先: <target> (dry-run)",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (既定値(検出できず))",
+        "log ",
+        "実行予定の操作(書き込みは行っていません):",
+        "log   config  openspec/config.yaml を新規作成 (schema: quality-driven-e2e, language: Japanese)",
+        "log   stamp   .openspec-custom-testkit.json (version <version>, e2eRoot tests/e2e, migration complete)",
+        "log ",
+        "次のステップ:",
+        "log   1. openspec init --tools <tool>   # 例: --tools claude",
+        "log      ※ config.yaml が既にあるため、openspec init に --language を付けるとエラーになります。",
+        "log        言語はこの kit の --language で指定してください。",
+        "log ",
+        "dry-run 完了。書き込みは行っていません。"
+      ]
+    },
+    "install": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 導入先: <target>",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (既定値(検出できず))",
+        "log ",
+        "作成: <payload> 件 / 上書き: 0 件 / 差分により skip: 0 件",
+        "log   config.yaml: openspec/config.yaml を新規作成 (schema: quality-driven-e2e, language: Japanese)",
+        "log ",
+        "repo-local のファイルは準備しましたが、統合 ready ではありません。",
+        "log ",
+        "次のステップ:",
+        "log   1. openspec init --tools <tool>   # 例: --tools claude",
+        "log      ※ config.yaml が既にあるため、openspec init に --language を付けるとエラーになります。",
+        "log        言語はこの kit の --language で指定してください。",
+        "log   - openspec schema validate quality-driven-e2e",
+        "log   - 既定 schema を自動変更しなかった場合: openspec new change <name> --schema quality-driven-e2e",
+        "log   - node scripts/testkit-gate.mjs doctor",
+        "log ",
+        "導入が完了しました。"
+      ]
+    },
+    "repeat": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 更新先: <target>",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (.openspec-custom-testkit.json の記録)",
+        "log ",
+        "作成: 0 件 / 上書き: 0 件 / 差分により skip: 0 件",
+        "log   変更はありません(既に最新です)。",
+        "log ",
+        "repo-local のファイルは準備しましたが、統合 ready ではありません。",
+        "log ",
+        "次のステップ:",
+        "log   1. openspec init --tools <tool>   # 例: --tools claude",
+        "log      ※ config.yaml が既にあるため、openspec init に --language を付けるとエラーになります。",
+        "log        言語はこの kit の --language で指定してください。",
+        "log   - openspec schema validate quality-driven-e2e",
+        "log   - 既定 schema を自動変更しなかった場合: openspec new change <name> --schema quality-driven-e2e",
+        "log   - node scripts/testkit-gate.mjs doctor",
+        "log ",
+        "更新が完了しました。"
+      ]
+    },
+    "edited": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 更新先: <target>",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (.openspec-custom-testkit.json の記録)",
+        "log   保持: openspec/quality-policy.md(--force でも上書きしません)",
+        "log ",
+        "差分あり(上書きしません): scripts/check-test-plan.sh",
+        "log --- target/scripts/check-test-plan.sh",
+        "+++ payload/scripts/check-test-plan.sh",
+        " #!/usr/bin/env bash",
+        "-# edited",
+        "-exit 0",
+        "+# E2E root は stamp をもとに Node 側 (scripts/lib/e2e-root.mjs) で解決する。",
+        "+set -euo pipefail",
+        "+dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
+        "+exec node \"$dir/check-test-plan.mjs\" \"$@\"",
+        " ",
+        "log ",
+        "作成: 0 件 / 上書き: 0 件 / 差分により skip: 1 件",
+        "log ",
+        "以下のファイルは対象側の内容が異なるため skip しました(上書きするには --force):",
+        "log   - scripts/check-test-plan.sh",
+        "log ",
+        "移行状態: incomplete",
+        "log 統合完了ではありません",
+        "log 未移行ファイルと次の操作:",
+        "log   - openspec/quality-policy.md",
+        "log   - scripts/check-test-plan.sh",
+        "log   配布スクリプトの差分を確認してから再実行してください。独自編集は --force で配布内容に戻ります。",
+        "log   openspec/quality-policy.md と実在の Playwright config は --force でも自動変更しません。",
+        "log   修復後に node scripts/testkit-gate.mjs doctor が成功するまで統合完了ではありません。",
+        "log ",
+        "次のステップ:",
+        "log   - openspec schema validate quality-driven-e2e",
+        "log   - 既定 schema を自動変更しなかった場合: openspec new change <name> --schema quality-driven-e2e",
+        "log   - node scripts/testkit-gate.mjs doctor",
+        "log ",
+        "更新が完了しました。"
+      ]
+    },
+    "editedDryRun": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 更新先: <target> (dry-run)",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (.openspec-custom-testkit.json の記録)",
+        "log   保持: openspec/quality-policy.md(--force でも上書きしません)",
+        "log ",
+        "差分あり(上書きしません): scripts/check-test-plan.sh",
+        "log --- target/scripts/check-test-plan.sh",
+        "+++ payload/scripts/check-test-plan.sh",
+        " #!/usr/bin/env bash",
+        "-# edited",
+        "-exit 0",
+        "+# E2E root は stamp をもとに Node 側 (scripts/lib/e2e-root.mjs) で解決する。",
+        "+set -euo pipefail",
+        "+dir=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
+        "+exec node \"$dir/check-test-plan.mjs\" \"$@\"",
+        " ",
+        "log ",
+        "実行予定の操作(書き込みは行っていません):",
+        "log   keep   openspec/quality-policy.md",
+        "log   skip(差分あり) scripts/check-test-plan.sh",
+        "log ",
+        "移行状態: incomplete",
+        "log 統合完了ではありません",
+        "log   - openspec/quality-policy.md",
+        "log   - scripts/check-test-plan.sh",
+        "log ",
+        "次のステップ:",
+        "log   1. openspec init --tools <tool>   # 例: --tools claude",
+        "log      ※ config.yaml が既にあるため、openspec init に --language を付けるとエラーになります。",
+        "log        言語はこの kit の --language で指定してください。",
+        "log ",
+        "dry-run 完了。書き込みは行っていません。"
+      ]
+    },
+    "forced": {
+      "code": 0,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 更新先: <target>",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (.openspec-custom-testkit.json の記録)",
+        "log   保持: openspec/quality-policy.md(--force でも上書きしません)",
+        "log ",
+        "作成: 0 件 / 上書き: 1 件 / 差分により skip: 0 件",
+        "log ",
+        "移行状態: incomplete",
+        "log 統合完了ではありません",
+        "log 未移行ファイルと次の操作:",
+        "log   - openspec/quality-policy.md",
+        "log   配布スクリプトの差分を確認してから再実行してください。独自編集は --force で配布内容に戻ります。",
+        "log   openspec/quality-policy.md と実在の Playwright config は --force でも自動変更しません。",
+        "log   修復後に node scripts/testkit-gate.mjs doctor が成功するまで統合完了ではありません。",
+        "log ",
+        "次のステップ:",
+        "log   - openspec schema validate quality-driven-e2e",
+        "log   - 既定 schema を自動変更しなかった場合: openspec new change <name> --schema quality-driven-e2e",
+        "log   - node scripts/testkit-gate.mjs doctor",
+        "log ",
+        "更新が完了しました。"
+      ]
+    },
+    "stamp": {
+      "e2eRoot": "tests/e2e",
+      "migration": {
+        "status": "incomplete",
+        "pending": [
+          "openspec/quality-policy.md"
+        ]
+      },
+      "upstream": {
+        "qe": "e537d10da53112fce684f31d1602c1e061ab87a2",
+        "e2e": "53e354fa366f02cf412e9ce93419463a37e8255c",
+        "openspec": "1.13.1"
+      },
+      "openspec": {
+        "ready": false,
+        "version": null,
+        "reason": "cli-missing"
+      },
+      "features": {
+        "nonfunctionalViewpoints": {
+          "since": "2026-10-07"
+        }
+      },
+      "fileCount": true,
+      "installedAt": "string",
+      "version": "string"
+    },
+    "nonGit": {
+      "code": 1,
+      "lines": [
+        "log openspec-custom-testkit v<version> — 導入先: <target>",
+        "log ",
+        "⚠ OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。",
+        "log E2E ルート: tests/e2e  (既定値(検出できず))",
+        "log ",
+        "⚠ <target> は git リポジトリではありません。",
+        "err   対話できない環境です。続行するには --force を指定してください。"
+      ]
+    }
+  }
+}

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { digestForSchema, legacyDigest, manifestDigest } from '../payload/scripts/lib/digest.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
@@ -10,34 +12,11 @@ import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { parseYamlText } from '../payload/scripts/lib/frontmatter.mjs';
 import { hasBoundedToken } from '../payload/scripts/lib/markdown.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { gitRepo } from './support.mjs';
+import { changeFixture, gitRepo, runGate, tempDir, writeIn } from './support.mjs';
 
 const sample = JSON.parse(readFileSync(new URL('./fixtures/legacy-sample-results.json', import.meta.url), 'utf8'));
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
-
-function change(over = {}) {
-  return {
-    id: 'demo',
-    path: 'openspec/changes/demo',
-    schema: 'quality-driven-e2e',
-    lifecycle: 'active',
-    qe: true,
-    e2e: 'required',
-    scope: 'integrated',
-    reason: '',
-    errors: [],
-    fallback: false,
-    skipSpecs: false,
-    pendingPlan: false,
-    tasksText: null,
-    ...over,
-  };
-}
+const change = changeFixture;
 
 function quality(level, extra = '') {
   return `---
@@ -110,9 +89,9 @@ test('digest rejects an empty set and changes when a file is renamed', () => {
   try {
     assert.equal(manifestDigest(repo.dir, []).error, 'empty');
     assert.equal(legacyDigest(repo.dir, []).digest, '');
-    write(repo, 'tests/oracle/demo/a.txt', 'one');
+    writeIn(repo.dir, 'tests/oracle/demo/a.txt', 'one');
     const first = manifestDigest(repo.dir, ['tests/oracle/demo']);
-    write(repo, 'tests/oracle/demo/b.txt', 'one');
+    writeIn(repo.dir, 'tests/oracle/demo/b.txt', 'one');
     rmSync(join(repo.dir, 'tests/oracle/demo/a.txt'));
     const second = manifestDigest(repo.dir, ['tests/oracle/demo']);
     assert.notEqual(first.digest, second.digest);
@@ -128,15 +107,15 @@ test('digest rejects an empty set and changes when a file is renamed', () => {
 test('integrated low requires seal and ignores QE_SEAL_REQUIRED_LEVELS', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low'));
-    write(repo, 'tests/oracle/demo/oracle.test.mjs', 'test\n');
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low'));
+    writeIn(repo.dir, 'tests/oracle/demo/oracle.test.mjs', 'test\n');
     const tasks = '- [x] 1.1 oracle\n- [x] 2.1 implement\n';
     const result = evaluateChange(repo.dir, change({ tasksText: tasks }), {
       phase: 'plan',
       env: { QE_SEAL_REQUIRED_LEVELS: '' },
     });
     assert.ok(result.failures.some(line => line.includes('seal')));
-    write(repo, 'openspec/changes/legacy/quality.md', quality('low'));
+    writeIn(repo.dir, 'openspec/changes/legacy/quality.md', quality('low'));
     const legacy = evaluateChange(repo.dir, change({
       id: 'legacy',
       path: 'openspec/changes/legacy',
@@ -155,7 +134,7 @@ test('broken integrated metadata is not treated as out of scope', () => {
   const repo = gitRepo();
   try {
     const base = repo.git(['rev-parse', 'HEAD']).trim();
-    write(repo, 'openspec/changes/broken/.openspec.yaml', 'schema: quality-driven-e2e\nschema: other\n');
+    writeIn(repo.dir, 'openspec/changes/broken/.openspec.yaml', 'schema: quality-driven-e2e\nschema: other\n');
     repo.commit('broken');
     const selected = selectChanges({ repo: repo.dir, base });
     const broken = selected.changes.find(item => item.id === 'broken');
@@ -171,11 +150,11 @@ test('selection keeps schemas apart and fails closed', () => {
   const repo = gitRepo();
   try {
     const base = repo.git(['rev-parse', 'HEAD']).trim();
-    write(repo, 'openspec/config.yaml', 'schema: quality-driven\n');
-    write(repo, 'openspec/changes/qe/.openspec.yaml', 'schema: quality-driven\n');
-    write(repo, 'openspec/changes/e2e/.openspec.yaml', 'schema: spec-driven-e2e\n');
-    write(repo, 'openspec/changes/integrated/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/other/.openspec.yaml', 'schema: custom\n');
+    writeIn(repo.dir, 'openspec/config.yaml', 'schema: quality-driven\n');
+    writeIn(repo.dir, 'openspec/changes/qe/.openspec.yaml', 'schema: quality-driven\n');
+    writeIn(repo.dir, 'openspec/changes/e2e/.openspec.yaml', 'schema: spec-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/integrated/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/other/.openspec.yaml', 'schema: custom\n');
     repo.commit('add');
     const selected = selectChanges({ repo: repo.dir, base, env: { QE_SCHEMA: 'quality-driven' } });
     const byId = Object.fromEntries(selected.changes.map(item => [item.id, item]));
@@ -197,8 +176,8 @@ test('selection keeps schemas apart and fails closed', () => {
 test('archive is paired once and a pure delete is not success', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/move/.openspec.yaml', 'schema: quality-driven-e2e\n');
-    write(repo, 'openspec/changes/drop/.openspec.yaml', 'schema: quality-driven\n');
+    writeIn(repo.dir, 'openspec/changes/move/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    writeIn(repo.dir, 'openspec/changes/drop/.openspec.yaml', 'schema: quality-driven\n');
     repo.commit('base');
     const base = repo.git(['rev-parse', 'HEAD']).trim();
     mkdirSync(join(repo.dir, 'openspec/changes/archive'), { recursive: true });
@@ -220,9 +199,9 @@ test('archive is paired once and a pure delete is not success', () => {
 test('not-applicable plan is accepted and a required plan without TP is not', () => {
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/changes/demo/quality.md', quality('low', ''));
-    write(repo, 'openspec/changes/demo/specs/demo/spec.md', '#### Scenario: Visible\n#### Scenario: Hidden\n');
-    write(repo, 'openspec/changes/demo/test-plan.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality('low', ''));
+    writeIn(repo.dir, 'openspec/changes/demo/specs/demo/spec.md', '#### Scenario: Visible\n#### Scenario: Hidden\n');
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: not-applicable
 reason: 画面がない
 alternative_verification:
@@ -240,7 +219,7 @@ alternative_verification:
 `);
     const ok = checkTestPlan(repo.dir, change({ e2e: 'not-applicable' }));
     assert.deepEqual(ok.errors, []);
-    write(repo, 'openspec/changes/demo/test-plan.md', `---
+    writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
 e2e: required
 ---
 ## E2E観点一覧
@@ -258,7 +237,7 @@ e2e: required
 test('ci job does not turn an invalid ref into an empty success and still runs tests when nothing changed', async () => {
   const repo = gitRepo();
   try {
-    write(repo, 'package-lock.json', '{}\n');
+    writeIn(repo.dir, 'package-lock.json', '{}\n');
     repo.commit('lock');
     const calls = [];
     const execFile = (file, args) => {
@@ -297,4 +276,16 @@ test('ci job does not turn an invalid ref into an empty success and still runs t
   } finally {
     repo.cleanup();
   }
+});
+
+test('outside a git repository check-test-plan exits 2, while testkit-gate falls back to the working directory', t => {
+  const dir = tempDir('tk-nogit-');
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = { ...process.env, GIT_CEILING_DIRECTORIES: join(dir, '..') };
+  const plan = spawnSync(process.execPath, [fileURLToPath(new URL('../payload/scripts/check-test-plan.mjs', import.meta.url))], { cwd: dir, encoding: 'utf8', env });
+  assert.equal(plan.status, 2);
+  assert.match(plan.stderr, /git リポジトリではありません/);
+  const coverage = runGate(dir, ['coverage'], { env });
+  assert.equal(coverage.status, 2);
+  assert.match(coverage.stderr, /openspec\/ がありません: /);
 });

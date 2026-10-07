@@ -84,76 +84,49 @@ export function assessTarget(target, options = {}) {
   if (config.located?.sibling) {
     messages.push('openspec/config.yml は正本にしません。openspec/config.yaml だけを読みます。');
   }
+  const verdict = (allowWrite, version, reason, message) => ({
+    allowWrite, openspecReady: false, version, reason, messages: [...messages, message],
+  });
 
-  const versionRun = run(execFile, 'openspec', ['--version'], probeCwd);
-  let version = null;
-  if (versionRun.code === 0) {
-    version = versionRun.stdout.match(/\d+\.\d+\.\d+/)?.[0] ?? null;
-  }
-  const cliMissing = versionRun.code === 'ENOENT' || version == null;
-
+  const { version, cliMissing } = probeCli(execFile, probeCwd);
   if (store && cliMissing) {
-    return {
-      allowWrite: false,
-      openspecReady: false,
-      version: null,
-      reason: 'store-unresolved',
-      messages: [...messages, 'store 宣言を OpenSpec CLI で確認できないため、配置しません。repo-local の openspec も代替作成しません。'],
-    };
+    return verdict(false, null, 'store-unresolved', 'store 宣言を OpenSpec CLI で確認できないため、配置しません。repo-local の openspec も代替作成しません。');
   }
-
-  let context = null;
-  if (!cliMissing) {
-    const contextRun = run(execFile, 'openspec', ['context', '--json'], probeCwd);
-    if (contextRun.stdout.trim()) {
-      try {
-        context = JSON.parse(contextRun.stdout);
-      } catch {
-        context = null;
-      }
-    }
-  }
-
+  const context = cliMissing ? null : readContext(execFile, probeCwd);
   if (store) {
-    return {
-      allowWrite: false,
-      openspecReady: false,
-      version,
-      reason: 'store',
-      messages: [...messages, 'このプロジェクトは store に計画を委譲しています。初期版は repo-local だけを配置し、store と代替のローカル openspec には書き込みません。'],
-    };
+    return verdict(false, version, 'store', 'このプロジェクトは store に計画を委譲しています。初期版は repo-local だけを配置し、store と代替のローカル openspec には書き込みません。');
   }
-
-  if (context?.root?.path) {
-    const contextRoot = canonicalPath(context.root.path);
-    if (contextRoot !== canonicalPath(root) || (context.root.source && context.root.source !== 'nearest')) {
-      return {
-        allowWrite: false,
-        openspecReady: false,
-        version,
-        reason: 'external-root',
-        messages: [...messages, `OpenSpec の解決先が target の外です (${context.root.path}, source=${context.root.source ?? 'unknown'})。外部 store や global defaultStore には配置しません。`],
-      };
-    }
+  if (resolvesOutside(context, root)) {
+    return verdict(false, version, 'external-root', `OpenSpec の解決先が target の外です (${context.root.path}, source=${context.root.source ?? 'unknown'})。外部 store や global defaultStore には配置しません。`);
   }
-
   if (cliMissing) {
-    return {
-      allowWrite: true,
-      openspecReady: false,
-      version: null,
-      reason: 'cli-missing',
-      messages: [...messages, 'OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。'],
-    };
+    return verdict(true, null, 'cli-missing', 'OpenSpec CLI が無いため repo-local のファイル準備だけを行います。doctor の版確認が済むまで統合 ready ではありません。');
   }
   if (versionLessThan(version, FORK_BASE)) {
-    return {
-      allowWrite: true,
-      openspecReady: false,
-      version,
-      reason: 'version',
-      messages: [...messages, `OpenSpec ${version} は fork 基準 ${FORK_BASE} より古いため、統合 ready とは報告しません。`],
-    };
+    return verdict(true, version, 'version', `OpenSpec ${version} は fork 基準 ${FORK_BASE} より古いため、統合 ready とは報告しません。`);
   }
   return { allowWrite: true, openspecReady: true, version, reason: 'ok', messages };
+}
+
+function probeCli(execFile, cwd) {
+  const versionRun = run(execFile, 'openspec', ['--version'], cwd);
+  const version = versionRun.code === 0 ? versionRun.stdout.match(/\d+\.\d+\.\d+/)?.[0] ?? null : null;
+  return { version, cliMissing: versionRun.code === 'ENOENT' || version == null };
+}
+
+// `openspec context --json`, or null when it prints nothing or is not JSON.
+function readContext(execFile, cwd) {
+  const contextRun = run(execFile, 'openspec', ['context', '--json'], cwd);
+  if (!contextRun.stdout.trim()) return null;
+  try {
+    return JSON.parse(contextRun.stdout);
+  } catch {
+    return null;
+  }
+}
+
+function resolvesOutside(context, root) {
+  if (!context?.root?.path) return false;
+  const contextRoot = canonicalPath(context.root.path);
+  return contextRoot !== canonicalPath(root) || Boolean(context.root.source && context.root.source !== 'nearest');
 }

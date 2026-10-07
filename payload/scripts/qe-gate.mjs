@@ -1,29 +1,17 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { isIntegratedChange, SCHEMA_INTEGRATED, SCHEMA_QE } from './lib/critical.mjs';
 import { digestForSchema } from './lib/digest.mjs';
-import { evaluateChange, maxLevel, qaReviewOf, qaReviewOrderError } from './lib/evaluate.mjs';
-import { asList, asString, setFrontmatterScalar, splitFrontmatter, validDate } from './lib/frontmatter.mjs';
-import { toplevel } from './lib/git.mjs';
-import { qaReviewRequiredLevels, RISK_LEVELS } from './lib/policy.mjs';
+import { appendGithubOutput, resolveRepo } from './lib/entry.mjs';
+import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
+import { asList, setFrontmatterScalar } from './lib/frontmatter.mjs';
+import { readPolicyText } from './lib/policy.mjs';
+import { loadQuality, sealBlockers } from './lib/seal.mjs';
 import { isChangeName, selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: qe-gate.mjs seal <change>
        qe-gate.mjs digest <change>
        qe-gate.mjs check [--base <ref>] [<change>...]`;
-
-function repoFromCwd() {
-  try {
-    return toplevel(process.cwd());
-  } catch {
-    return process.cwd();
-  }
-}
-
-function qualityPath(repo, id) {
-  return join(repo, 'openspec/changes', id, 'quality.md');
-}
 
 function printEvaluation(change, result) {
   console.log(`▶ ${change.id} (${change.lifecycle})`);
@@ -33,7 +21,7 @@ function printEvaluation(change, result) {
 }
 
 function commandCheck(argv) {
-  const repo = repoFromCwd();
+  const repo = resolveRepo(process.cwd());
   let base = '';
   const names = [];
   for (let i = 0; i < argv.length; i++) {
@@ -55,7 +43,7 @@ function commandCheck(argv) {
     const result = evaluateChange(repo, change, {
       phase: 'plan',
       quality: true,
-      plan: change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated',
+      plan: isIntegratedChange(change),
       tags: false,
       env: process.env,
     });
@@ -66,28 +54,20 @@ function commandCheck(argv) {
   const level = maxLevel(levels);
   console.log('---');
   console.log(`checked: ${selected.changes.length} change(s), max risk_level: ${level}, failures: ${failures}`);
-  if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `risk_level=${level}\n`);
+  appendGithubOutput(process.env, { risk_level: level });
   return failures || !selected.ok ? 1 : 0;
 }
 
 function commandDigest(id) {
-  const repo = repoFromCwd();
-  const file = qualityPath(repo, id);
-  let text;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    console.error(`not found: ${file}`);
-    return 1;
-  }
-  const frontmatter = splitFrontmatter(text);
-  if (frontmatter.error) {
-    console.error(frontmatter.error);
+  const repo = resolveRepo(process.cwd());
+  const quality = loadQuality(repo, id);
+  if (quality.error) {
+    console.error(quality.error);
     return 1;
   }
   const selected = selectChanges({ repo, names: [id], env: process.env });
   const schema = isIntegratedChange(selected.changes[0]) ? SCHEMA_INTEGRATED : SCHEMA_QE;
-  const digest = digestForSchema(repo, schema, asList(frontmatter.data.oracle_paths));
+  const digest = digestForSchema(repo, schema, asList(quality.data.oracle_paths));
   if (digest.error === 'UNREADABLE') {
     console.error(`Oracle を読み取れません: ${digest.path} (${digest.code})`);
     return 1;
@@ -98,57 +78,28 @@ function commandDigest(id) {
 }
 
 function commandSeal(id) {
-  const repo = repoFromCwd();
-  const file = qualityPath(repo, id);
-  let text;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    console.error(`not found: ${file}`);
-    return 1;
-  }
-  const frontmatter = splitFrontmatter(text);
-  if (frontmatter.error) {
-    console.error(frontmatter.error);
+  const repo = resolveRepo(process.cwd());
+  const quality = loadQuality(repo, id);
+  if (quality.error) {
+    console.error(quality.error);
     return 1;
   }
   const selected = selectChanges({ repo, names: [id], env: process.env });
-  const integrated = isIntegratedChange(selected.changes[0]);
-  if (integrated) {
-    if (!asString(frontmatter.data.approved_by) || !validDate(asString(frontmatter.data.approved_at))) {
-      console.error('quality.md が未承認です。approved_by と approved_at を人間が記入してから seal してください');
-      return 1;
-    }
-    const policyPath = join(repo, 'openspec/quality-policy.md');
-    const qa = qaReviewRequiredLevels(existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '');
-    if (qa.error) {
-      console.error(qa.error);
-      return 1;
-    }
-    const level = asString(frontmatter.data.risk_level);
-    // An unreadable risk_level cannot prove that QA review is unnecessary.
-    const needed = qa.levels.includes(level) || (!RISK_LEVELS.includes(level) && qa.levels.length > 0);
-    if (needed && qaReviewOf(frontmatter.data) !== 'ok') {
-      console.error(`risk_level=${level || '(空)'} は quality-policy.md の qa_review_required_levels [${qa.levels.join(', ')}] に含まれるため QA レビューが必要です。QA レビュー担当が qa_reviewed_by と qa_reviewed_at (YYYY-MM-DD) を記入してから seal してください`);
-      return 1;
-    }
-    const orderError = qaReviewOrderError(frontmatter.data);
-    if (needed && orderError) {
-      console.error(orderError);
-      return 1;
-    }
-  } else if (!asString(frontmatter.data.approved_by)) {
-    console.error('quality.md が未承認です。approved_by を記入してから seal してください');
+  const change = selected.changes[0];
+  const integrated = isIntegratedChange(change);
+  const [blocker] = sealBlockers(change, quality.data, () => readPolicyText(repo) ?? '');
+  if (blocker) {
+    console.error(blocker);
     return 1;
   }
-  const digest = digestForSchema(repo, integrated ? SCHEMA_INTEGRATED : SCHEMA_QE, asList(frontmatter.data.oracle_paths));
+  const digest = digestForSchema(repo, integrated ? SCHEMA_INTEGRATED : SCHEMA_QE, asList(quality.data.oracle_paths));
   if (!digest.digest || digest.empty || digest.error) {
     console.error(digest.error === 'UNREADABLE'
       ? `Oracle を読み取れません: ${digest.path} (${digest.code})`
       : `Oracle テストが見つかりません: ${digest.path ?? '(空)'}`);
     return 1;
   }
-  writeFileSync(file, setFrontmatterScalar(text, 'oracle_digest', digest.digest));
+  writeFileSync(quality.file, setFrontmatterScalar(quality.text, 'oracle_digest', digest.digest));
   console.log(`sealed: ${id} → ${digest.digest}`);
   return 0;
 }

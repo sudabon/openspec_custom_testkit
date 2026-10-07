@@ -109,6 +109,18 @@ kit の update で、quality テンプレートの `qa_reviewed_by` / `qa_review
 
 戻すときは kit を前の版へ update する。quality.md に足した QA レビュー欄と evidence の `effort` は、旧版の gate では無視される。
 
+## 共通 helper モジュールの追加
+
+kit の update で `scripts/lib/changes.mjs`、`scripts/lib/change-metadata.mjs`、`scripts/lib/ids.mjs`、`scripts/lib/entry.mjs` を配布する。既存のゲートが内部で使う共通部品で、ゲートの判定・終了コード・メッセージは変わらない。
+
+既存のゲートがこれらを import するため、ファイルが欠けるとゲートが実行時に失敗する。doctor は 4 ファイルを必須として扱い、古い stamp のままの導入先を incomplete と報告する。kit を update すれば配置されるので、利用者の作業は要らない。
+
+戻すときは kit を前の版へ update する。残った 4 ファイルは前の版のゲートからは読まれない。
+
+## seal モジュールの追加
+
+kit の update で `scripts/lib/seal.mjs` を配布する。`qe-gate.mjs seal` と gate の QA レビュー判定が共通で使う部品で、ゲートの判定・終了コード・メッセージは変わらない。doctor はこのファイルを必須として扱う。kit を update すれば配置されるので、利用者の作業は要らない。戻すときは kit を前の版へ update する。
+
 ## 既知の旧ファイル
 
 旧 stamp の版が QE 0.1.2 または E2E 0.2.0 で、内容が baseline に E2E root 変換を適用したバイトと一致するファイルだけを自動で置き換える。不明な版と独自編集は差分を表示して残す。必須ゲートが残ると install は 0 でも doctor は非ゼロになる。旧 stamp は読まない限り変更しない。

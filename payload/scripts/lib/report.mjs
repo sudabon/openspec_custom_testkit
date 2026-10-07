@@ -1,9 +1,10 @@
 import { existsSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { hasBoundedToken } from './markdown.mjs';
-import { splitFrontmatter } from './frontmatter.mjs';
+import { TP_ID_IN_TEXT } from './ids.mjs';
+import { escapeHtml, hasBoundedToken, markdownCell } from './markdown.mjs';
+import { splitFrontmatter, utcDate } from './frontmatter.mjs';
 import { projectsOf, testPlanHeaderErrors, testPlanRowErrors, tpRows } from './plan-check.mjs';
-import { flakyVerdict, quarantineFor, tpLevels, utcDate } from './flaky.mjs';
+import { flakyVerdict, quarantineFor, tpLevels } from './flaky.mjs';
 import { flakyFailLevels } from './policy.mjs';
 import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
@@ -35,7 +36,7 @@ export function plannedIds(planText) {
     }
     return { ids: [...new Set(rows.map(row => row['TP-ID']))], applicability: 'required', projects };
   }
-  const ids = [...planText.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]);
+  const ids = [...planText.matchAll(TP_ID_IN_TEXT)].map(match => match[0]);
   return { ids: [...new Set(ids)], applicability: 'legacy', projects: {} };
 }
 
@@ -48,6 +49,62 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
     ? renderSummary(classified, { changeId, publishRoot, maxRows, overflowRef })
     : renderText(classified);
   return { exitCode: classified.exitCode, stdout, stderr: '' };
+}
+
+// Projects on which each planned TP has a passing attempt.
+function passedProjects(rows) {
+  const passedOn = new Map();
+  for (const row of rows) {
+    if (row.attempts === 0 || row.status !== 'pass') continue;
+    for (const id of row.matched) {
+      if (!passedOn.has(id)) passedOn.set(id, new Set());
+      passedOn.get(id).add(row.project);
+    }
+  }
+  return passedOn;
+}
+
+// Planned TPs without a passing run, and hints for TPs whose declared Projects did not all pass.
+// A TP with declared Projects is covered only when every declared project has a passing attempt.
+function coverageGaps(planned, rows, quarantined, invalidQuarantine) {
+  const passedOn = passedProjects(rows);
+  const gaps = [];
+  const projectHints = [];
+  for (const id of planned.ids) {
+    if (quarantined.has(id)) continue;
+    const invalid = invalidQuarantine.get(id);
+    if (invalid) {
+      gaps.push(`${id} (${invalidLabel(invalid)})`);
+      continue;
+    }
+    const declared = planned.projects[id] ?? [];
+    if (!declared.length) {
+      if (!passedOn.has(id)) gaps.push(id);
+      continue;
+    }
+    const gap = projectGap(id, declared, rows, passedOn.get(id) ?? new Set());
+    if (!gap) continue;
+    projectHints.push(...gap.hints);
+    gaps.push(gap.text);
+  }
+  return { gaps, projectHints };
+}
+
+function projectGap(id, declared, rows, passed) {
+  const lacking = declared.filter(project => !passed.has(project));
+  if (!lacking.length) return null;
+  const hints = [];
+  const ran = new Set(rows.filter(row => row.matched.includes(id) && row.attempts > 0).map(row => row.project));
+  const notRun = lacking.filter(project => !ran.has(project));
+  if (notRun.length) hints.push(`${id}: Projects の指定 (${notRun.join(', ')}) と Playwright の project 名・実行対象・skip 条件を確認してください`);
+  const notPassed = lacking.filter(project => ran.has(project));
+  const skipped = notPassed.filter(project => {
+    const attempts = rows.filter(row => row.matched.includes(id) && row.project === project && row.attempts > 0);
+    return attempts.every(row => row.status === 'skip');
+  });
+  if (skipped.length) hints.push(`${id}: ${skipped.join(', ')} は skip のみです。skip 条件を確認してください`);
+  const detail = [notPassed.length ? `${notPassed.join(', ')} 未pass` : '', notRun.length ? `${notRun.join(', ')} 未実行` : ''].filter(Boolean).join(', ');
+  return { hints, text: `${id} (${detail})` };
 }
 
 // Classification and the exit code are shared by every format so that what is shown never drifts from what is judged.
@@ -75,49 +132,9 @@ function classify({ changeId, planText, results, maxAge, now, integrated, policy
   const quarantine = quarantineFor(quarantineText, { changeId, plannedIds: planned.ids, qualityText, today: utcDate(now) });
   const quarantined = new Map(integrated ? quarantine.active.map(entry => [entry.tp, entry]) : []);
   const invalidQuarantine = new Map(integrated ? quarantine.invalid.map(entry => [entry.tp, entry]) : []);
-  const covered = new Set();
-  const passedOn = new Map();
-  for (const row of rows) {
-    if (row.attempts === 0) continue;
-    if (row.status !== 'pass') continue;
-    for (const id of row.matched) {
-      covered.add(id);
-      if (!passedOn.has(id)) passedOn.set(id, new Set());
-      passedOn.get(id).add(row.project);
-    }
-  }
-  // A TP with declared Projects is covered only when every declared project has a passing attempt.
-  const gaps = [];
-  const projectHints = [];
-  if (planned.applicability !== 'not-applicable') {
-    for (const id of planned.ids) {
-      if (quarantined.has(id)) continue;
-      const invalid = invalidQuarantine.get(id);
-      if (invalid) {
-        gaps.push(`${id} (${invalidLabel(invalid)})`);
-        continue;
-      }
-      const declared = planned.projects[id] ?? [];
-      if (!declared.length) {
-        if (!covered.has(id)) gaps.push(id);
-        continue;
-      }
-      const passed = passedOn.get(id) ?? new Set();
-      const ran = new Set(rows.filter(row => row.matched.includes(id) && row.attempts > 0).map(row => row.project));
-      const lacking = declared.filter(project => !passed.has(project));
-      if (!lacking.length) continue;
-      const notRun = lacking.filter(project => !ran.has(project));
-      if (notRun.length) projectHints.push(`${id}: Projects の指定 (${notRun.join(', ')}) と Playwright の project 名・実行対象・skip 条件を確認してください`);
-      const notPassed = lacking.filter(project => ran.has(project));
-      const skipped = notPassed.filter(project => {
-        const attempts = rows.filter(row => row.matched.includes(id) && row.project === project && row.attempts > 0);
-        return attempts.every(row => row.status === 'skip');
-      });
-      if (skipped.length) projectHints.push(`${id}: ${skipped.join(', ')} は skip のみです。skip 条件を確認してください`);
-      const detail = [notPassed.length ? `${notPassed.join(', ')} 未pass` : '', notRun.length ? `${notRun.join(', ')} 未実行` : ''].filter(Boolean).join(', ');
-      gaps.push(`${id} (${detail})`);
-    }
-  }
+  const { gaps, projectHints } = planned.applicability !== 'not-applicable'
+    ? coverageGaps(planned, rows, quarantined, invalidQuarantine)
+    : { gaps: [], projectHints: [] };
   const flakyLines = judgeFlaky(rows, flakyPolicy.levels, planText, qualityText, quarantined);
   const quarantineLines = integrated
     ? quarantineReport(quarantine, rows, quarantinePath)
@@ -290,13 +307,7 @@ function canonical(path) {
 
 // Keep untrusted titles and names inside one Markdown table cell and out of raw HTML.
 function cell(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/`/g, '&#96;')
-    .replace(/\|/g, '\\|')
-    .replace(/\s*[\r\n]+\s*/g, ' ');
+  return markdownCell(escapeHtml(value).replace(/`/g, '&#96;').replace(/\s*[\r\n]+\s*/g, ' '));
 }
 
 const FORMATS = ['text', 'summary'];

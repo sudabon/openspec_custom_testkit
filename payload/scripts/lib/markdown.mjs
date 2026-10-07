@@ -1,5 +1,33 @@
-function escapeRegExp(value) {
+import { TP_REFERENCE_LOOSE } from './ids.mjs';
+
+export const TP_SECTION = '## E2E観点一覧';
+export const DELEGATED_SECTION = '## 対象外シナリオ';
+
+export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Keeps a value inside one Markdown table cell.
+export function markdownCell(value) {
+  return String(value ?? '').replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
+export function escapeHtml(value) {
+  return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Template rows leave cells empty or as an ellipsis.
+export function isPlaceholderCell(value) {
+  return value === '' || value === '...' || value === '…';
+}
+
+// Test plans name the scenario column Scenario, or 対応シナリオ in the legacy layout.
+export function hasScenarioColumn(row) {
+  return 'Scenario' in row || '対応シナリオ' in row;
+}
+
+export function scenarioCell(row) {
+  return String(row.Scenario ?? row['対応シナリオ'] ?? '').trim();
 }
 
 export function section(markdown, heading) {
@@ -100,7 +128,7 @@ export function parseTable(text, { strictSeparator = false } = {}) {
   for (const [index, line] of lines.slice(1).entries()) {
     if ((!strictSeparator || index === 0) && isSeparator(line)) continue;
     const cells = splitRow(line);
-    if (cells.every(cell => cell === '' || cell === '...' || cell === '…')) continue;
+    if (cells.every(isPlaceholderCell)) continue;
     const row = {};
     headers.forEach((header, index) => {
       row[header] = cells[index] ?? '';
@@ -112,7 +140,7 @@ export function parseTable(text, { strictSeparator = false } = {}) {
 
 // Only uppercase standalone IDs are references; paths, filename stems and words like HTTP-2 are not.
 export function tpReferences(text) {
-  return [...new Set([...String(text).matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))];
+  return [...new Set([...String(text).matchAll(TP_REFERENCE_LOOSE)].map(match => match[0]))];
 }
 
 export function hasBoundedToken(text, token) {

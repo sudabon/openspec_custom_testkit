@@ -8,9 +8,9 @@ import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { effortErrors } from './effort.mjs';
 import { mockContractMaxAgeDays, mutationThreshold } from './policy.mjs';
 import { checkRegistry, mockFreshnessErrors } from './registry.mjs';
-import { quarantineAlternativeErrors, quarantineFor, utcDate } from './flaky.mjs';
+import { quarantineAlternativeErrors, quarantineFor } from './flaky.mjs';
 import { tpRows } from './plan-check.mjs';
-import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
+import { asList, asString, isPlainMapping as isRecord, splitFrontmatter, utcDate, validDate } from './frontmatter.mjs';
 
 export function executionBlock(markdown) {
   const body = section(markdown, '## Execution Records');
@@ -28,10 +28,6 @@ export function executionBlock(markdown) {
   } catch (err) {
     return { error: `Execution Records の JSON が不正です: ${err.message}` };
   }
-}
-
-function isRecord(value) {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 // Hand-written JSON may hold null or scalars in record lists; report them instead of crashing.
@@ -166,53 +162,74 @@ function freshnessErrors(repo, change, { policyText, residuals, now }) {
   }
 }
 
-export function checkEvidence(repo, change, { digest, policyText, manifest, now = Date.now() }) {
+const UNVERIFIED = 'execution: unverified';
+
+function structureFailure(error) {
+  return { errors: [error], notes: ['structure: fail', UNVERIFIED] };
+}
+
+function riskIdsOf(quality) {
+  return [...new Set([...quality.matchAll(/^\|\s*(R\d+)\s*\|/gm)].map(match => match[1]))];
+}
+
+// Legacy evidence is free text: every Risk ID in quality.md must appear in it.
+function checkLegacyEvidence(repo, change, text) {
   const errors = [];
-  const notes = [];
+  const qualityPath = join(repo, change.path, 'quality.md');
+  if (existsSync(qualityPath)) {
+    const missing = riskIdsOf(readFileSync(qualityPath, 'utf8')).filter(id => !hasBoundedToken(text, id));
+    if (missing.length) errors.push(`evidence.md に記載のない Risk ID: ${missing.join(', ')}`);
+  }
+  return { errors, notes: ['structure: legacy', UNVERIFIED] };
+}
+
+export function checkEvidence(repo, change, { digest, policyText, manifest, now = Date.now() }) {
   const evidencePath = join(repo, change.path, 'evidence.md');
-  if (!existsSync(evidencePath)) {
-    errors.push('evidence.md がありません');
-    notes.push('structure: fail', 'execution: unverified');
-    return { errors, notes };
-  }
+  if (!existsSync(evidencePath)) return structureFailure('evidence.md がありません');
   const text = readFileSync(evidencePath, 'utf8');
-  if (change.schema !== SCHEMA_INTEGRATED) {
-    const qualityPath = join(repo, change.path, 'quality.md');
-    if (existsSync(qualityPath)) {
-      const ids = [...readFileSync(qualityPath, 'utf8').matchAll(/^\|\s*(R\d+)\s*\|/gm)].map(match => match[1]);
-      const missing = [...new Set(ids)].filter(id => !hasBoundedToken(text, id));
-      if (missing.length) errors.push(`evidence.md に記載のない Risk ID: ${missing.join(', ')}`);
-    }
-    notes.push('structure: legacy', 'execution: unverified');
-    return { errors, notes };
-  }
+  if (change.schema !== SCHEMA_INTEGRATED) return checkLegacyEvidence(repo, change, text);
 
   const qualityPath = join(repo, change.path, 'quality.md');
   const quality = existsSync(qualityPath) ? readFileSync(qualityPath, 'utf8') : '';
-  const riskIds = [...quality.matchAll(/^\|\s*(R\d+)\s*\|/gm)].map(match => match[1]);
-  const uniqueRisks = [...new Set(riskIds)];
+  const risks = riskIdsOf(quality);
   const parsed = executionBlock(text);
-  if (parsed.error) {
-    errors.push(parsed.error);
-    notes.push('structure: fail', 'execution: unverified');
-    return { errors, notes };
-  }
+  if (parsed.error) return structureFailure(parsed.error);
   const data = parsed.data;
-  if (!isRecord(data)) {
-    errors.push('Execution Records の JSON はオブジェクトである必要があります');
-    notes.push('structure: fail', 'execution: unverified');
-    return { errors, notes };
-  }
+  if (!isRecord(data)) return structureFailure('Execution Records の JSON はオブジェクトである必要があります');
+
+  const errors = [];
   if (data.format_version !== 1) errors.push('format_version は 1 である必要があります');
-  const runs = records(data.runs, 'runs', errors);
-  const runById = new Map(runs.map(run => [run.id, run]));
+  const runs = checkRuns(repo, data);
+  errors.push(...runs.errors);
+  errors.push(...checkRunRevisions(repo, change, quality, runs));
+  const results = checkRiskResults(change, data, risks, runs.list);
+  errors.push(...results.errors);
+  errors.push(...checkTraceTable(text, risks, results.list));
+  const falsification = checkFalsification(data);
+  errors.push(...falsification.errors);
+  errors.push(...quarantineErrors(repo, change, quality, { results: results.list, residuals: falsification.residuals, now }));
+  errors.push(...freshnessErrors(repo, change, { policyText, residuals: falsification.residuals, now }));
+  const level = asString(splitFrontmatter(quality).data?.risk_level);
+  errors.push(...checkMutation(level, data, policyText));
+  errors.push(...checkReviews(level, data));
+  // Effort records are optional; only their structure is checked.
+  errors.push(...effortErrors(data.effort));
+  errors.push(...checkOracleHistory(data, digest));
+
+  const execution = executionStatus(change, runs, manifest, errors.length === 0);
+  return { errors, notes: [errors.length ? 'structure: fail' : 'structure: pass', `execution: ${execution}`] };
+}
+
+function checkRuns(repo, data) {
+  const errors = [];
+  const list = records(data.runs, 'runs', errors);
   let revision = null;
   try {
     revision = headRevision(repo);
   } catch (err) {
-    if (runs.length) errors.push(`HEAD を解決できないため run の revision を検証できません (${err.message})`);
+    if (list.length) errors.push(`HEAD を解決できないため run の revision を検証できません (${err.message})`);
   }
-  for (const run of runs) {
+  for (const run of list) {
     for (const key of ['id', 'command', 'started_at', 'revision', 'source', 'source_sha256']) {
       if (run[key] == null || run[key] === '') errors.push(`run ${run.id ?? '?'} の ${key} がありません`);
     }
@@ -223,28 +240,31 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
       if (sha256File(join(repo, run.source)) !== run.source_sha256) errors.push(`run ${run.id} の source hash が一致しません`);
     } else errors.push(`run ${run.id} の source がありません: ${run.source}`);
   }
-  const earlier = revision ? runs.filter(run => run.revision && run.revision !== revision) : [];
-  if (earlier.length) {
-    let isInput = null;
-    try {
-      isInput = validationInputMatcher(repo, change, quality);
-    } catch (err) {
-      errors.push(err.message);
-    }
-    for (const run of isInput ? earlier : []) {
-      const problem = revisionProblem(repo, change, run, revision, isInput);
-      if (problem) errors.push(problem);
-    }
-  }
+  return { errors, list, revision };
+}
 
-  const results = records(data.risk_results, 'risk_results', errors);
-  const seen = new Set();
-  for (const risk of uniqueRisks) {
-    const rows = results.filter(row => row.risk === risk);
+// Runs recorded at an earlier commit still count when nothing they validated has changed since.
+function checkRunRevisions(repo, change, quality, { list, revision }) {
+  const earlier = revision ? list.filter(run => run.revision && run.revision !== revision) : [];
+  if (!earlier.length) return [];
+  let isInput;
+  try {
+    isInput = validationInputMatcher(repo, change, quality);
+  } catch (err) {
+    return [err.message];
+  }
+  return earlier.map(run => revisionProblem(repo, change, run, revision, isInput)).filter(Boolean);
+}
+
+function checkRiskResults(change, data, risks, runs) {
+  const errors = [];
+  const list = records(data.risk_results, 'risk_results', errors);
+  const runById = new Map(runs.map(run => [run.id, run]));
+  for (const risk of risks) {
+    const rows = list.filter(row => row.risk === risk);
     if (rows.length !== 1) errors.push(`${risk} の構造化結果が ${rows.length} 件です`);
     const row = rows[0];
     if (!row) continue;
-    seen.add(risk);
     for (const key of ['failure_modes', 'oracles', 'run_ids']) {
       if (!Array.isArray(row[key]) || row[key].length === 0) errors.push(`${risk} の ${key} が不足しています`);
     }
@@ -260,16 +280,24 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
       else if (row.result === 'pass' && run.exit_code !== 0) errors.push(`${risk} は pass なのに run ${runId} が失敗しています`);
     }
   }
-  for (const row of results) if (row.risk && !uniqueRisks.includes(row.risk)) errors.push(`未知の Risk 結果: ${row.risk}`);
+  for (const row of list) if (row.risk && !risks.includes(row.risk)) errors.push(`未知の Risk 結果: ${row.risk}`);
+  return { errors, list };
+}
 
+function checkTraceTable(text, risks, results) {
+  const errors = [];
   const table = parseTable(section(text, '## 追跡')).rows;
-  for (const risk of uniqueRisks) {
+  for (const risk of risks) {
     const row = table.find(candidate => candidate.Risk === risk);
     const json = results.find(candidate => candidate.risk === risk);
     if (!row) errors.push(`追跡表に ${risk} がありません`);
     else if (json && row.Result && json.result && row.Result !== json.result) errors.push(`${risk} の本文と JSON の結果が一致しません`);
   }
+  return errors;
+}
 
+function checkFalsification(data) {
+  const errors = [];
   const falsification = data.falsification;
   if (!isRecord(falsification) || falsification.performed !== true || !asString(falsification.summary)) {
     errors.push('独立反証の実施記録がありません');
@@ -287,24 +315,27 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
       errors.push(`反例 ${example.id ?? '?'} に人間承認済み Residual がありません`);
     }
   }
+  return { errors, residuals };
+}
 
-  errors.push(...quarantineErrors(repo, change, quality, { results, residuals, now }));
-  errors.push(...freshnessErrors(repo, change, { policyText, residuals, now }));
-
-  const level = asString(splitFrontmatter(quality).data?.risk_level);
+function checkMutation(level, data, policyText) {
+  const errors = [];
   const threshold = mutationThreshold(policyText);
   const mutation = data.mutation ?? {};
-  if (level === 'high') {
-    if (!asString(mutation.command)) errors.push('high の Mutation コマンドが未指定です');
-    if (mutation.status === 'not-run' || mutation.score == null) errors.push('high の Mutation 結果がありません');
-    else if (typeof mutation.score !== 'number' || !Number.isFinite(mutation.score)) errors.push('Mutation スコアが数値ではありません');
-    const declared = Number(mutation.threshold);
-    if (!Number.isFinite(declared) || declared < threshold) errors.push(`Mutation 閾値は ${threshold}% 以上である必要があります`);
-    if (typeof mutation.score === 'number' && Number.isFinite(mutation.score) && (mutation.score < declared || mutation.score < threshold)) {
-      errors.push('Mutation スコアが閾値未満です');
-    }
+  if (level !== 'high') return errors;
+  if (!asString(mutation.command)) errors.push('high の Mutation コマンドが未指定です');
+  if (mutation.status === 'not-run' || mutation.score == null) errors.push('high の Mutation 結果がありません');
+  else if (typeof mutation.score !== 'number' || !Number.isFinite(mutation.score)) errors.push('Mutation スコアが数値ではありません');
+  const declared = Number(mutation.threshold);
+  if (!Number.isFinite(declared) || declared < threshold) errors.push(`Mutation 閾値は ${threshold}% 以上である必要があります`);
+  if (typeof mutation.score === 'number' && Number.isFinite(mutation.score) && (mutation.score < declared || mutation.score < threshold)) {
+    errors.push('Mutation スコアが閾値未満です');
   }
+  return errors;
+}
 
+function checkReviews(level, data) {
+  const errors = [];
   const reviews = records(data.reviews, 'reviews', errors);
   if ((level === 'medium' || level === 'high') && !reviews.some(review => asString(review.reviewer))) {
     errors.push(`${level} の Human Code Review がありません`);
@@ -312,29 +343,28 @@ export function checkEvidence(repo, change, { digest, policyText, manifest, now 
   if (level === 'high' && !reviews.some(review => review.includes_domain_owner === true)) {
     errors.push('high のレビューにドメイン担当が含まれていません');
   }
+  return errors;
+}
 
-  // Effort records are optional; only their structure is checked.
-  errors.push(...effortErrors(data.effort));
-
+function checkOracleHistory(data, digest) {
+  const errors = [];
   const history = records(data.oracle_changes, 'oracle_changes', errors);
-  if (history.length) {
-    for (const entry of history) {
-      if (!asString(entry.reason) || !asString(entry.approved_by) || !validDate(entry.approved_at) || !asString(entry.digest)) {
-        errors.push('再seal履歴の理由・再承認・digest が不足しています');
-      }
+  if (!history.length) return errors;
+  for (const entry of history) {
+    if (!asString(entry.reason) || !asString(entry.approved_by) || !validDate(entry.approved_at) || !asString(entry.digest)) {
+      errors.push('再seal履歴の理由・再承認・digest が不足しています');
     }
-    if (digest && history.at(-1).digest !== digest) errors.push('再seal履歴の digest が現在の seal と一致しません');
   }
+  if (digest && history.at(-1).digest !== digest) errors.push('再seal履歴の digest が現在の seal と一致しません');
+  return errors;
+}
 
-  let execution = 'unverified';
-  if (manifest) {
-    // Output bytes differ between runs (timestamps, durations), so a CI rerun can only
-    // reproduce the recorded command and exit code. The recorded source is hashed above.
-    const ids = new Set(manifest.run_ids ?? []);
-    const covered = runs.length > 0 && Array.isArray(manifest.runs) && runs.every(run => ids.has(run.id) && manifest.runs.some(record =>
-      record.id === run.id && record.change_id === change.id && record.command === run.command && record.exit_code === run.exit_code));
-    if (!errors.length && covered && manifest.revision && revision && manifest.revision === revision) execution = 'verified';
-  }
-  notes.push(errors.length ? 'structure: fail' : 'structure: pass', `execution: ${execution}`);
-  return { errors, notes };
+function executionStatus(change, { list: runs, revision }, manifest, clean) {
+  if (!manifest) return 'unverified';
+  // Output bytes differ between runs (timestamps, durations), so a CI rerun can only
+  // reproduce the recorded command and exit code. The recorded source is hashed above.
+  const ids = new Set(manifest.run_ids ?? []);
+  const covered = runs.length > 0 && Array.isArray(manifest.runs) && runs.every(run => ids.has(run.id) && manifest.runs.some(record =>
+    record.id === run.id && record.change_id === change.id && record.command === run.command && record.exit_code === run.exit_code));
+  return clean && covered && manifest.revision && revision && manifest.revision === revision ? 'verified' : 'unverified';
 }

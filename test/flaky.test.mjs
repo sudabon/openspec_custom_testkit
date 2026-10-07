@@ -1,19 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { main } from '../lib/cli.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { flakyFailLevels, policyIssues } from '../payload/scripts/lib/policy.mjs';
-import { capture, gitRepo } from './support.mjs';
+import { capture, gitRepo, writeIn } from './support.mjs';
 
 const shippedPolicy = readFileSync(new URL('../payload/openspec/quality-policy.md', import.meta.url), 'utf8');
 
-function write(repo, rel, text) {
-  const abs = join(repo.dir, rel);
-  mkdirSync(join(abs, '..'), { recursive: true });
-  writeFileSync(abs, text);
-}
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { flakyVerdict, quarantineFor, reportInputs, tpLevels } from '../payload/scripts/lib/flaky.mjs';
@@ -125,15 +120,15 @@ test('doctor accepts a valid flaky policy and fails an invalid one', async () =>
     const installed = await capture(main, ['install', '--force', '--target', repo.dir]);
     assert.equal(installed.code, 0, installed.text);
     const base = doctor(repo.dir);
-    write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\nflaky_fail_levels: [high]\n`);
+    writeIn(repo.dir, 'openspec/quality-policy.md', `${shippedPolicy}\nflaky_fail_levels: [high]\n`);
     const valid = doctor(repo.dir);
     assert.deepEqual(valid.failures, base.failures);
-    write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\nflaky_fail_levels: [critical]\n`);
+    writeIn(repo.dir, 'openspec/quality-policy.md', `${shippedPolicy}\nflaky_fail_levels: [critical]\n`);
     const invalid = doctor(repo.dir);
     assert.equal(invalid.ok, false);
     assert.match(invalid.failures.join('\n'), /flaky_fail_levels が不正です \(critical\)/);
     for (const line of MALFORMED_POLICIES) {
-      write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
+      writeIn(repo.dir, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
       assert.match(doctor(repo.dir).failures.join('\n'), /flaky_fail_levels が不正/, line);
     }
   } finally {
@@ -228,16 +223,16 @@ const reporterCli = fileURLToPath(new URL('../payload/scripts/e2e-report.mjs', i
 
 function reporterRepo({ schema, policy = HIGH, plan: planText = PLAN, quality = QUALITY, quarantine } = {}) {
   const repo = gitRepo();
-  write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\n${policy}`);
-  write(repo, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\ncreated: 2026-10-01\n`);
-  write(repo, 'openspec/changes/demo/test-plan.md', planText);
-  if (quality != null) write(repo, 'openspec/changes/demo/quality.md', quality);
-  if (quarantine != null) write(repo, 'tests/e2e/quarantine.md', quarantine);
+  writeIn(repo.dir, 'openspec/quality-policy.md', `${shippedPolicy}\n${policy}`);
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\ncreated: 2026-10-01\n`);
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', planText);
+  if (quality != null) writeIn(repo.dir, 'openspec/changes/demo/quality.md', quality);
+  if (quarantine != null) writeIn(repo.dir, 'tests/e2e/quarantine.md', quarantine);
   return repo;
 }
 
 function runReporter(repo, run, args = []) {
-  write(repo, 'results.json', JSON.stringify(run));
+  writeIn(repo.dir, 'results.json', JSON.stringify(run));
   return spawnSync(process.execPath, [reporterCli, 'demo', 'results.json', ...args], { cwd: repo.dir, encoding: 'utf8' });
 }
 
@@ -245,7 +240,7 @@ test('e2e-report CLI rejects malformed policy settings with exit 2', t => {
   const repo = reporterRepo({ schema: 'quality-driven-e2e' });
   t.after(() => repo.cleanup());
   for (const line of [...MALFORMED_POLICIES, 'flaky_fail_levels: [critical]']) {
-    write(repo, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
+    writeIn(repo.dir, 'openspec/quality-policy.md', `${shippedPolicy}\n${line}\n`);
     const out = runReporter(repo, results([[['TP-001', 'TP-002', 'TP-003'], 'expected']]));
     assert.equal(out.status, 2, line);
     assert.match(out.stderr, /flaky_fail_levels が不正/, line);
@@ -484,10 +479,10 @@ test('e2e-report CLI reads quarantine.md under the E2E root and only warns for l
 
 function evidenceRepo({ quarantineRows, riskResults, residuals = [] }) {
   const repo = gitRepo();
-  write(repo, 'openspec/changes/demo/quality.md', QUALITY);
-  write(repo, 'openspec/changes/demo/test-plan.md', PLAN);
-  write(repo, 'tests/e2e/quarantine.md', quarantine(quarantineRows));
-  write(repo, 'test-results/run.log', 'ok\n');
+  writeIn(repo.dir, 'openspec/changes/demo/quality.md', QUALITY);
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', PLAN);
+  writeIn(repo.dir, 'tests/e2e/quarantine.md', quarantine(quarantineRows));
+  writeIn(repo.dir, 'test-results/run.log', 'ok\n');
   repo.commit('fixture');
   const data = {
     format_version: 1,
@@ -496,7 +491,7 @@ function evidenceRepo({ quarantineRows, riskResults, residuals = [] }) {
     falsification: { performed: true, summary: 'done', counterexamples: [] },
     residuals,
   };
-  write(repo, 'openspec/changes/demo/evidence.md', `# Evidence\n\n## Execution Records\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`\n`);
+  writeIn(repo.dir, 'openspec/changes/demo/evidence.md', `# Evidence\n\n## Execution Records\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`\n`);
   return repo;
 }
 
@@ -637,26 +632,26 @@ test('the documented quarantine and release steps reproduce on a fixture repo', 
   const tagged = run => JSON.parse(JSON.stringify(run).replaceAll('@demo', '@add-checkout'));
   const repo = gitRepo();
   try {
-    write(repo, 'openspec/quality-policy.md', shippedPolicy);
-    write(repo, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-10-01\n');
-    write(repo, 'openspec/changes/add-checkout/test-plan.md', PLAN.replace('R9', 'R3'));
-    write(repo, 'openspec/changes/add-checkout/quality.md', QUALITY.replace('| O2 | F2 | API | 200 |', '| O2 | F2 | API | 200 |\n| O3 | F2 | Queue | 1 件 |'));
+    writeIn(repo.dir, 'openspec/quality-policy.md', shippedPolicy);
+    writeIn(repo.dir, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\ncreated: 2026-10-01\n');
+    writeIn(repo.dir, 'openspec/changes/add-checkout/test-plan.md', PLAN.replace('R9', 'R3'));
+    writeIn(repo.dir, 'openspec/changes/add-checkout/quality.md', QUALITY.replace('| O2 | F2 | API | 200 |', '| O2 | F2 | API | 200 |\n| O3 | F2 | Queue | 1 件 |'));
     const cli = (run) => {
-      write(repo, 'results.json', JSON.stringify(tagged(run)));
+      writeIn(repo.dir, 'results.json', JSON.stringify(tagged(run)));
       return spawnSync(process.execPath, [reporterCli, 'add-checkout', 'results.json'], { cwd: repo.dir, encoding: 'utf8' });
     };
     // Step 2: the test is excluded from the run, so without a list entry TP-002 is missing.
     const excluded = results([[['TP-001'], 'expected'], [['TP-003'], 'expected']]);
     assert.equal(cli(excluded).status, 1);
     // Step 1: add the documented row to the installed template.
-    write(repo, 'tests/e2e/quarantine.md', `${shippedQuarantine}${row.replace('2026-10-31', '2999-12-31')}\n`);
+    writeIn(repo.dir, 'tests/e2e/quarantine.md', `${shippedQuarantine}${row.replace('2026-10-31', '2999-12-31')}\n`);
     const quarantined = cli(excluded);
     assert.equal(quarantined.status, 0, quarantined.stdout + quarantined.stderr);
     assert.match(quarantined.stdout, /隔離中: 1 件（coverage に数えません。一覧は tests\/e2e\/quarantine\.md）/);
     // Release: the test runs again and the row is removed.
     const restored = results([[['TP-001'], 'expected'], [['TP-002'], 'expected'], [['TP-003'], 'expected']]);
     assert.match(cli(restored).stdout, /TP-002 は実行されて pass しましたが、隔離中/);
-    write(repo, 'tests/e2e/quarantine.md', shippedQuarantine);
+    writeIn(repo.dir, 'tests/e2e/quarantine.md', shippedQuarantine);
     const released = cli(restored);
     assert.equal(released.status, 0);
     assert.doesNotMatch(released.stdout, /隔離/);
