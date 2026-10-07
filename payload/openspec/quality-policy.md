@@ -58,6 +58,15 @@ e2e_lint_scope: changed
 - 導入時は `changed` で始め、`node scripts/testkit-gate.mjs lint` の警告が 0 件になってから `all` に上げる。
 - 環境変数 `QE_E2E_LINT_MODE` / `QE_E2E_LINT_SCOPE` は旧 `spec-driven-e2e` の change にだけ効く（既定は `warn`）。統合 schema では無視する。
 
+### フレーク方針
+
+既定では、リトライ後に成功した flaky のテストを pass として coverage に数え、⚠ を表示する。Risk の Level に応じて flaky を不合格にする場合は、人間が行頭に `flaky_fail_levels: [high]` のような行を追記する（例: `[medium, high]`）。
+
+- 列挙した Level の Risk に紐づく TP（test-plan の Risk 列 → quality.md の Risk Register の Level）が flaky になると、reporter は終了コード 3 で失敗する。複数の TP を持つテストは最も高い Level で判定する。Level を解決できない TP の flaky は不合格として扱う。
+- 列挙していない Level の flaky は pass として数え、警告を表示する。
+- low / medium / high 以外の値や角括弧の無い値は、doctor と reporter の入力エラーになる。行を消せば従来の動作に戻る。
+- 壊れたテストを期限付きで外す場合は、E2E ルート直下の `quarantine.md` に登録する（手順は `quarantine.md` の説明と openspec-custom-testkit の docs/workflow.md）。旧 `spec-driven-e2e` の change には、フレーク方針も隔離リストも適用しない。
+
 ## 4. Agent が変更してはいけないもの
 
 - quality.md frontmatter の `approved_by` / `approved_at` / `oracle_digest`

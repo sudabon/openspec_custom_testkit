@@ -4,7 +4,7 @@ import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
-import { e2eLintPolicy, policyIssues } from './policy.mjs';
+import { e2eLintPolicy, flakyFailLevels, policyIssues } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
   const failures = [];
@@ -44,6 +44,8 @@ export function doctor(repo, options = {}) {
       notes.push(`quality-policy.md に ${lint.missing.join(' / ')} がありません。既定値（e2e_lint_mode: enforce / e2e_lint_scope: changed）で動かします。設定する場合は人間が追記してください`);
     }
     failures.push(...lint.errors);
+    const flaky = flakyFailLevels(policyText);
+    if (flaky.error) failures.push(flaky.error);
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);

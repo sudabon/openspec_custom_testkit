@@ -162,6 +162,74 @@ artifact の保持日数は入力 `artifact-retention-days` で指定する。�
 
 screenshot、video、trace には、画面に表示された個人情報、トークン、内部 URL が写ることがある。private リポジトリでも、artifact はリポジトリを閲覧できる全員がダウンロードできる。kit は添付や HTML レポートの中身を検査も、マスキングもしない。テストデータには合成データを使い、保持日数は必要な期間に絞る。
 
+## フレーク方針と隔離
+
+統合 schema `quality-driven-e2e` の change だけが対象である。旧 `spec-driven-e2e` の change には、フレーク方針も隔離リストも適用しない（隔離リストに旧 schema の change の行があると、reporter は警告だけを出す）。
+
+### フレーク方針の有効化
+
+既定では、Playwright のリトライ後に成功した flaky のテストを pass として coverage に数え、フレーク列に ⚠ を出す。終了コードは変わらない。
+
+Risk に応じて不合格にするには、人間が `openspec/quality-policy.md` の行頭に次の行を追記する。kit はこのファイルを上書きしないので、追記は手で行う。
+
+```
+flaky_fail_levels: [high]
+```
+
+- 値は `low` / `medium` / `high` を角括弧で列挙する（例: `[medium, high]`）。`[]` は方針なしと同じである。
+- reporter は TP の Level を、test-plan の `Risk` 列から quality.md の Risk Register の `Level` を引いて決める。複数の TP を持つテストは最も高い Level で判定する。
+- 列挙した Level の TP が flaky になると、結果列は `pass` のまま、フレーク列に `⚠ 不合格（high）` を出し、終了コード 3（失敗テストあり）にする。
+- 列挙していない Level の flaky は `⚠ 警告（low）` と表示し、coverage に数える。
+- Level を解決できない TP（quality.md が無い、Risk が未登録、Level が不正）の flaky は、理由を表示して不合格にする。
+- 上記以外の値・角括弧の無い値・複数の行は、doctor の失敗、reporter の入力エラー（終了コード 2）になる。黙って無視すると、方針を書いたつもりで効いていない状態になるからである。
+- 戻すときは行を消す。
+
+導入直後は CI が頻繁に落ちることがある。`[high]` から始め、壊れたテストは次の隔離リストで期限付きで外す。
+
+### 隔離の手順
+
+1. E2E ルート直下の `quarantine.md`（install が雛形を作る。既存のファイルは `--force` でも上書きしない）に行を足す。
+
+   ```
+   | TP-ID | Change | 理由 | 担当 | 期限 | 代替 |
+   |-------|--------|------|------|------|------|
+   | TP-002 | add-checkout | 決済モックの起動待ちが不安定 | qa-team | 2026-10-31 | O3 |
+   ```
+
+   - `Change` は必須である。同じ TP-ID でも change ごとに別物なので、別の change の行は効かない。
+   - `期限` は YYYY-MM-DD で、UTC の日付で比べる。期限日の当日までは有効、翌日から期限切れになる。
+   - `代替` は、その change の quality.md の Test Oracles にある Oracle ID（E2E 以外の層で同じ壊れ方を確かめるもの）か、evidence.md の `residuals[]` の ID である。
+2. テストのソースはそのまま残し、実行から外す。CI の e2e-command（またはローカルの実行）に、change と TP の両方のタグを持つテストだけを除く `--grep-invert` を足す。
+
+   ```
+   npx playwright test --grep-invert '(?=.*@add-checkout\b)(?=.*@TP-002\b)'
+   ```
+
+   `@TP-002` だけで除くと、同じ TP-ID を持つ別の change のテストまで外れる。
+3. final までに代替を evidence.md に記録する。Oracle なら `risk_results` に、その Oracle を含み、`layer` が E2E 以外で `result: "pass"` の行が要る。Residual なら `residuals[]` の該当項目に `approved_by` と `approved_at` が要る。無ければ final ゲートが TP-ID と代替を示して失敗する。
+
+reporter は有効な隔離中の TP を coverage にも欠落にも数えず、`隔離中: N 件` と各行の担当・期限・代替・理由を毎回表示する。隔離中のテストが実行されて pass しても coverage には数えない。実行されて fail した場合は失敗（終了コード 3）のままである。担当・期限・代替・Change のどれかが空の行、期限の書式が不正な行、quality.md に無い Oracle を代替にした行、同じ TP の重複行、期限切れの行は隔離として扱わず、理由を付けて欠落（終了コード 1）にする。
+
+### 解除の手順
+
+1. テストを直し、手順 2 で足した `--grep-invert` を外す。
+2. `quarantine.md` から行を消す。
+3. reporter が、その TP を通常どおり coverage として数えることを確かめる。
+
+隔離中の TP が pass しても kit は自動で解除しない。解除は人間がリストの行を消して行う。
+
+### `test.skip` で隔離しない理由
+
+`test.skip` / `test.fixme` は e2e-conventions が禁止している「skip の追加」と区別できず、lint（`excluded-test`）も除外として指摘する。テストソースに書くと、隔離の期限・担当・代替がレビューの差分から見えない。隔離は `quarantine.md` の 1 ファイルに集約し、期限切れと代替の欠落をゲートで止める。
+
+### 対象外と Residual Risk
+
+- 判定は 1 回の実行の結果だけで行う。実行をまたいだフレーク率は蓄積しない。履歴を CI の artifact、リポジトリへの commit、外部ストアのどこに置くかで権限と改ざん耐性の要件が変わるため、後続の change で扱う。
+- Residual Risk: たまにしか出ないフレークは、その実行でリトライが起きなければ検出できない。1 回の Green は「その実行で flaky が出なかった」ことしか示さない。
+- フレークの検出に基づく自動隔離と自動解除は行わない。人間の判断を経ずに coverage を外すことになるからである。
+- 同梱の `playwright.config.example.ts` の `retries` の既定値は変えない。利用者の Playwright 設定は保護ファイルである。
+- シナリオ対応表（`coverage-map`）は隔離リストをまだ読まない。隔離中の TP を「保護なし（隔離中）」として扱うのは別 change である。
+
 ## E2E 規約 lint
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。

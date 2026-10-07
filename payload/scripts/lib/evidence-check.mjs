@@ -6,6 +6,8 @@ import { git, headRevision, parseNameStatus } from './git.mjs';
 import { sha256File } from './hash.mjs';
 import { hasBoundedToken, parseTable, section } from './markdown.mjs';
 import { mutationThreshold } from './policy.mjs';
+import { quarantineAlternativeErrors, quarantineFor, utcDate } from './flaky.mjs';
+import { tpRows } from './plan-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 
 export function executionBlock(markdown) {
@@ -124,7 +126,21 @@ function revisionProblem(repo, change, run, head, isInput) {
   return changed.some(path => !ignored.has(path) && isInput(path)) ? `run ${run.id} の revision が HEAD の検証対象と一致しません` : null;
 }
 
-export function checkEvidence(repo, change, { digest, policyText, manifest }) {
+// The reporter does not read evidence, so only the final gate can confirm a quarantine's alternative.
+function quarantineErrors(repo, change, quality, { results, residuals, now }) {
+  const planPath = join(repo, change.path, 'test-plan.md');
+  try {
+    const listPath = join(repo, installedE2eRoot(repo), 'quarantine.md');
+    if (!existsSync(listPath)) return [];
+    const plannedIds = existsSync(planPath) ? tpRows(readFileSync(planPath, 'utf8')).map(row => row['TP-ID']) : [];
+    const { active } = quarantineFor(readFileSync(listPath, 'utf8'), { changeId: change.id, plannedIds, qualityText: quality || null, today: utcDate(now) });
+    return quarantineAlternativeErrors(active, { results, residuals });
+  } catch (err) {
+    return [`隔離リストを確認できません (${err.message})`];
+  }
+}
+
+export function checkEvidence(repo, change, { digest, policyText, manifest, now = Date.now() }) {
   const errors = [];
   const notes = [];
   const evidencePath = join(repo, change.path, 'evidence.md');
@@ -245,6 +261,8 @@ export function checkEvidence(repo, change, { digest, policyText, manifest }) {
       errors.push(`反例 ${example.id ?? '?'} に人間承認済み Residual がありません`);
     }
   }
+
+  errors.push(...quarantineErrors(repo, change, quality, { results, residuals, now }));
 
   const level = asString(splitFrontmatter(quality).data?.risk_level);
   const threshold = mutationThreshold(policyText);

@@ -192,6 +192,13 @@ function allActive(repo) {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+// Schema of one named change as the gates read it. Broken metadata is an error, never a legacy change.
+export function changeSchema(repo, dir) {
+  const head = interpretSchema(readSchemaText(repo, dir, null));
+  if (head.broken) return { error: `${dir}/.openspec.yaml を解釈できません: ${head.error}` };
+  return { schema: head.schema || configSchema(repo) || 'spec-driven' };
+}
+
 export function isChangeName(name) {
   return Boolean(name) && name !== '.' && name !== '..' && name !== 'archive' && !/[\\/\0]/.test(name);
 }
