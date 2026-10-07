@@ -108,7 +108,9 @@ test('CI keeps large passing output and reports an output overflow as undecidabl
     assert.match(overflow.lines.join('\n'), /64 MiB を超えた/);
     assert.ok(buffers.length && buffers.every(size => size >= 64 * 1024 * 1024));
     assert.equal(readFileSync(join(overflow.runDir, 'test.log'), 'utf8'), 'partial');
-    assert.equal(existsSync(join(overflow.runDir, 'manifest.json')), false);
+    const manifest = JSON.parse(readFileSync(join(overflow.runDir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.executions[0].truncated, true);
+    assert.deepEqual(manifest.runs, []);
   } finally { repo.cleanup(); }
 });
 

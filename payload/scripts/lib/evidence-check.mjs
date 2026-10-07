@@ -149,12 +149,16 @@ function quarantineErrors(repo, change, quality, { results, residuals, now }) {
 function freshnessErrors(repo, change, { policyText, residuals, now }) {
   if (change.e2e !== 'required') return [];
   const planPath = join(repo, change.path, 'test-plan.md');
-  if (!existsSync(planPath)) return [];
-  const { mocks } = checkRegistry(repo, change, tpRows(readFileSync(planPath, 'utf8')), { now });
-  if (!mocks.length) return [];
-  const policy = mockContractMaxAgeDays(policyText);
-  if (policy.error) return [policy.error];
-  return mockFreshnessErrors(mocks, { maxAgeDays: policy.days, residuals, now });
+  try {
+    if (!existsSync(planPath)) return [];
+    const { mocks } = checkRegistry(repo, change, tpRows(readFileSync(planPath, 'utf8')), { now });
+    if (!mocks.length) return [];
+    const policy = mockContractMaxAgeDays(policyText);
+    if (policy.error) return [policy.error];
+    return mockFreshnessErrors(mocks, { maxAgeDays: policy.days, residuals, now });
+  } catch (err) {
+    return [`モックの鮮度を確認できません (${err.code ?? err.name}: ${err.message})`];
+  }
 }
 
 export function checkEvidence(repo, change, { digest, policyText, manifest, now = Date.now() }) {

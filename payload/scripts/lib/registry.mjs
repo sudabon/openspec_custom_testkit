@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SCHEMA_E2E } from './critical.mjs';
 import { installedE2eRoot } from './e2e-root.mjs';
@@ -30,6 +30,7 @@ export function fixtureElements(cell) {
   const parts = asString(cell).split(/[,、]/).map(unquote);
   const items = parts.filter(part => part && part !== '...' && part !== '…');
   const result = { none: false, fixtures: [], mocks: [], errors: [] };
+  if (parts.some(part => part === '...' || part === '…')) result.errors.push('未記入です。前提が無い場合は なし と書いてください');
   if (parts.length > 1 && parts.some(part => !part)) result.errors.push('空の要素があります');
   if (items.includes(NO_FIXTURE)) {
     if (items.length === 1) result.none = true;
@@ -76,6 +77,7 @@ export function parseMockRegistry(text) {
   for (const row of rows) {
     const name = unquote(row['モック名']);
     if (!name) continue;
+    if (registry.has(name)) throw new Error(`モック名 ${name} が重複しています。同じ名前の登録行は1行にまとめてください`);
     registry.set(name, Object.fromEntries(MOCK_COLUMNS.map(column => [column, unquote(row[column])])));
   }
   return registry;
@@ -92,8 +94,12 @@ function daysBetween(from, to) {
 function readRegistry(repo, root, rel, parse) {
   const path = `${root}/${rel}`;
   const abs = join(repo, path);
-  if (!existsSync(abs)) return { path, missing: true };
-  return { path, registry: parse(readFileSync(abs, 'utf8')) };
+  try {
+    return { path, registry: parse(readFileSync(abs, 'utf8')) };
+  } catch (err) {
+    if (err.code === 'ENOENT') return { path, missing: true };
+    return { path, error: `${path} の登録表を読み取れません (${err.code ? `${err.code}: ` : ''}${err.message})` };
+  }
 }
 
 // Problems of one registered mock row; `today` (YYYY-MM-DD) rejects verification dates in the future.
@@ -103,7 +109,7 @@ export function mockRowProblems(row, today) {
   if (empty.length) problems.push(`${empty.join('・')} が空です`);
   const date = row['最終確認日'];
   if (date && !validDate(date)) problems.push(`最終確認日 ${date} の形式が不正です（YYYY-MM-DD で書きます）`);
-  else if (date && today && date > today) problems.push(`最終確認日 ${date} が将来の日付です（検査日 ${today}）`);
+  else if (date && today && date > today) problems.push(`最終確認日 ${date} が将来の日付です（UTC の検査日 ${today}）。最終確認日は UTC の日付で書いてください`);
   return problems;
 }
 
@@ -132,8 +138,9 @@ export function checkRegistry(repo, change, rows, { now = Date.now() } = {}) {
     }
   }
   if (root && used.fixtures.size) {
-    const { path, missing, registry } = readRegistry(repo, root, FIXTURE_REGISTRY, parseFixtureRegistry);
-    if (missing) problems.push(`${path} がありません。${[...used.fixtures.keys()].join('・')} を登録する README を作成してください`);
+    const { path, missing, registry, error } = readRegistry(repo, root, FIXTURE_REGISTRY, parseFixtureRegistry);
+    if (error) problems.push(error);
+    else if (missing) problems.push(`${path} がありません。${[...used.fixtures.keys()].join('・')} を登録する README を作成してください`);
     else if (!registry) problems.push(`${path} に ${FIXTURE_HEADING} の表がありません`);
     else {
       for (const [name, tps] of used.fixtures) {
@@ -151,8 +158,9 @@ export function checkRegistry(repo, change, rows, { now = Date.now() } = {}) {
   }
   const mocks = [];
   if (root && used.mocks.size) {
-    const { path, missing, registry } = readRegistry(repo, root, MOCK_REGISTRY, parseMockRegistry);
-    if (missing) problems.push(`${path} がありません。${[...used.mocks.keys()].join('・')} を登録する README を作成してください`);
+    const { path, missing, registry, error } = readRegistry(repo, root, MOCK_REGISTRY, parseMockRegistry);
+    if (error) problems.push(error);
+    else if (missing) problems.push(`${path} がありません。${[...used.mocks.keys()].join('・')} を登録する README を作成してください`);
     else if (!registry) problems.push(`${path} に ${MOCK_HEADING} の表がありません`);
     else {
       const today = utcDay(now);

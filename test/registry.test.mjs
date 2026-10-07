@@ -153,6 +153,48 @@ test('registry tables are read from the README headings and ignore fenced exampl
   assert.equal(qualifiedTp('add-checkout', 'TP-002'), 'add-checkout:TP-002');
 });
 
+test('placeholder Fixture cells fail integrated plans and only warn for legacy plans', () => {
+  for (const cell of ['...', '…', '`...`', 'なし, …', 'seed:a、...']) {
+    const repo = repoWith({ planText: plan(cell), fixtures: fixtureReadme([['seed:a', 'add-checkout:TP-001']]) });
+    try {
+      const checked = checkTestPlan(repo.dir, change(), { now: NOW });
+      assert.match(checked.errors.join('\n'), /TP-001 の Fixture 列: 未記入です。前提が無い場合は なし と書いてください/, cell);
+      const legacyPlan = read('openspec/schemas/spec-driven-e2e/templates/test-plan.md').replace('| TP-001 | ... | ... |', `| TP-001 | ... | ${cell} |`);
+      write(repo, 'openspec/changes/add-checkout/test-plan.md', legacyPlan);
+      const legacy = checkTestPlan(repo.dir, change({ schema: 'spec-driven-e2e', scope: 'legacy-e2e' }), { now: NOW });
+      assert.deepEqual(legacy.errors, [], cell);
+      assert.match(legacy.warnings.join('\n'), /未記入です.*旧 spec-driven-e2e のため警告のみ/, cell);
+    } finally { repo.cleanup(); }
+  }
+});
+
+test('duplicate mock names fail regardless of which verification date comes last', () => {
+  for (const dates of [['2026-06-09', '2026-10-07'], ['2026-10-07', '2026-06-09']]) {
+    const repo = repoWith({ planText: plan('mock:pay'), mocks: mockReadme(dates.map((date, i) => [i ? '`pay`' : 'pay', '決済', 'v2', '比較', date])) });
+    try {
+      assert.match(registryErrors(repo).join('\n'), /mocks\/README.md.*モック名 pay が重複/);
+      assert.deepEqual(checkRegistry(repo.dir, change(), [{ 'TP-ID': 'TP-001', Fixture: 'mock:pay' }], { now: NOW }).mocks, []);
+    } finally { repo.cleanup(); }
+  }
+});
+
+test('unreadable registry files report diagnostics and preserve other final-gate failures', () => {
+  const repo = repoWith({ planText: plan('seed:a, mock:pay') });
+  try {
+    for (const kind of ['fixtures', 'mocks']) mkdirSync(join(repo.dir, `tests/e2e/${kind}/README.md`), { recursive: true });
+    write(repo, 'openspec/changes/add-checkout/quality.md', QUALITY.replaceAll('low', 'medium'));
+    write(repo, 'openspec/changes/add-checkout/evidence.md', `## Execution Records\n\`\`\`json\n${JSON.stringify({ format_version: 1, runs: [], risk_results: [], falsification: { performed: true, summary: 'x', counterexamples: [] }, residuals: [] })}\n\`\`\`\n`);
+    const checked = evaluateChange(repo.dir, change(), { phase: 'final', now: NOW, tags: false });
+    for (const kind of ['fixtures', 'mocks']) assert.ok(checked.failures.some(line => line.includes(`${kind}/README.md の登録表を読み取れません (EISDIR:`)), checked.failures.join('\n'));
+    assert.ok(checked.failures.includes('medium の Human Code Review がありません'), 'evidence diagnostics after freshness are retained');
+    assert.ok(checked.failures.includes('未完了タスクが残っています'));
+    const legacy = checkRegistry(repo.dir, change({ schema: 'spec-driven-e2e' }), [{ 'TP-ID': 'TP-001', '前提(fixture)': 'seed:a, mock:pay' }]);
+    assert.deepEqual(legacy.errors, []);
+    assert.equal(legacy.warnings.length, 2);
+    assert.ok(legacy.warnings.every(line => /読み取れません.*警告のみ/.test(line)));
+  } finally { repo.cleanup(); }
+});
+
 test('plan gate fixture registration scenarios', () => {
   const cases = [
     {
@@ -253,7 +295,7 @@ test('plan gate mock registration scenarios', () => {
     { name: 'several empty columns', mocks: mockReadme([[full[0], '', '', '', '']]), expected: [/対象サービス・契約の出典・整合の確認方法・最終確認日 が空です/] },
     { name: 'Malformed verification date', mocks: mockReadme([full.map((cell, i) => (i === 4 ? '2026/10/01' : cell))]), expected: [/最終確認日 2026\/10\/01 の形式が不正です/] },
     { name: 'impossible date', mocks: mockReadme([full.map((cell, i) => (i === 4 ? '2026-02-30' : cell))]), expected: [/最終確認日 2026-02-30 の形式が不正です/] },
-    { name: 'future date', mocks: mockReadme([full.map((cell, i) => (i === 4 ? '2026-10-08' : cell))]), expected: [/最終確認日 2026-10-08 が将来の日付です（検査日 2026-10-07）/] },
+    { name: 'future date', mocks: mockReadme([full.map((cell, i) => (i === 4 ? '2026-10-08' : cell))]), expected: [/最終確認日 2026-10-08 が将来の日付です（UTC の検査日 2026-10-07）。最終確認日は UTC の日付で書いてください/] },
     { name: 'checked today passes', mocks: mockReadme([full.map((cell, i) => (i === 4 ? '2026-10-07' : cell))]), expected: [] },
     { name: 'registered mock passes', mocks: mockReadme([full]), expected: [] },
   ];
@@ -267,7 +309,17 @@ test('plan gate mock registration scenarios', () => {
   }
 });
 
-test('template examples pass the registry checks', () => {
+test('mock verification dates use UTC even during the early morning in Japan', () => {
+  const repo = repoWith({ planText: plan('mock:pay'), mocks: mockReadme([['pay', '決済', 'v2', '比較', '2026-10-08']]) });
+  try {
+    for (const now of ['2026-10-08T07:00:00+09:00', '2026-10-07T23:59:59Z']) {
+      assert.match(checkTestPlan(repo.dir, change(), { now: Date.parse(now) }).errors.join('\n'), /UTC の検査日 2026-10-07.*UTC の日付で書いてください/);
+    }
+    assert.deepEqual(checkTestPlan(repo.dir, change(), { now: Date.parse('2026-10-08T00:00:00Z') }).errors, []);
+  } finally { repo.cleanup(); }
+});
+
+test('shipped mock examples do not count as registrations', () => {
   const repo = gitRepo();
   try {
     write(repo, 'tests/e2e/fixtures/README.md', read('tests/e2e/fixtures/README.md'));
@@ -278,8 +330,9 @@ test('template examples pass the registry checks', () => {
       { 'TP-ID': 'TP-005', Fixture: 'なし' },
     ];
     const result = checkRegistry(repo.dir, change(), rows, { now: NOW });
-    assert.deepEqual(result.errors, []);
-    assert.deepEqual(result.mocks.map(mock => mock.name), ['payment-gateway']);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /モック payment-gateway が .*mocks\/README.md に登録されていません/);
+    assert.deepEqual(result.mocks, []);
     // The integrated template row uses なし and stays outside the registry check.
     const templatePlan = read('openspec/schemas/quality-driven-e2e/templates/test-plan.md');
     assert.match(templatePlan, /\| TP-001 \| \| \| R1 \| O1 \| なし \|/);
@@ -349,6 +402,7 @@ test('contract-command runs only when set, is recorded and fails the job after s
     repo.commit('base');
     const env = { BASE_REF: 'HEAD', SETUP_MODE: 'caller', TEST_COMMAND: 'unit' };
     const commands = [];
+    const before = Date.now();
     const quiet = runCiJob(env, { cwd: repo.dir, execFile(file, args) { commands.push(args.at(-1)); return 'ok'; } });
     assert.equal(quiet.code, 0, quiet.lines.join('\n'));
     assert.deepEqual(commands, ['unit']);
@@ -368,9 +422,52 @@ test('contract-command runs only when set, is recorded and fails the job after s
     assert.ok(failed.runDir);
     assert.equal(readFileSync(join(failed.runDir, 'contract.log'), 'utf8'), 'pact mismatch\nprovider drift\n');
     assert.match(readFileSync(join(failed.summaryDir, 'summary.txt'), 'utf8'), /pact mismatch[\s\S]*exit 4/);
+    const manifest = JSON.parse(readFileSync(join(failed.runDir, 'manifest.json'), 'utf8'));
+    const contract = manifest.executions.find(run => run.command === 'npm run test:contract');
+    assert.equal(contract.exit_code, 4);
+    assert.ok(Date.parse(contract.started_at) >= before && Date.parse(contract.started_at) <= Date.now());
+    assert.equal(contract.source_sha256, sha('pact mismatch\nprovider drift\n'));
     const passed = runCiJob({ ...env, CONTRACT_COMMAND: 'contract' }, { cwd: repo.dir, execFile: () => 'ok' });
     assert.equal(passed.code, 0);
     assert.ok(existsSync(join(passed.runDir, 'contract.log')));
+    const success = JSON.parse(readFileSync(join(passed.runDir, 'manifest.json'), 'utf8')).executions.find(run => run.command === 'contract');
+    assert.equal(success.exit_code, 0);
+    assert.ok(Date.parse(success.started_at) >= before && Date.parse(success.started_at) <= Date.now());
+  } finally { repo.cleanup(); }
+});
+
+test('truncated contract output is recorded but cannot verify evidence', () => {
+  const repo = repoWith();
+  try {
+    write(repo, 'openspec/changes/add-checkout/.openspec.yaml', 'schema: quality-driven-e2e\n');
+    write(repo, 'openspec/changes/add-checkout/tasks.md', '- [ ] 1.1 plan\n');
+    write(repo, 'openspec/changes/add-checkout/evidence.md', '## Execution Records\n```json\n{"runs":[{"id":"partial","command":"contract","exit_code":2}]}\n```\n');
+    repo.commit('change');
+    let invokedAt;
+    let evaluatedManifest;
+    const result = runCiJob({ BASE_REF: 'HEAD~1', SETUP_MODE: 'caller', CONTRACT_COMMAND: 'contract' }, {
+      cwd: repo.dir,
+      execFile() {
+        invokedAt = Date.now();
+        throw Object.assign(new Error('ENOBUFS'), { code: 'ENOBUFS', status: null, stdout: 'partial', stderr: '' });
+      },
+      evaluateChange(_repo, _change, { manifest }) {
+        evaluatedManifest = manifest;
+        return { phase: 'plan', warnings: [], failures: [] };
+      },
+    });
+    assert.equal(result.code, 2);
+    const manifest = JSON.parse(readFileSync(join(result.runDir, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.executions.length, 1);
+    const execution = manifest.executions[0];
+    assert.equal(execution.command, 'contract');
+    assert.equal(execution.exit_code, 2);
+    assert.equal(execution.truncated, true);
+    assert.ok(Date.parse(execution.started_at) <= invokedAt);
+    assert.equal(execution.source_sha256, sha('partial'));
+    assert.deepEqual(manifest.runs, []);
+    assert.deepEqual(manifest.run_ids, []);
+    assert.deepEqual(evaluatedManifest, manifest);
   } finally { repo.cleanup(); }
 });
 
