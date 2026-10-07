@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_E2E, SCHEMA_INTEGRATED } from './critical.mjs';
-import { asString, splitFrontmatter } from './frontmatter.mjs';
-import { hasBoundedToken, parseTable, section } from './markdown.mjs';
+import { SCHEMA_E2E, SCHEMA_INTEGRATED, STAMP_FILE } from './critical.mjs';
+import { asString, parseYamlText, splitFrontmatter, validDate } from './frontmatter.mjs';
+import { delegatedHeading, hasBoundedToken, markdownProse, parseTable, planSections, planTables, section, tpReferences } from './markdown.mjs';
 import { listFiles } from './files.mjs';
-import { installedE2eRoot } from './e2e-root.mjs';
+import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
 
 const TAG_SOURCE = /\.(?:[cm]?[jt]sx?|feature)$/i;
 
@@ -84,20 +84,181 @@ export function qualityModel(text) {
   return { risks, oracles, layers, levels, max, badLevel: rawBad == null ? null : (rawBad || '(空)'), e2eLayer, manual, manualWithoutReason, manualWithoutId, unknownLayers, layerColumn, emptyLayers };
 }
 
+const TP_SECTION = '## E2E観点一覧';
+const DELEGATED_SECTION = '## 対象外シナリオ';
+
+// Same prose and sections as the coverage map. Only `## E2E観点一覧` holds TP rows;
+// a TP-ID table anywhere else, or a TP reference under another E2E観点一覧 / 対象外
+// heading, fails instead of being dropped.
+function testPlanStructure(planText) {
+  const prose = markdownProse(planText, { tables: true });
+  const sections = planSections(prose.text);
+  const tables = sections
+    .filter(item => item.heading === TP_SECTION)
+    .flatMap(item => planTables(item.body));
+  const errors = [];
+  if (prose.unclosedFence) errors.push('test-plan のコードフェンスが閉じられていません（閉じていないフェンス以降の TP 行を読めません）');
+  // Tables without a delimiter row stay accepted when they start with the TP-ID header.
+  const tpTable = table => table.firstCells.includes('TP-ID');
+  const preamble = prose.text.slice(0, sections[0]?.start ?? prose.text.length);
+  if (planTables(preamble).some(tpTable)) errors.push(`最初の見出しより前に TP-ID 列の表があります（TP 行は ${TP_SECTION} の節に置いてください）`);
+  for (const { heading, body } of sections) {
+    if (heading === TP_SECTION) continue;
+    if (planTables(body).some(tpTable)) {
+      errors.push(`見出し ${heading} の下に TP があります（TP-ID 列の表は ${TP_SECTION} の節に置いてください）`);
+      continue;
+    }
+    if (heading === DELEGATED_SECTION) continue;
+    const refs = tpReferences(body);
+    if (!refs.length) continue;
+    if (delegatedHeading(heading)) {
+      errors.push(`見出し ${heading} は対象外の表として読めません（${DELEGATED_SECTION} の見出しが必要です。この節は TP を読まないため、${refs.join('・')} の参照があると失敗します）`);
+    } else if (/^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading)) {
+      errors.push(`見出し ${heading} の下に TP があります（${refs.join('・')} の参照があります。E2E観点一覧 で始まる見出しは TP を読まない別の節になるため、参照だけでも失敗します。補足は ${TP_SECTION} の中に別の名前の小見出しで書いてください）`);
+    }
+  }
+  for (const table of tables) {
+    if (!tpTable(table)) errors.push(table.separator
+      ? `E2E観点一覧 に TP-ID 列の無い表があります: ${table.firstLine}（TP 以外の表は別の節に置いてください）`
+      : `E2E観点一覧 に TP-ID の見出し行で始まらない表があります: ${table.firstLine}（空行やコードフェンスで表を分けないでください。分ける場合は見出し行と区切り行を付けます）`);
+  }
+  return { tables: tables.filter(tpTable), errors };
+}
+
 export function tpRows(planText) {
-  return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
+  return testPlanStructure(planText).tables.flatMap(table => table.rows).filter(row => /^TP-\d{3}$/.test(row['TP-ID']));
+}
+
+export function testPlanRowErrors(planText) {
+  const { tables, errors } = testPlanStructure(planText);
+  return [...errors, ...tables.flatMap(table => table.rows)
+    .filter(row => !/^TP-\d{3}$/.test(row['TP-ID']))
+    .map(row => `E2E観点一覧 の TP-ID ${row['TP-ID'] || '(空)'} は不正です（TP-001 のように TP- と3桁の数字を使います）`)];
+}
+
+// Reserve project-related names (including the existing Projets typo), preserving custom columns.
+const PROJECT_HEADER_VARIANT = /projec?t|プロジェクト/;
+
+export function testPlanHeaderErrors(planText) {
+  const errors = [];
+  for (const { headers } of testPlanStructure(planText).tables) {
+    const seen = new Set();
+    for (const header of headers) {
+      const normalized = header.normalize('NFKC').replace(/[\p{P}\p{S}\s]/gu, '').toLowerCase();
+      if (!header) errors.push('E2E観点一覧 の列 (空) は不正です（列名を指定してください）');
+      else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(normalized)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
+      if (header && seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
+      seen.add(header);
+    }
+  }
+  return errors;
+}
+
+// Optional `Projects` cell: Playwright project names separated by `,` or `、`. Duplicates collapse;
+// `blank` reports an empty element such as `chromium, , webkit`.
+export function projectsOf(row) {
+  const raw = asString(row.Projects);
+  if (!raw) return { projects: [], blank: false };
+  const parts = raw.split(/[,、]/).map(part => part.trim());
+  return { projects: [...new Set(parts.filter(Boolean))], blank: parts.some(part => !part) };
+}
+
+export const VIEWPOINTS = ['クロスブラウザ／デバイス／レスポンシブ', '見た目の回帰', 'アクセシビリティ', '文言・多言語', '性能', '入力系セキュリティ'];
+export const ALL_VIEWPOINTS = '全観点';
+const VIEWPOINT_HEADING = '## Non-functional Viewpoints';
+const NOT_APPLICABLE = '該当なし';
+
+function viewpointName(cell) {
+  return asString(cell).replace(/\s+/g, '').replaceAll('/', '／');
+}
+
+// Strip the optional "該当なし" marker and parentheses; the remaining text must be a concrete reason.
+function reasonText(cell) {
+  const reason = asString(cell).replace(/[。．.!！?？、,，…\s]+$/u, '').replace(/^該当なし[\s:：\-–—ー―]*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
+  const content = reason.replace(/[。．.!！?？、,，…\s]+$/u, '');
+  return !content || /^(<[^>]*>|[-–—ー―]|tbd|todo|未定(?:です|である)?|(?:特に)?(?:なし|無し)|n\/?a)$/i.test(content) ? '' : reason;
+}
+
+function viewpointErrors(id, text, e2e) {
+  const errors = [];
+  const failureIds = new Set(parseTable(section(text, '## Failure Modes')).rows.map(row => asString(row.ID)).filter(value => /^F\d+$/.test(value)));
+  const tableRows = parseTable(section(text, VIEWPOINT_HEADING)).rows;
+  const seen = new Set();
+  const names = [];
+  for (const row of tableRows) {
+    const name = viewpointName(row['観点']);
+    const label = asString(row['観点']) || '(観点 空)';
+    if (name !== ALL_VIEWPOINTS && !VIEWPOINTS.includes(name)) {
+      errors.push(`${id}: Non-functional Viewpoints の観点 ${label} は不明です（${VIEWPOINTS.join(' / ')} から選びます）`);
+      continue;
+    }
+    if (seen.has(name)) errors.push(`${id}: Non-functional Viewpoints の ${name} が重複しています`);
+    seen.add(name);
+    names.push(name);
+    const modeCell = asString(row['Failure Mode']);
+    const modes = modeCell === NOT_APPLICABLE ? [] : modeCell.split(/[\s,、]+/).filter(Boolean);
+    const reason = reasonText(row['該当なし理由']);
+    if (modeCell === NOT_APPLICABLE && !reason) errors.push(`${id}: Non-functional Viewpoints の ${name} は該当なしの理由がありません`);
+    else if (!modes.length && !reason) errors.push(`${id}: Non-functional Viewpoints の ${name} に Failure Mode も該当なしの理由もありません`);
+    else if (modes.length && reason) errors.push(`${id}: Non-functional Viewpoints の ${name} に Failure Mode と該当なし理由の両方があります（どちらか一方にします）`);
+    if (name === ALL_VIEWPOINTS && modes.length) errors.push(`${id}: Non-functional Viewpoints の ${ALL_VIEWPOINTS} には該当なしの理由だけを書きます`);
+    for (const mode of modes) {
+      if (!failureIds.has(mode)) errors.push(`${id}: Non-functional Viewpoints の ${name} が参照する ${mode} は Failure Modes にありません`);
+    }
+  }
+  if (names.includes(ALL_VIEWPOINTS)) {
+    if (e2e !== 'not-applicable') errors.push(`${id}: ${ALL_VIEWPOINTS} の1行にできるのは e2e: not-applicable の change だけです（現在: ${e2e || '未指定'}。それ以外は6観点すべての行が必要です）`);
+    else if (names.length > 1) errors.push(`${id}: ${ALL_VIEWPOINTS} の行は他の観点の行と併用できません`);
+    return errors;
+  }
+  for (const name of VIEWPOINTS) {
+    if (!seen.has(name)) errors.push(`${id}: Non-functional Viewpoints に ${name} の行がありません`);
+  }
+  return errors;
+}
+
+function createdOf(repo, dir) {
+  const path = join(repo, dir, '.openspec.yaml');
+  if (!existsSync(path)) return { error: '.openspec.yaml がありません' };
+  const parsed = parseYamlText(readFileSync(path, 'utf8'));
+  if (parsed.errors.length || parsed.alias || parsed.tagged || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
+    return { error: `.openspec.yaml が不正です: ${parsed.errors[0] || 'alias・独自 tag のない YAML mapping が必要です'}` };
+  }
+  const value = parsed.data?.created;
+  const created = value instanceof Date && !Number.isNaN(value.getTime()) ? value.toISOString().slice(0, 10) : asString(value);
+  if (!created) return { error: '.openspec.yaml の created がありません' };
+  if (!validDate(created)) return { error: `.openspec.yaml の created が不正です: ${created}（YYYY-MM-DD が必要です）` };
+  return { created };
+}
+
+// A quality.md without the register is tolerated (warning) only for changes created before the kit
+// recorded the feature. Missing or unreadable dates fail closed.
+function missingViewpoints(repo, change) {
+  const label = `${change.id}: quality.md に ${VIEWPOINT_HEADING} がありません`;
+  const metadata = createdOf(repo, change.path);
+  if (metadata.error) return { error: `${label}（${metadata.error}。導入前の change として扱えません）` };
+  const { created } = metadata;
+  const stamp = readJsonIfExists(join(repo, STAMP_FILE));
+  if (!stamp.exists) return { error: `${label}（${STAMP_FILE} がありません。導入前の change として扱えません）` };
+  if (stamp.broken || !stamp.data || typeof stamp.data !== 'object' || Array.isArray(stamp.data)) return { error: `${label}（${STAMP_FILE} が不正です。導入前の change として扱えません）` };
+  const since = asString(stamp.data?.features?.nonfunctionalViewpoints?.since);
+  if (!validDate(since)) return { error: `${label}（${STAMP_FILE} の features.nonfunctionalViewpoints.since が${since ? `不正です: ${since}（YYYY-MM-DD が必要です）` : 'ありません'}。導入前の change として扱えません）` };
+  if (created < since) return { warning: `${label}（${created} 作成で導入日 ${since} より前のため警告のみ）` };
+  return { error: `${label}（${created} 作成で導入日 ${since} 以降です）` };
 }
 
 export function checkTestPlan(repo, change) {
   const errors = [];
   const notes = [];
+  const warnings = [];
+  const projects = {};
   if (![SCHEMA_INTEGRATED, SCHEMA_E2E].includes(change.schema) && change.scope !== 'integrated') {
-    return { errors, notes, requiredTags: [] };
+    return { errors, notes, warnings, projects, requiredTags: [] };
   }
   const planPath = join(repo, change.path, 'test-plan.md');
   if (!existsSync(planPath)) {
     errors.push(`${change.id}: test-plan.md がありません`);
-    return { errors, notes, requiredTags: [] };
+    return { errors, notes, warnings, projects, requiredTags: [] };
   }
   const text = readFileSync(planPath, 'utf8');
   const frontmatter = splitFrontmatter(text);
@@ -117,6 +278,15 @@ export function checkTestPlan(repo, change) {
   const delegated = parseTable(section(text, '## 対象外シナリオ')).rows.filter(row => asString(row.Scenario));
   const tpIds = tp.map(row => row['TP-ID']);
   if (new Set(tpIds).size !== tpIds.length) errors.push(`${change.id}: TP-ID が重複しています`);
+  if (change.schema === SCHEMA_INTEGRATED) {
+    errors.push(...testPlanHeaderErrors(text).map(error => `${change.id}: ${error}`));
+    errors.push(...testPlanRowErrors(text).map(error => `${change.id}: ${error}`));
+    for (const row of tp) {
+      const declared = projectsOf(row);
+      if (declared.blank) errors.push(`${change.id}: ${row['TP-ID']} の Projects に空の要素があります`);
+      if (declared.projects.length) projects[row['TP-ID']] = declared.projects;
+    }
+  }
 
   if (change.schema === SCHEMA_INTEGRATED && change.e2e === 'required' && tp.length === 0) {
     errors.push(`${change.id}: required なのに TP が 0 件です`);
@@ -127,8 +297,20 @@ export function checkTestPlan(repo, change) {
 
   const qualityPath = join(repo, change.path, 'quality.md');
   let model = null;
+  if (change.schema === SCHEMA_INTEGRATED && !existsSync(qualityPath)) {
+    errors.push(`${change.id}: quality.md がありません（Non-functional Viewpoints と Risk / Oracle の参照を検査できません）`);
+  }
   if (change.schema === SCHEMA_INTEGRATED && existsSync(qualityPath)) {
-    model = qualityModel(readFileSync(qualityPath, 'utf8'));
+    const qualityText = readFileSync(qualityPath, 'utf8');
+    model = qualityModel(qualityText);
+    // Examples in code fences cannot satisfy the viewpoint register.
+    const qualityProse = markdownProse(qualityText);
+    if (qualityProse.unclosedFence) errors.push(`${change.id}: quality.md のコードフェンスが閉じられていません（閉じていないフェンス以降の ${VIEWPOINT_HEADING} を読めません）`);
+    if (section(qualityProse.text, VIEWPOINT_HEADING) == null) {
+      const missing = missingViewpoints(repo, change);
+      if (missing.error) errors.push(missing.error);
+      else warnings.push(missing.warning);
+    } else errors.push(...viewpointErrors(change.id, qualityProse.text, change.e2e));
     const riskIds = new Set(model.risks.map(row => row.ID));
     const oracleIds = new Set(model.oracles.map(row => row.ID));
     for (const row of tp) {
@@ -172,7 +354,7 @@ export function checkTestPlan(repo, change) {
   const legacyIds = change.schema === SCHEMA_E2E
     ? [...text.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0])
     : tpIds;
-  return { errors, notes, requiredTags: [...new Set(legacyIds)] };
+  return { errors, notes, warnings, projects, requiredTags: [...new Set(legacyIds)] };
 }
 
 function loadTagCorpus(repo) {

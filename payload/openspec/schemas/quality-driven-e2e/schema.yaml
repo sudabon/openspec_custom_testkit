@@ -173,6 +173,15 @@ artifacts:
          境界値(空/ゼロ/負数/最大値/overflow/精度) / null・未定義・型不正 /
          エラーハンドリング(例外・外部依存の失敗・タイムアウト) /
          再試行・二重実行・冪等性・並行実行 / 状態遷移(不正遷移を含む) / 認可 / 後方互換
+      2a. Non-functional Viewpoints: 次の6観点を `## Non-functional Viewpoints` 表(列: 観点 / Failure Mode / 該当なし理由)で必ず検討する。
+         観点名はテンプレートの6語をそのまま使う:
+         クロスブラウザ／デバイス／レスポンシブ / 見た目の回帰 / アクセシビリティ / 文言・多言語 / 性能 / 入力系セキュリティ
+         - 各行は、Failure Modes に存在する F-ID(`,`・`、`・空白区切りで複数可)か、該当なし理由のどちらか一方だけを書く。理由は具体的に書き、`<理由>`・`-`・`TBD`・`N/A` などのプレースホルダだけにしない。
+           両方空、両方記入、存在しない F-ID、理由の無い「該当なし」は計画ゲートが失敗する。
+         - test-plan が `e2e: required` の change は UI に触れる change とみなし、6行すべてを書く。
+         - `e2e: not-applicable` の change は、6行を書くか、観点を「全観点」とした1行(例: `| 全観点 | | UI 変更なし |`)で済ませてよい。
+         - 自動化できない観点(主観的な見た目の評価など)は Failure Mode を Manual 層に割り当てる。
+         - 観点の判断が妥当かはゲートでは判定しない。人間の quality 承認で確認する。
       3. Test Oracles: 各Failure Modeと重要なScenarioについて「何を観測すれば正しいと判断できるか」を定義する。
          - 観測点を明示する: レスポンス / 永続化された状態(DB) / Queue / 外部API呼び出しの回数と内容 / 起きてはいけない副作用
          - 期待値は具体値または不変条件(invariant)で書く
@@ -258,8 +267,13 @@ artifacts:
       - `not-applicable` は `reason` と `alternative_verification`（各要素に oracle, layer, method）を必須にする。
       - quality.md に E2E 層があるのに not-applicable にしてはならない。required なのに E2E 層が無いのも不可。
 
-      `## E2E観点一覧` の列は TP-ID, Requirement, Scenario, Risk, Oracle, Fixture, Intent, Expected。
-      required は TP を 1 件以上。not-applicable は TP 行を置かない。
+      `## E2E観点一覧` の列は TP-ID, Requirement, Scenario, Risk, Oracle, Fixture, Intent, Expected と、任意の Projects。
+      Projects はこの表記を使い、似た別名（Project・projects・プロジェクト・Playwright Projects・Ｐｒｏｊｅｃｔｓ など）・重複列・空の列名を置かない。列名は NFKC 正規化後に記号・空白を除き、小文字にした結果に `project`・`projet`・`プロジェクト` を含むものを予約する。正確な `Projects` 以外は、`Project Owner`・`担当プロジェクト`・`Subproject`・`Projection` など独自列の意図でも拒否する。それ以外の追加列（備考や Notes など）は無視する。
+      Projects は Playwright project 名を `,` または `、` で区切る(例: `chromium, mobile-safari`)。値がある TP は、書いた全 project で
+      pass したときだけ coverage に数える。空要素は計画ゲートが失敗し、重複は1つにまとめる。
+      空欄または列なしなら、いずれかの project の pass で数える。必要な TP だけに付ける(CI 時間が増えるため)。
+      required は TP を 1 件以上。not-applicable は TP 行を置かない。TP-ID は大文字の TP- と3桁の数字にする。不正な TP-ID と not-applicable の TP 行は reporter 単独でも入力エラーになる。
+      表を分けるときは見出し行と区切り行を付ける。区切り行は見出し行の次の行だけで、それより後の `| - | - |` のような行は TP 行として検査する。空行やコードフェンスで切れた`TP-ID` の見出し行で始まらない表の断片、TP-ID 列の無い表（凡例やメモの表）、閉じていないコードフェンスは、行を黙って除外せず計画ゲートで失敗し、frontmatter がある plan は reporter でも入力エラー（終了コード 2）になる。TP 以外の表は別の節に置く。`#` / `##` の見出しに加え、`E2E観点一覧` または `対象外` で始まる見出しは階層にかかわらず節を区切る。TP を読むのは `## E2E観点一覧` の節だけとする。それ以外の節（`## 補足`・`# Appendix`・`## 対象外シナリオ` の下の小見出しなど）や最初の見出しより前に TP-ID 列の表がある plan、および `## 対象外シナリオ` 以外の `E2E観点一覧` / `対象外` で始まる見出し（`### E2E観点一覧の補足`・`### 対象外ブラウザ` など）の下で TP-ID を参照する plan は、計画ゲートで失敗させ、frontmatter がある plan は reporter でも入力エラー（終了コード 2）にする。TP-ID の参照は coverage と同じく、前後が英数字・`.`・`/`・`_`・`-` でない大文字の `TP-数字` だけを数える（`HTTP-2` や `tests/e2e/TP-001.spec.ts` は参照ではない）。計画ゲート・reporter・coverage は同じ節の同じ表から TP を読む。
       TP-ID は重複させない。Risk と Oracle は quality.md に存在する ID だけを参照する。
       Unit など E2E 以外の Oracle を TP として再実装しない。
 

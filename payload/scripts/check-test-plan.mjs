@@ -40,6 +40,7 @@ for (const change of selected.changes) {
     console.error(`::error::${line}`);
     failed = 1;
   }
+  for (const line of result.planWarnings) console.log(`::warning::${line}`);
   for (const line of result.oks) console.log(`  ${line}`);
   if (result.failures.length === 0 && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
     console.log(`${change.id}: tag-presence pass（実行 coverage ではありません）`);

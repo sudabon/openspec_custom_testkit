@@ -32,7 +32,7 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
-  const progress = { level: 'unknown', failures: [], warnings: [], oks: [] };
+  const progress = { level: 'unknown', failures: [], warnings: [], planWarnings: [], oks: [] };
   try {
     return evaluateReadableChange(repo, change, options, progress);
   } catch (err) {
@@ -46,27 +46,31 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   const env = options.env ?? process.env;
   const tasks = taskState(parseTasks(change.tasksText));
   const phase = effectivePhase(options.phase ?? 'plan', change, tasks);
-  const { failures, warnings, oks } = progress;
+  const { failures, warnings, planWarnings, oks } = progress;
   let level = 'none';
 
   const selectedCustomQe = change.qe === true && change.scope === 'out-of-scope' && change.lifecycle !== 'deleted';
   if (change.scope === 'out-of-scope' && !selectedCustomQe && change.errors.length === 0 && change.e2e !== 'unknown') {
     warnings.push(change.reason);
-    return { failures, warnings, oks, level, phase };
+    return { failures, warnings, planWarnings, oks, level, phase };
   }
   failures.push(...change.errors);
 
   const wantQuality = options.quality !== false && (change.qe || change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE);
   const wantPlan = options.plan !== false && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_E2E || change.scope === 'integrated');
+  const runPlan = wantPlan && change.lifecycle !== 'deleted' && Boolean(change.tasksText || change.schema === SCHEMA_E2E || phase === 'final');
   const legacyQe = change.schema === SCHEMA_QE || selectedCustomQe;
   if (change.pendingPlan && !change.tasksText && phase === 'plan') warnings.push(`${change.id}: 計画途中(test-plan 未作成)`);
 
   if (wantQuality && change.lifecycle !== 'deleted' && (change.schema === SCHEMA_INTEGRATED || legacyQe)) {
     const qualityPath = join(repo, change.path, 'quality.md');
     if (!existsSync(qualityPath)) {
-      if (change.tasksText) failures.push('quality.md がないまま tasks.md が作成されています');
-      else if (phase !== 'final') warnings.push('計画段階(quality.md 未作成)');
-      else failures.push('quality.md がありません');
+      // With a plan to inspect, the integrated plan check owns this diagnostic.
+      if (!(runPlan && change.schema === SCHEMA_INTEGRATED && existsSync(join(repo, change.path, 'test-plan.md')))) {
+        if (change.tasksText) failures.push('quality.md がないまま tasks.md が作成されています');
+        else if (phase !== 'final') warnings.push('計画段階(quality.md 未作成)');
+        else failures.push('quality.md がありません');
+      }
       if (phase === 'final') {
         if (!change.tasksText || !tasks.complete) failures.push('未完了タスクが残っています');
         const evidence = checkEvidence(repo, change, { digest: '', policyText: '', manifest: options.manifest });
@@ -138,9 +142,11 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
     }
   }
 
-  if (wantPlan && change.lifecycle !== 'deleted' && (change.tasksText || change.schema === SCHEMA_E2E || phase === 'final')) {
+  if (runPlan) {
     const plan = checkTestPlan(repo, change);
     failures.push(...plan.errors);
+    warnings.push(...plan.warnings);
+    planWarnings.push(...plan.warnings);
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');
@@ -152,7 +158,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
       }
     }
   }
-  return { failures, warnings, oks, level, phase };
+  return { failures, warnings, planWarnings, oks, level, phase };
 }
 
 export function maxLevel(levels) {

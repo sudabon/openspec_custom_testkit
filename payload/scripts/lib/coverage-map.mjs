@@ -5,7 +5,7 @@ import { asString, parseYamlText } from './frontmatter.mjs';
 import { listFiles } from './files.mjs';
 import { readConfigDocument } from './environment.mjs';
 import { byteCompare } from './hash.mjs';
-import { parseTable } from './markdown.mjs';
+import { delegatedHeading, markdownProse, planSections, planTables, tpReferences } from './markdown.mjs';
 import { flatten, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export const CLASS = {
@@ -69,7 +69,7 @@ export function parseSpec(text, { delta = false } = {}) {
   let op = null;
   let current = null;
   let rename = null;
-  for (const line of markdownProse(text).split('\n')) {
+  for (const line of proseText(text).split('\n')) {
     const requirement = line.match(/^### Requirement:\s*(.+?)\s*$/);
     if (requirement) {
       if (delta && !op) throw new InvalidCoverageInputError(`delta の操作見出しがありません: ${requirement[1]}`);
@@ -150,31 +150,10 @@ function hasFrontmatter(text) {
   return /^---\r?\n/.test(text);
 }
 
-// Fenced code and indented prose cannot introduce declarations or TP references.
-// Plans retain indented pipe tables for compatibility with existing test plans.
-function markdownProse(text, { tables = false } = {}) {
-  let fence = null;
-  const lines = String(text).split(/\r?\n/).map(line => {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    if (fence) {
-      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
-      return '';
-    }
-    // Backticks in the info string make this inline code, not a fence opener.
-    if (marker && (marker[1][0] !== '`' || !marker[2].includes('`'))) {
-      fence = marker[1];
-      return '';
-    }
-    if (/^(?: {4}|\t)/.test(line) && !(tables && /^\s*\|/.test(line))) return '';
-    return line.replace(/^ {0,3}(?=#)/, '');
-  });
-  if (fence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
-  return lines.join('\n');
-}
-
-function planTables(body) {
-  return [...String(body ?? '').matchAll(/^[ \t]*\|[^\n]*(?:\n[ \t]*\|[^\n]*)*/gm)]
-    .map(match => parseTable(match[0]));
+function proseText(text, options) {
+  const prose = markdownProse(text, options);
+  if (prose.unclosedFence) throw new InvalidCoverageInputError('コードフェンスが閉じられていません');
+  return prose.text;
 }
 
 function delegatedList(line) {
@@ -186,30 +165,10 @@ function delegatedList(line) {
     || /[:：]\s*(?:Unit|Integration|Contract|Manual|E2E|単体|結合|手動)(?![A-Za-z])/i.test(bullet);
 }
 
-// Any heading that starts with 対象外 declares delegated rows, except explanatory notes.
-function delegatedHeading(heading) {
-  return /^#{1,6}[^\S\r\n]*(?:E2E[^\S\r\n]*)?対象外/.test(heading)
-    && !/^#{1,6}[^\S\r\n]*(?:E2E[^\S\r\n]*)?対象外[^\S\r\n]*の?(?:メモ|補足|注|備考|Notes?)/i.test(heading);
-}
-
-function sectionHeading(heading) {
-  return /^#{1,2}(?:[^\S\r\n]|$)/.test(heading)
-    || /^#{1,6}[^\S\r\n]*E2E観点一覧/.test(heading)
-    || delegatedHeading(heading);
-}
-
 // Rows of a test plan in a form shared by the integrated and legacy layouts.
 export function planRows(text, { legacy }) {
-  const prose = markdownProse(text, { tables: true });
-  // Ordinary subheadings stay inside their parent section. Every heading that
-  // names a plan section, at any level or spacing, starts a new one so that
-  // tables cannot leak into another section before being diagnosed.
-  const headings = [...prose.matchAll(/^ {0,3}#{1,6}[^\S\r\n]*[^\r\n]+/gm)]
-    .filter(match => sectionHeading(match[0].trim()));
-  const sections = headings.map((match, index) => ({
-    heading: match[0].trim(),
-    body: prose.slice(match.index + match[0].length, headings[index + 1]?.index ?? prose.length),
-  }));
+  const prose = proseText(text, { tables: true });
+  const sections = planSections(prose);
   const table = sections.filter(item => item.heading === '## E2E観点一覧')
     .flatMap(item => planTables(item.body).flatMap(table => table.rows));
   const tp = [];
@@ -260,9 +219,7 @@ export function planRows(text, { legacy }) {
     })));
   }
   const tableIds = new Set(tp.map(row => row.id));
-  // Only uppercase standalone IDs are references; paths and filename stems are not.
-  const textOnly = [...new Set([...prose.matchAll(/(?<![A-Za-z0-9_./-])TP-\d+(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g)].map(match => match[0]))]
-    .filter(id => !tableIds.has(id));
+  const textOnly = tpReferences(prose).filter(id => !tableIds.has(id));
   const hasSections = sections.some(item => item.heading === '## E2E観点一覧' || item.heading === '## 対象外シナリオ');
   return { rows: [...tp, ...delegated], textOnly, hasSections };
 }

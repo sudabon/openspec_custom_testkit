@@ -109,3 +109,38 @@ test('real OpenSpec CLI keeps the integrated graph and legacy schemas', () => {
   assert.match(after, /quality-driven-e2e/);
   rmSync(target, { recursive: true, force: true });
 });
+
+test('stamp records the non-functional viewpoint date once and keeps it on update', async () => {
+  const { main } = await import('../lib/cli.mjs');
+  const stampPath = target => join(target, '.openspec-custom-testkit.json');
+  const quiet = today => ({ log() {}, error() {}, stdin: { isTTY: false }, today });
+  const target = mkdtempSync(join(tmpdir(), 'tk-features-'));
+  try {
+    execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+    assert.equal(await main(['install', '--target', target], quiet('2026-10-10')), 0);
+    const first = readFileSync(stampPath(target), 'utf8');
+    assert.equal(JSON.parse(first).features.nonfunctionalViewpoints.since, '2026-10-10');
+
+    assert.equal(await main(['update', '--target', target], quiet('2026-11-01')), 0);
+    assert.equal(readFileSync(stampPath(target), 'utf8'), first);
+
+    const legacy = JSON.parse(first);
+    delete legacy.features;
+    legacy.installedAt = '2026-01-01T00:00:00.000Z';
+    writeFileSync(stampPath(target), `${JSON.stringify(legacy, null, 2)}\n`);
+    assert.equal(await main(['update', '--target', target], quiet('2026-11-02')), 0);
+    const upgraded = JSON.parse(readFileSync(stampPath(target), 'utf8'));
+    assert.equal(upgraded.features.nonfunctionalViewpoints.since, '2026-11-02');
+    for (const key of ['version', 'e2eRoot', 'files', 'migration', 'upstream', 'openspec']) {
+      assert.deepEqual(upgraded[key], legacy[key], key);
+    }
+
+    upgraded.features.other = { since: '2025-01-01' };
+    writeFileSync(stampPath(target), `${JSON.stringify(upgraded, null, 2)}\n`);
+    const kept = readFileSync(stampPath(target), 'utf8');
+    assert.equal(await main(['update', '--target', target], quiet('2026-12-01')), 0);
+    assert.equal(readFileSync(stampPath(target), 'utf8'), kept);
+  } finally {
+    rmSync(target, { recursive: true, force: true });
+  }
+});

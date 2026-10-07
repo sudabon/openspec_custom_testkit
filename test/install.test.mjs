@@ -341,3 +341,25 @@ test('critical scripts are never rewritten for a custom E2E root', () => {
   assert.equal(transformBytes('scripts/check-test-plan.sh', bytes, 'custom/e2e').toString(), bytes.toString());
   assert.match(transformBytes('scripts/check-test-plan.sh', bytes, 'custom/e2e', { legacy: true }).toString(), /custom\/e2e/);
 });
+
+test('install ships the screenshot and axe conventions without adding dependencies or touching a real config', async () => {
+  const target = tempDir();
+  const pkg = '{\n  "name": "app",\n  "devDependencies": { "@playwright/test": "1.55.1" }\n}\n';
+  const playwright = 'export default { testDir: "./tests/e2e" };\n';
+  writeFileSync(join(target, 'package.json'), pkg);
+  writeFileSync(join(target, 'playwright.config.ts'), playwright);
+  const result = await capture(main, ['install', '--force', '--target', target]);
+  assert.equal(result.code, 0, result.text);
+  assert.equal(readFileSync(join(target, 'package.json'), 'utf8'), pkg);
+  assert.equal(readFileSync(join(target, 'playwright.config.ts'), 'utf8'), playwright);
+  assert.match(readFileSync(join(target, 'playwright.config.example.ts'), 'utf8'), /mobile-safari/);
+  const skill = readFileSync(join(target, '.claude/skills/e2e-conventions/SKILL.md'), 'utf8');
+  for (const api of ['toHaveScreenshot', 'AxeBuilder']) {
+    const example = skill.split('```ts').find(block => block.includes(api));
+    assert.ok(example, api);
+    assert.match(example, /tag: \['@[a-z0-9-]+', '@TP-\d{3}'\]/, api);
+  }
+  assert.match(skill, /mask/);
+  assert.match(skill, /npm install -D @axe-core\/playwright/);
+  rmSync(target, { recursive: true, force: true });
+});

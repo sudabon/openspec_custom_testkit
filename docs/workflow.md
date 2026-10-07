@@ -54,6 +54,60 @@ Residual を書くと handoff が必要になる。小さな change で QA に�
 
 旧 `quality-driven` と `spec-driven-e2e` の change には、Manual 層の理由も qa-handoff.md も要求しない。
 
+## 非機能観点（Non-functional Viewpoints）
+
+統合 schema の quality.md は `## Non-functional Viewpoints` 表を持つ。列は `観点` / `Failure Mode` / `該当なし理由` で、観点は次の6つに固定する（テンプレートの表記のまま書く。`/` と `／`、空白の違いは同じ観点として読む）。
+
+- クロスブラウザ／デバイス／レスポンシブ
+- 見た目の回帰
+- アクセシビリティ
+- 文言・多言語
+- 性能
+- 入力系セキュリティ
+
+各行には、割り当てた Failure Mode の ID（`F1, F2` のように `,`・`、`・空白区切りで複数可）か、該当なし理由のどちらか一方だけを書く。計画ゲートは次の場合に失敗する。
+
+- 観点の行が欠けている、知らない観点名がある、同じ観点が重複している
+- Failure Mode に、同じ quality.md の Failure Modes に無い ID がある（例: 性能行が存在しない `F9` を参照）
+- Failure Mode も理由も空、または Failure Mode 欄が `該当なし` だけで理由が空（`該当なし()` のように中身の無い理由も空とみなす）
+- Failure Mode が無く、理由が `<理由>`・`-`・`–`・`—`・`TBD`・`TODO`・`未定`・`なし`・`N/A`・`NA`・`...`・`…` だけである（英字の大小は問わない）。`該当なし（理由）` の括弧内も同じ規則で検査する。これらは空として扱うため、Failure Mode が指定されていれば理由との二重記入にはならない
+- Failure Mode と理由の両方が書かれている
+
+計画検査の対象となる統合 change で `quality.md` 自体が無い場合も失敗する。コードフェンス内の `## Non-functional Viewpoints` 表（テンプレートの例の貼り付けなど）は観点表として読まず、quality.md に閉じていないコードフェンスがある場合も失敗する。`check-test-plan.mjs` は観点表の移行警告を `::warning::` として出力する。その他の評価・lint の警告は従来どおり `testkit-gate.mjs check` で確認する。
+
+割り当てた Failure Mode は、Test Layer Mapping で E2E などの層に割り当てる。ゲートが確認するのは ID が Failure Modes にあることまでで、割り当てた層が観点に合っているかは見ない。自動化できない観点（主観的な見た目の評価など）は、その Failure Mode を `Manual` 層にし、QA handoff の手動確認範囲に載せる。
+
+### UI に触れる change の判定と限界
+
+統合 schema は「UI に触れる change か」を test-plan の `e2e` で代用する。`e2e: required` の change は利用者から見える振る舞いを持つとみなし、6観点すべての行を要求する。`e2e: not-applicable` の change は、6行を書くか、観点を `全観点` とした1行（`| 全観点 | | UI 変更なし |`）で済ませてよい。`全観点` の行には理由だけを書き、ほかの観点の行と併用しない。`e2e: required` の change で `全観点` の1行にすると失敗する。
+
+この代用には限界がある。UI に触れるのに `e2e: not-applicable` とした誤りは、観点表の検査では見つからない。quality の層選択と test-plan の整合検査（E2E 層があるのに not-applicable なら失敗）と、人間による quality 承認で見つける。観点ごとの「該当なし」が妥当かもゲートは判定しない。理由は必須なので、quality の承認者が理由を読んで判断する。
+
+### 導入前の change
+
+kit の install / update は、観点表を初めて配置したときに stamp（`.openspec-custom-testkit.json`）の `features.nonfunctionalViewpoints.since` に日付（YYYY-MM-DD）を書き、以後の update では書き換えない。観点表の無い統合 change は次のように扱う。
+
+| 状態 | 結果 |
+|------|------|
+| `.openspec.yaml` の `created` が導入日より前 | 警告のみ（進行中の change を update だけで壊さない） |
+| `created` が導入日以降 | 失敗 |
+| `created` が無い、または YYYY-MM-DD として読めない | 失敗（導入前と確認できないため対象外にしない） |
+| stamp に導入日が無い・不正、または metadata / stamp が破損している | 失敗（欠落・破損・不正な日付を区別して報告） |
+
+表がある change は、作成日にかかわらず上の規則で検査する。旧 `quality-driven` と `spec-driven-e2e` の change には観点表を要求しない。
+
+### Projects 列（project 単位の実行照合）
+
+test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名を `,` または `、` で区切る（例: `chromium, mobile-safari`）。同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。統合 plan の見出しは `TP-ID` / `Requirement` / `Scenario` / `Risk` / `Oracle` / `Fixture` / `Intent` / `Expected` / `Projects` を使う。`Projects` に似た列名（`Project`・`projects`・`Projects（任意）`・`Projets`・`プロジェクト`・`Playwright Projects`・`Ｐｒｏｊｅｃｔｓ` など）、重複列、空の列名は計画ゲートで失敗する。列名は NFKC 正規化後に記号・空白を除き、小文字にした結果に `project`・`projet`・`プロジェクト` を含むものを予約する。正確な `Projects` 以外は、`Project Owner`・`担当プロジェクト`・`Subproject`・`Projection` など独自列の意図でも拒否する。それ以外の追加列（`備考`・`Notes`・`優先度` など）は無視する。reporter は schema ではなく frontmatter の有無で形式を判定し、frontmatter がある plan では同じ見出し検査を行い、違反は入力エラー（終了コード 2）になる。旧 `spec-driven-e2e` の表も追加列として受け入れるが、`e2e:` frontmatter を付けると見出し検査の対象になる。frontmatter が無い旧 plan は従来どおり検査しない。表は小見出しで分けられ、列名は表ごとに解釈する。区切り行は各セル1個以上の `-` と任意の整列指定 `:` を受け付け、コードフェンス内の表の例は検査・coverage の対象外にする。表を分けるときは見出し行と区切り行を付ける。区切り行は見出し行の次の行だけで、それより後の `| - | - |` のような行は TP 行として検査する。空行やコードフェンスで切れた`TP-ID` の見出し行で始まらない表の断片、TP-ID 列の無い表（凡例やメモの表）、閉じていないコードフェンスは、行を黙って除外せず計画ゲートで失敗し、frontmatter がある plan は reporter でも入力エラー（終了コード 2）になる。TP 以外の表は別の節に置く。`#` / `##` の見出しに加え、`E2E観点一覧` または `対象外` で始まる見出しは階層にかかわらず節を区切る。TP を読むのは `## E2E観点一覧` の節だけとする。それ以外の節（`## 補足`・`# Appendix`・`## 対象外シナリオ` の下の小見出しなど）や最初の見出しより前に TP-ID 列の表がある plan、および `## 対象外シナリオ` 以外の `E2E観点一覧` / `対象外` で始まる見出し（`### E2E観点一覧の補足`・`### 対象外ブラウザ` など）の下で TP-ID を参照する plan は、計画ゲートで失敗させ、frontmatter がある plan は reporter でも入力エラー（終了コード 2）にする。TP-ID の参照は coverage と同じく、前後が英数字・`.`・`/`・`_`・`-` でない大文字の `TP-数字` だけを数える（`HTTP-2` や `tests/e2e/TP-001.spec.ts` は参照ではない）。計画ゲート・reporter・coverage は同じ節の同じ表から TP を読む。統合 plan の TP-ID は大文字の `TP-` と3桁の数字を必須とし、不正な行を黙って除外しない。reporter も frontmatter がある plan で同じ TP-ID 検査を行い、不正な TP-ID または `not-applicable` に TP 行がある場合は入力エラー（終了コード 2）にする。
+
+- 値がある TP は、書いた全 project で、`@<change-id>` と `@TP-NNN` を持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に数える。
+- 対象 change・TP に対応する結果行が無い、またはすべての行で attempt 記録が0件の project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。skip でも attempt 記録が0件なら `未実行`、1件以上あって pass が無ければ `未pass` と表示する。実 attempt がある結果行もすべて skip なら、skip 条件を確認するヒントを表示する。
+- いずれかの project で fail があれば、欠落より失敗を優先して終了コード 3 を返す。終了コードの意味（0/1/2/3）は変わらない。
+- 列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。列の無い既存 plan の project 単位の coverage 判定は変わらない。見出し・TP-ID の入力検査は別途適用する。
+- 空の要素（`chromium, , chromium`）は計画ゲートが失敗し、reporter 単体では入力エラーになる。重複は1つにまとめる。project 名が Playwright 設定に存在するかは検査しない（動的な設定を実行しないため）。設定に無い名前を書くと、reporter が未実行として欠落を報告し、`Projects` の指定と Playwright の project 名・実行対象・skip 条件の確認を促す。
+
+project を増やすと CI の時間も増える。クロスブラウザや端末差の確認が必要な TP だけに `Projects` を付ける。見た目の回帰（`toHaveScreenshot`）とアクセシビリティ（`@axe-core/playwright`）のテストの書き方は `e2e-conventions` SKILL にある。kit は導入先の `package.json` に依存を追加しない。
+
 ## E2E 規約 lint
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。

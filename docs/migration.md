@@ -58,6 +58,22 @@ kit の update で `templates/qa-handoff.md`、schema の Manual 層と `## 6. Q
 
 既に archive 済みの統合 change に Residual がある場合、その change を検査し直すと QA 実施結果が無いため失敗する。対象 change を検査に含める PR では、上の手順で handoff を追加する。
 
+## 非機能観点表と Projects 列の追加
+
+kit の update で、quality テンプレートの `## Non-functional Viewpoints` 表、test-plan テンプレートの任意の `Projects` 列、schema の instruction、`playwright.config.example.ts` の projects 例、`e2e-conventions` SKILL の `toHaveScreenshot` と `@axe-core/playwright` の規約を配布する。既存 change のテンプレートは再生成しない。
+
+update は stamp に `features.nonfunctionalViewpoints.since`（その日の日付）を書く。既に日付がある stamp では書き換えないので、同じ内容で update を繰り返しても stamp は変わらない。stamp のほかの項目は保持する。
+
+- 導入日より前に作られた統合 change（`.openspec.yaml` の `created` で判定）は、観点表が無くても警告だけで通る。そのまま進めてよいが、表を足せば通常の検査になる。
+- 導入日以降に作る統合 change は観点表が必須になる。`e2e: required` の change は6観点すべての行を、`e2e: not-applicable` の change は6行か `| 全観点 | | UI 変更なし |` のような具体的な理由付きの1行を書く。`<理由>`・`TBD` などのプレースホルダだけでは失敗する。
+- `.openspec.yaml` に `created` が無い統合 change で観点表が無いものは失敗する。`created: YYYY-MM-DD` を足すか、観点表を書く。
+- 非機能観点表の必須化は、旧 `quality-driven` と `spec-driven-e2e` の change に影響しない。
+- `Projects` 列が無い test-plan の project 単位の coverage 判定は変わらない（いずれかの project の pass で数える）。ただし、統合 plan の TP-ID 行検査は列の有無や change の作成日にかかわらず適用される。`TP-NNN` 形式（大文字の `TP-` と3桁の数字）でない TP-ID の行は失敗するため、既存 plan も修正が必要になる場合がある。frontmatter がある plan は schema にかかわらず reporter でも検査し、不正な TP-ID は終了コード 2 になる。frontmatter の無い旧 plan は reporter の行検査の対象外。空行やコードフェンスで表を途中で切り、後半に `TP-ID` の見出し行が無い plan、`## E2E観点一覧` に TP-ID 列の無い表（凡例やメモ）を置いた plan、閉じていないコードフェンスがある plan も失敗するので、表を1つにまとめるか見出し行と区切り行を付け、TP 以外の表は別の節に移す。TP-ID 列の表を `## E2E観点一覧` 以外の節（`# Appendix`・`## 補足`・`## 対象外シナリオ` の下の小見出しなど）や最初の見出しより前に置いた plan、`### E2E観点一覧の補足` のように `E2E観点一覧` / `対象外` で始まる小見出しの下で TP-ID を参照する plan も失敗する。これまでその表は黙って TP として数えられていなかったので、TP 行は `## E2E観点一覧` に移し、補足の小見出しは別の名前にする。
+- 統合 test-plan の `Projects` に似た列名（`Project`・`projects`・`Projects（任意）`・`Projets`・`プロジェクト`・`Playwright Projects`・`Ｐｒｏｊｅｃｔｓ` など）、重複列、空の列名は失敗する。project 指定には正確に `Projects` を使う。列名は NFKC 正規化後に記号・空白を除き、小文字にした結果に `project`・`projet`・`プロジェクト` を含むものを予約する。正確な `Projects` 以外は、`Project Owner`・`担当プロジェクト`・`Subproject`・`Projection` など独自列の意図でも拒否する。それ以外の追加列（`備考`・`Notes`・`優先度` など）は従来どおり無視し、追加列を使う既存 plan を受け入れる。
+- 既存の `playwright.config.ts` は上書きしない。projects の例は `playwright.config.example.ts` として置くだけなので、必要な project を自分の設定へ写す。`@axe-core/playwright` を使うときは `npm install -D @axe-core/playwright` を実行する。
+
+戻すときは kit を前の版へ update する。stamp の `features` は旧版では読まれない。
+
 ## 既知の旧ファイル
 
 旧 stamp の版が QE 0.1.2 または E2E 0.2.0 で、内容が baseline に E2E root 変換を適用したバイトと一致するファイルだけを自動で置き換える。不明な版と独自編集は差分を表示して残す。必須ゲートが残ると install は 0 でも doctor は非ゼロになる。旧 stamp は読まない限り変更しない。
