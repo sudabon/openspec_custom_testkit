@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
@@ -589,8 +589,212 @@ test('a low recording rate is called out in the output', () => {
 test('CODEOWNERS example assigns QA owners and states the identity limit', () => {
   const owners = payload('.github/CODEOWNERS.example');
   for (const path of ['/openspec/changes/*/quality.md', '/openspec/changes/*/test-plan.md', '/openspec/roles/qa-reviewer.md']) {
-    assert.match(owners, new RegExp(`^${path.replace(/[.*/]/g, char => `\\${char}`)}\\s+.*@your-org/qa-team`, 'm'), path);
+    const rule = owners.split('\n').find(line => line.startsWith(`${path} `));
+    assert.deepEqual(rule?.trim().split(/\s+/).slice(1), ['@your-org/qa-team'], path);
   }
   assert.match(owners, /Require review from Code Owners/);
   assert.match(owners, /本人確認/);
+});
+
+// PR #12 regression coverage. All approval/review identities below are isolated fixture data.
+
+test('approved plans require QA even before the first completed task, including scope-only integration', () => {
+  const { repo } = setup();
+  try {
+    write(repo, 'openspec/changes/demo/quality.md', quality('medium'));
+    for (const schema of ['quality-driven-e2e', 'custom-schema']) {
+      const result = evaluateChange(repo.dir, change({ schema, qe: false }), { phase: 'plan', plan: false });
+      assert.equal(qaFailures(result).length, 1, JSON.stringify(result));
+      assert.match(qaFailures(result)[0], /qa_reviewed_by が空/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('gate and seal require the QA date to precede or equal approval', () => {
+  const { repo } = setup();
+  try {
+    for (const at of ['2026-09-30', '2026-10-01', '2026-10-02']) {
+      const text = quality('medium', { qa: { by: 'FIXTURE-DUMMY-QA', at } });
+      write(repo, 'openspec/changes/demo/quality.md', text);
+      for (const phase of ['plan', 'final']) {
+        const result = evaluateChange(repo.dir, change(), { phase, plan: false });
+        assert.equal(qaFailures(result).length, at === '2026-10-02' ? 1 : 0, JSON.stringify(result));
+        if (at === '2026-10-02') assert.match(qaFailures(result)[0], /qa_reviewed_at <= approved_at/);
+      }
+      const out = seal(repo.dir);
+      assert.equal(out.status, at === '2026-10-02' ? 1 : 0, out.stdout + out.stderr);
+      if (at === '2026-10-02') {
+        assert.match(out.stderr, /qa_reviewed_at <= approved_at/);
+        assert.equal(readFileSync(join(repo.dir, 'openspec/changes/demo/quality.md'), 'utf8'), text);
+      }
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('seal does not bypass required QA when risk_level is invalid', () => {
+  const { repo } = setup();
+  try {
+    for (const level of ['', 'critical']) {
+      const text = quality(level);
+      write(repo, 'openspec/changes/demo/quality.md', text);
+      const out = seal(repo.dir);
+      assert.equal(out.status, 1, out.stdout + out.stderr);
+      assert.match(out.stderr, /QA レビュー/);
+      assert.equal(readFileSync(join(repo.dir, 'openspec/changes/demo/quality.md'), 'utf8'), text);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('QA, flaky and mock policy keys reject hyphens and uppercase without rejecting prose', () => {
+  for (const [key, value, parse] of [
+    ['qa_review_required_levels', '[high]', policy.qaReviewRequiredLevels],
+    ['flaky_fail_levels', '[high]', policy.flakyFailLevels],
+    ['mock_contract_max_age_days', '90', policy.mockContractMaxAgeDays],
+  ]) {
+    for (const malformed of [key.replaceAll('_', '-'), key.toUpperCase(), key.replace('_', '-')]) {
+      assert.ok(parse(`${malformed}: ${value}`).error, malformed);
+    }
+    assert.equal(parse(`文中で ${key}: ${value} に触れる説明`).error, null);
+  }
+});
+
+test('empty effort arrays pass evidence checks and count as unrecorded, while null fails', () => {
+  for (const effort of [[], null]) {
+    const repo = evidenceSetup({ effort });
+    try {
+      const { errors } = checkEvidence(repo.dir, change(), { digest: '', policyText: POLICY_BASE });
+      assert.equal(errors.some(line => line.includes('effort')), effort === null, errors.join('\n'));
+      archived(repo, '2026-10-01-empty', { effort });
+      const out = effortCli(repo.dir, '--format', 'json');
+      assert.equal(out.status, effort === null ? 1 : 0, out.stderr);
+      const report = JSON.parse(out.stdout);
+      assert.equal(report.unrecorded.count, effort === null ? 0 : 1);
+      assert.equal(report.recorded.count, 0);
+      assert.equal(report.total_minutes, 0);
+      assert.equal(report.average_minutes_per_recorded_change, null);
+    } finally { repo.cleanup(); }
+  }
+});
+
+test('effort uses the integrated config default and counts repeated activities once per change', () => {
+  const repo = gitRepo();
+  try {
+    write(repo, 'openspec/config.yaml', 'schema: quality-driven-e2e\n');
+    archived(repo, '2026-10-01-default', { schema: null, effort: [
+      { activity: 'qa-review', minutes: 10, recorded_by: 'x' },
+      { activity: 'qa-review', minutes: 20, recorded_by: 'y' },
+    ] });
+    const out = effortCli(repo.dir, '--format', 'json');
+    assert.equal(out.status, 0, out.stderr);
+    const report = JSON.parse(out.stdout);
+    assert.equal(report.targets, 1);
+    assert.equal(report.recorded.count, 1);
+    assert.deepEqual(report.by_activity['qa-review'], { minutes: 30, entries: 2, changes: 1 });
+  } finally { repo.cleanup(); }
+});
+
+test('broken config reports dependent archives without excluding explicit schemas', () => {
+  const repo = gitRepo();
+  try {
+    archived(repo, '2026-10-01-default', { schema: null });
+    archived(repo, '2026-10-02-explicit');
+    archived(repo, '2026-10-03-legacy', { schema: 'quality-driven' });
+    for (const config of ['schema: [', '- invalid', 'schema: [quality-driven-e2e]', 'schema: &s quality-driven-e2e\nother: *s']) {
+      write(repo, 'openspec/config.yaml', config);
+      const out = effortCli(repo.dir, '--format', 'json');
+      assert.equal(out.status, 1, out.stderr);
+      const report = JSON.parse(out.stdout);
+      assert.equal(report.targets, 2);
+      assert.deepEqual(report.unrecorded.ids, ['explicit']);
+      assert.equal(report.broken.count, 1);
+      assert.equal(report.broken.changes[0].id, 'default');
+      assert.match(report.broken.changes[0].reason, /config.yaml.*既定 schema/);
+      assert.match(out.stderr, /default/);
+    }
+  } finally { repo.cleanup(); }
+});
+
+test('since excludes old broken metadata and folder names before validation', () => {
+  const repo = gitRepo();
+  try {
+    archived(repo, '2026-09-01-old');
+    write(repo, 'openspec/changes/archive/2026-09-01-old/.openspec.yaml', 'schema: [');
+    archived(repo, '2026-09-02-');
+    archived(repo, '2026-10-01-current');
+    const all = effortCli(repo.dir, '--format', 'json');
+    assert.equal(all.status, 1, all.stderr);
+    assert.equal(JSON.parse(all.stdout).broken.count, 2);
+    const filtered = effortCli(repo.dir, '--since', '2026-10-01', '--format', 'json');
+    assert.equal(filtered.status, 0, filtered.stderr);
+    assert.deepEqual(JSON.parse(filtered.stdout).unrecorded.ids, ['current']);
+    // An unreadable date cannot establish that a folder lies outside the requested period.
+    archived(repo, 'bad-folder');
+    archived(repo, '2026-02-30-bad-date');
+    const unknown = effortCli(repo.dir, '--since', '2026-10-01', '--format', 'json');
+    assert.equal(unknown.status, 1, unknown.stderr);
+    const broken = JSON.parse(unknown.stdout).broken.changes;
+    assert.equal(broken.length, 2);
+    assert.ok(broken.every(item => /フォルダ名/.test(item.reason)));
+  } finally { repo.cleanup(); }
+});
+
+test('missing evidence is broken and unknown risk levels retain effort with a reason in both formats', () => {
+  const repo = gitRepo();
+  try {
+    const effort = [{ activity: 'seal', minutes: 10, recorded_by: 'x' }];
+    archived(repo, '2026-10-01-missing-evidence');
+    rmSync(join(repo.dir, 'openspec/changes/archive/2026-10-01-missing-evidence/evidence.md'));
+    for (const [id, text] of [['missing-quality', null], ['bad-risk', quality('critical')], ['bad-quality', '---\nrisk_level: [\n---\n']]) {
+      const folder = `2026-10-02-${id}`;
+      archived(repo, folder, { effort });
+      const path = `openspec/changes/archive/${folder}/quality.md`;
+      if (text === null) rmSync(join(repo.dir, path));
+      else write(repo, path, text);
+    }
+    const json = effortCli(repo.dir, '--format', 'json');
+    assert.equal(json.status, 1, json.stderr);
+    const report = JSON.parse(json.stdout);
+    assert.equal(report.broken.count, 1);
+    assert.match(report.broken.changes[0].reason, /evidence.md がありません/);
+    assert.deepEqual(report.by_risk_level.unknown, { minutes: 30, entries: 3, changes: 3 });
+    assert.equal(report.total_minutes, 30);
+    assert.equal(report.warnings.length, 3);
+    const table = effortCli(repo.dir);
+    for (const warning of report.warnings) assert.ok(table.stdout.includes(warning), warning);
+    for (const id of ['missing-quality', 'bad-risk', 'bad-quality']) assert.ok(report.warnings.some(line => line.includes(id)));
+  } finally { repo.cleanup(); }
+});
+
+test('JSON effort output includes the low recording rate warning', () => {
+  const repo = gitRepo();
+  try {
+    archived(repo, '2026-10-01-empty', { effort: [] });
+    const out = effortCli(repo.dir, '--format', 'json');
+    assert.equal(out.status, 0, out.stderr);
+    assert.ok(JSON.parse(out.stdout).warnings.some(line => line.includes('記録率が低い')));
+  } finally { repo.cleanup(); }
+});
+
+test('evidence reports I/O failures but propagates programming errors from quarantine and freshness', t => {
+  for (const stage of ['quarantine', 'freshness']) {
+    const repo = evidenceSetup();
+    try {
+      const path = stage === 'quarantine' ? 'tests/e2e/quarantine.md' : 'openspec/changes/demo/test-plan.md';
+      mkdirSync(join(repo.dir, path), { recursive: true });
+      const selected = change({ e2e: 'required' });
+      const options = { digest: '', policyText: POLICY_BASE };
+      const { errors } = checkEvidence(repo.dir, selected, options);
+      assert.ok(errors.some(line => /確認できません.*EISDIR/.test(line)), errors.join('\n'));
+      rmSync(join(repo.dir, path), { recursive: true });
+      write(repo, path, '# parser-failure-fixture\n');
+      const original = String.prototype.split;
+      const bug = new TypeError(`${stage} parser failure`);
+      const mocked = t.mock.method(String.prototype, 'split', function (...args) {
+        if (this.includes('parser-failure-fixture')) throw bug;
+        return original.apply(this, args);
+      });
+      try { assert.throws(() => checkEvidence(repo.dir, selected, options), err => err === bug); }
+      finally { mocked.mock.restore(); }
+    } finally { repo.cleanup(); }
+  }
 });

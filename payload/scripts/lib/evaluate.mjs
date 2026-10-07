@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
+import { isIntegratedChange, SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { digestForSchema } from './digest.mjs';
 import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
@@ -12,7 +12,7 @@ import { IDEMPOTENCY_NOTE } from './registry.mjs';
 import { parseTasks, taskState } from './tasks.mjs';
 
 function sealRequired(change, level, env) {
-  if (change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated') return level === 'low' || level === 'medium' || level === 'high';
+  if (isIntegratedChange(change)) return level === 'low' || level === 'medium' || level === 'high';
   const configured = env.QE_SEAL_REQUIRED_LEVELS ?? 'medium high';
   return configured.split(/\s+/).filter(Boolean).includes(level);
 }
@@ -37,6 +37,14 @@ export function qaReviewOf(data) {
   return 'ok';
 }
 
+export function qaReviewOrderError(data) {
+  const reviewedAt = asString(data?.qa_reviewed_at);
+  const approvedAt = asString(data?.approved_at);
+  return validDate(reviewedAt) && validDate(approvedAt) && reviewedAt > approvedAt
+    ? 'QA レビュー日は承認日以前である必要があります (qa_reviewed_at <= approved_at)'
+    : null;
+}
+
 function readPolicy(repo) {
   const policyPath = join(repo, 'openspec/quality-policy.md');
   return existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '';
@@ -48,6 +56,7 @@ export function effectivePhase(requested, change, tasks) {
 }
 
 export function evaluateChange(repo, change, options = {}) {
+  if (isIntegratedChange(change)) change = { ...change, schema: SCHEMA_INTEGRATED };
   const progress = { level: 'unknown', failures: [], warnings: [], planWarnings: [], oks: [] };
   try {
     return evaluateReadableChange(repo, change, options, progress);
@@ -127,14 +136,17 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
           if (qa.error) failures.push(qa.error);
           const reviewed = qaReviewOf(frontmatter.data);
           const needed = qa.levels.includes(declared);
-          if (reviewed === 'ok') oks.push(`QA レビュー済み: ${asString(frontmatter.data.qa_reviewed_by)}`);
-          else if (reviewed === 'invalid') {
+          const orderError = qaReviewOrderError(frontmatter.data);
+          if (orderError) (needed ? failures : warnings).push(orderError);
+          if (reviewed === 'ok') {
+            if (!orderError) oks.push(`QA レビュー済み: ${asString(frontmatter.data.qa_reviewed_by)}`);
+          } else if (reviewed === 'invalid') {
             const message = 'QA レビューの記録には空でない qa_reviewed_by と YYYY-MM-DD の qa_reviewed_at が必要です';
             if (needed) failures.push(message);
             else warnings.push(message);
           } else if (needed) {
             const message = `risk_level=${declared} は qa_review_required_levels [${qa.levels.join(', ')}] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)`;
-            if (tasks.anyDone || phase === 'final') failures.push(message);
+            if (approved !== 'empty' || tasks.anyDone || phase === 'final') failures.push(message);
             else warnings.push(message);
           }
         }

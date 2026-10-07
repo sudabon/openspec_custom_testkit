@@ -141,6 +141,8 @@ function quarantineErrors(repo, change, quality, { results, residuals, now }) {
       ...quarantineAlternativeErrors(active, { results, residuals }),
     ];
   } catch (err) {
+    // BROKEN_STAMP is an explicit input-validation error from installedE2eRoot.
+    if (err.code !== 'BROKEN_STAMP' && (typeof err.syscall !== 'string' || typeof err.code !== 'string' || !/^E[A-Z]+$/.test(err.code))) throw err;
     return [`隔離リストを確認できません (${err.message})`];
   }
 }
@@ -158,6 +160,8 @@ function freshnessErrors(repo, change, { policyText, residuals, now }) {
     if (policy.error) return [policy.error];
     return mockFreshnessErrors(mocks, { maxAgeDays: policy.days, residuals, now });
   } catch (err) {
+    // BROKEN_STAMP is an explicit input-validation error from installedE2eRoot.
+    if (err.code !== 'BROKEN_STAMP' && (typeof err.syscall !== 'string' || typeof err.code !== 'string' || !/^E[A-Z]+$/.test(err.code))) throw err;
     return [`モックの鮮度を確認できません (${err.code ?? err.name}: ${err.message})`];
   }
 }

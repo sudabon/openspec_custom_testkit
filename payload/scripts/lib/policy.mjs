@@ -55,7 +55,7 @@ export const RISK_LEVELS = ['low', 'medium', 'high'];
 export function flakyFailLevels(policyText) {
   const invalid = detail => ({ levels: [], error: `quality-policy.md の flaky_fail_levels が不正です (${detail})。[high] や [medium, high] のように low / medium / high を角括弧で列挙してください` });
   // Reject setting-like near misses, while allowing prose that mentions the key mid-sentence.
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky_fail_level\w*\b/.test(line));
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky[-_]fail[-_]level[\w-]*\b/i.test(line));
   if (candidates.some(line => !/^flaky_fail_levels:/.test(line))) {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、flaky_fail_levels: [high] の形式で独立した行に書いてください');
   }
@@ -97,7 +97,7 @@ export const MOCK_CONTRACT_MAX_AGE_DEFAULT = 90;
 // be read is an input error instead of silently falling back to a looser or stricter limit.
 export function mockContractMaxAgeDays(policyText) {
   const invalid = detail => ({ days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: `quality-policy.md の mock_contract_max_age_days が不正です (${detail})。mock_contract_max_age_days: 90 のように正の整数の日数を独立した行に書いてください` });
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock_contract_max_age\w*\b/.test(line));
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock[-_]contract[-_]max[-_]age[\w-]*\b/i.test(line));
   if (candidates.some(line => !/^mock_contract_max_age_days:/.test(line))) {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けないでください');
   }
@@ -115,7 +115,7 @@ export const QA_REVIEW_DEFAULT_LEVELS = ['medium', 'high'];
 // never "QA review not required".
 export function qaReviewRequiredLevels(policyText) {
   const invalid = detail => ({ levels: [...QA_REVIEW_DEFAULT_LEVELS], error: `quality-policy.md の qa_review_required_levels が不正です (${detail})。[medium, high] や [] のように low / medium / high を角括弧で列挙し、独立した行に書いてください`, defaulted: false });
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*qa_review_required_level\w*\b/.test(line));
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*qa[-_]review[-_]required[-_]level[\w-]*\b/i.test(line));
   if (candidates.some(line => !/^qa_review_required_levels:/.test(line))) {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、qa_review_required_levels: [medium, high] の形式で書いてください');
   }

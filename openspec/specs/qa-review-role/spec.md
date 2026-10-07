@@ -19,15 +19,27 @@ QA エンジニアのテスト設計の知見を quality.md の承認時に一�
 
 #### Scenario: Invalid QA level setting
 - **WHEN** `qa_review_required_levels` に high / medium / low 以外の値がある
-- **THEN** doctor と gate は設定不正として失敗し、QA レビュー不要とは扱わない
+- **THEN** doctor と統合 change を検査する gate は設定不正として失敗し、QA レビュー不要とは扱わない
 
 ### Requirement: Human-only QA review record before seal
 
-統合 schema の quality.md frontmatter は `qa_reviewed_by` と `qa_reviewed_at`（YYYY-MM-DD）を持たなければならない（MUST）。これらは人間だけが記入する欄であり、schema の instruction と role 定義は Agent による記入を禁止しなければならない（MUST）。change の risk_level が `qa_review_required_levels` に含まれるとき、`scripts/qe-gate.sh seal` と plan / final gate は、QA レビュー欄の欠落または日付不正を失敗としなければならない（MUST）。QA レビュー欄の追加は `oracle_digest` の計算対象を変えてはならない（MUST NOT）。
+統合 schema の quality.md frontmatter は `qa_reviewed_by` と `qa_reviewed_at`（YYYY-MM-DD）を持たなければならない（MUST）。これらは人間だけが記入する欄であり、schema の instruction と role 定義は Agent による記入を禁止しなければならない（MUST）。change の risk_level が `qa_review_required_levels` に含まれるとき、`scripts/qe-gate.sh seal` と final gate は QA レビュー欄の欠落または日付不正を失敗としなければならない（MUST）。plan gate も承認欄が記入済み、またはタスクが一つでも完了していれば欠落を失敗としなければならない（MUST）。未承認・未着手の plan で両欄が空の場合だけは警告に留める。片方だけの記入や日付不正は plan でも失敗としなければならない（MUST）。gate と seal は有効な両日付があるとき `qa_reviewed_at <= approved_at` を検査し、逆順なら失敗としなければならない（MUST）。同日は許容し、同日の作業順序や実際の記入時刻は検証しない。QA レビュー欄の追加は `oracle_digest` の計算対象を変えてはならない（MUST NOT）。
 
 #### Scenario: Seal is blocked without required QA review
 - **WHEN** policy が medium を QA レビュー必須とし、risk_level が medium の quality.md に `qa_reviewed_by` が空のまま seal を実行する
 - **THEN** seal は digest を書き込まずに失敗し、QA レビューが必要な理由を表示する
+
+#### Scenario: Unapproved untouched plan waits for QA review
+- **WHEN** QA 必須の change が未承認・未着手の plan で、QA レビュー欄が両方空である
+- **THEN** plan gate は欠落を警告に留める
+
+#### Scenario: Approved plan cannot omit QA review
+- **WHEN** QA 必須の change が承認済みで、タスクが一つも完了していなくても QA レビュー欄が空である
+- **THEN** plan gate は QA レビュー欠落で失敗する
+
+#### Scenario: QA review date must not follow approval
+- **WHEN** QA 必須の change で QA レビュー日が承認日より後である
+- **THEN** plan / final gate と seal は日付順序を理由に失敗し、seal は digest を書き込まない。承認日以前（同日を含む）なら順序検査は成功する
 
 #### Scenario: QA review not required for the level
 - **WHEN** policy が high だけを QA レビュー必須とし、risk_level が low の change に QA レビュー欄が空である
@@ -83,7 +95,7 @@ kit は archive 済みの統合 change の evidence.md から `effort` を集計
 
 ### Requirement: QA ownership example
 
-配布する `CODEOWNERS.example` は、QA レビュー担当を割り当てる例を含まなければならない（MUST）。例は quality.md と test-plan.md と QA role 定義を QA 担当のレビュー対象にし、本人確認は CODEOWNERS とブランチ保護に依存することを注記しなければならない（MUST）。
+配布する `CODEOWNERS.example` は、QA レビュー担当を割り当てる例を含まなければならない（MUST）。例は quality.md と test-plan.md と QA role 定義を QA 担当のレビュー対象にし、QA チーム単独の owner と Require review from Code Owners を併用すること、および frontmatter の記名本人や役割の別人性は検証しないことを注記しなければならない（MUST）。
 
 #### Scenario: QA owners in the example
 - **WHEN** 利用者が `.github/CODEOWNERS.example` を開く

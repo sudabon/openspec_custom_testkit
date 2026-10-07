@@ -6,7 +6,7 @@
 
 - [x] 1.1 spec の全 Scenario を `test/` の fixture とテスト名へ対応付ける表を作る。完了条件: qa-review-role の 6 requirement・15 scenario に対応漏れと重複がない。
 - [x] 1.2 QA レビュー欄の有無・日付不正・必須レベル内外・policy 値不正・旧 schema・既存 seal 済み change の fixture を作り、gate のテストを追加する。完了条件: 未実装のため期待どおり RED になり、import 失敗だけの RED がない。
-- [x] 1.3 `effort` の正常・欠落・不正値の evidence fixture と、archive 済み change 3 件（記録あり 2・なし 1・破損 1 を含む組合せ）の集計 fixture を作る。完了条件: 構造検査と集計のテストが RED になる。
+- [x] 1.3 `effort` の正常・欠落・不正値の evidence fixture と、archive 済み change 4 件（記録あり 2・なし 1・破損 1 を含む組合せ）の集計 fixture を作る。完了条件: 構造検査と集計のテストが RED になる。
 
 ## 2. Policy・テンプレート・role
 

@@ -55,25 +55,33 @@ export function parseEffortArgs(argv) {
 
 function defaultSchema(repo) {
   const config = readConfigDocument(repo);
-  if (!config.text || config.parsed?.errors?.length) return null;
-  return asString(config.parsed?.data?.schema) || null;
+  if (config.text == null) return { schema: null };
+  const parsed = config.parsed;
+  if (parsed.errors.length || parsed.alias || parsed.tagged || !isRecord(parsed.data)
+      || (parsed.data.schema != null && typeof parsed.data.schema !== 'string')) {
+    return { error: `${config.located.path} を解釈できないため既定 schema を判定できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
+  }
+  return { schema: asString(parsed.data.schema) || null };
 }
 
 function schemaOf(repo, dir, fallback) {
   const path = join(repo, dir, '.openspec.yaml');
-  if (!existsSync(path)) return { schema: fallback };
+  if (!existsSync(path)) return fallback;
   const parsed = parseYamlText(readFileSync(path, 'utf8'));
   if (parsed.errors.length || parsed.alias || parsed.tagged || !isRecord(parsed.data)) {
     return { error: `.openspec.yaml を解釈できません${parsed.errors[0] ? ` (${parsed.errors[0]})` : ''}` };
   }
-  return { schema: asString(parsed.data.schema) || fallback };
+  if (parsed.data.schema != null && typeof parsed.data.schema !== 'string') return { error: '.openspec.yaml の schema は文字列である必要があります' };
+  return asString(parsed.data.schema) ? { schema: asString(parsed.data.schema) } : fallback;
 }
 
 function riskLevelOf(repo, dir) {
   const path = join(repo, dir, 'quality.md');
-  if (!existsSync(path)) return 'unknown';
-  const level = asString(splitFrontmatter(readFileSync(path, 'utf8')).data?.risk_level);
-  return RISK_LEVELS.includes(level) ? level : 'unknown';
+  if (!existsSync(path)) return { level: 'unknown', reason: 'quality.md がありません' };
+  const parsed = splitFrontmatter(readFileSync(path, 'utf8'));
+  if (parsed.error) return { level: 'unknown', reason: `quality.md の frontmatter が不正です: ${parsed.error}` };
+  const level = asString(parsed.data?.risk_level);
+  return RISK_LEVELS.includes(level) ? { level } : { level: 'unknown', reason: `quality.md の risk_level が不正です: ${level || '(空)'}` };
 }
 
 // One archived change: recorded (with entries), unrecorded, or broken with a reason.
@@ -98,7 +106,11 @@ export function buildEffort(repo, { since = null } = {}) {
   const recorded = [];
   const unrecorded = [];
   const broken = [];
+  const warnings = [];
   for (const folder of folders) {
+    // A reliable date prefix can exclude an old archive even if its metadata or id is broken.
+    const date = folder.match(/^(\d{4}-\d{2}-\d{2})(?=-|$)/)?.[1];
+    if (since && validDate(date) && date < since) continue;
     const dir = `openspec/changes/archive/${folder}`;
     const named = folder.match(/^(\d{4}-\d{2}-\d{2})-(.+)$/);
     const id = named ? named[2] : folder;
@@ -112,11 +124,14 @@ export function buildEffort(repo, { since = null } = {}) {
       broken.push({ id, archive: folder, reason: 'archive フォルダ名は YYYY-MM-DD-<id> が必要です' });
       continue;
     }
-    if (since && named[1] < since) continue;
     const read = readEffort(repo, dir);
     if (read.broken) broken.push({ id, archive: folder, reason: read.broken });
     else if (read.unrecorded) unrecorded.push(id);
-    else recorded.push({ id, archive: folder, level: riskLevelOf(repo, dir), entries: read.entries });
+    else {
+      const risk = riskLevelOf(repo, dir);
+      if (risk.reason) warnings.push(`${id} (${folder}): ${risk.reason}。Risk Level を unknown として集計します`);
+      recorded.push({ id, archive: folder, level: risk.level, entries: read.entries });
+    }
   }
 
   const tally = () => ({ minutes: 0, entries: 0, changes: 0 });
@@ -140,13 +155,16 @@ export function buildEffort(repo, { since = null } = {}) {
   }
   // Unrecorded changes are not zero minutes, so they stay out of the averages and the rate's numerator.
   const judged = recorded.length + unrecorded.length;
+  const rate = judged ? recorded.length / judged : null;
+  if (rate != null && rate < LOW_RECORDING_RATE) warnings.push(`記録率が低いため（${Math.round(rate * 100)}%）、合計と比率は人間の作業時間の一部しか表していません`);
   return {
     since,
     targets: judged + broken.length,
     recorded: { count: recorded.length, ids: recorded.map(change => change.id) },
     unrecorded: { count: unrecorded.length, ids: unrecorded },
     broken: { count: broken.length, changes: broken },
-    recording_rate: judged ? recorded.length / judged : null,
+    recording_rate: rate,
+    warnings,
     total_minutes: total,
     average_minutes_per_recorded_change: recorded.length ? total / recorded.length : null,
     by_activity: byActivity,
@@ -166,9 +184,7 @@ export function renderEffortTable(report) {
   lines.push(`- 未記録: ${report.unrecorded.count} 件${report.unrecorded.count ? ` (${report.unrecorded.ids.join(', ')})` : ''}。0 分として合算せず、平均の分母にも入れない`);
   lines.push(`- 記録率: ${report.recording_rate == null ? '-' : `${Math.round(report.recording_rate * 100)}%`}`);
   lines.push(`- 破損: ${report.broken.count} 件`);
-  if (report.recording_rate != null && report.recording_rate < LOW_RECORDING_RATE) {
-    lines.push('', `! 記録率が低いため（${Math.round(report.recording_rate * 100)}%）、合計と比率は人間の作業時間の一部しか表していません`);
-  }
+  for (const warning of report.warnings ?? []) lines.push('', `! ${warning}`);
   for (const [title, label, rows] of [['活動種別', '活動', report.by_activity], ['Risk Level', 'Risk Level', report.by_risk_level]]) {
     lines.push('', `## ${title}`, '', `| ${label} | 合計分 | 件数 | change 数 |`, '|---|---|---|---|');
     for (const [key, row] of Object.entries(rows)) lines.push(`| ${key} | ${number(row.minutes)} | ${row.entries} | ${row.changes} |`);
@@ -187,7 +203,7 @@ export function runEffort({ repo, argv = [] }) {
   try {
     const report = buildEffort(repo, { since: opts.since });
     const stdout = opts.format === 'json' ? `${JSON.stringify(report, null, 2)}\n` : renderEffortTable(report);
-    const stderr = report.broken.count ? `集計が不完全です: evidence を読めない change が ${report.broken.count} 件あります (${report.broken.changes.map(item => item.id).join(', ')})\n` : '';
+    const stderr = report.broken.count ? `集計が不完全です: 集計対象を判定できない、または記録が破損した change が ${report.broken.count} 件あります (${report.broken.changes.map(item => item.id).join(', ')})\n` : '';
     return { exitCode: report.broken.count ? 1 : 0, stdout, stderr };
   } catch (err) {
     return { exitCode: 3, stdout: '', stderr: `工数集計の内部エラー:\n${err.stack ?? err}\n` };

@@ -15,8 +15,10 @@
 
 # QA レビュー担当（openspec/roles/qa-reviewer.md）。quality.md の qa_reviewed_by / qa_reviewed_at と
 # テスト設計の観点を QA チームのレビュー対象にする。承認者と別チームを割り当てると形骸化を防げる。
-# kit は記入者の本人確認をしない。誰が記入・承認したかの保証は、この割り当てと
-# ブランチ保護の "Require review from Code Owners" に依存する。
-/openspec/changes/*/quality.md     @your-org/qa-team @your-org/quality-owners
+# QA チームだけを owner にし、ブランチ保護の "Require review from Code Owners" と併用する。
+# 同じ行に quality-owners などを並べると、いずれか1人の承認で通るため QA 承認を必須にできない。
+# kit は記入者の本人確認をしない。CODEOWNERS も frontmatter の記名本人や役割の別人性は検証しない。
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+/openspec/changes/*/quality.md     @your-org/qa-team
 /openspec/changes/*/test-plan.md   @your-org/qa-team
-/openspec/roles/qa-reviewer.md     @your-org/qa-team @your-org/quality-owners
+/openspec/roles/qa-reviewer.md     @your-org/qa-team

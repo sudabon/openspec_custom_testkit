@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_INTEGRATED, SCHEMA_QE } from './lib/critical.mjs';
+import { isIntegratedChange, SCHEMA_INTEGRATED, SCHEMA_QE } from './lib/critical.mjs';
 import { digestForSchema } from './lib/digest.mjs';
-import { evaluateChange, maxLevel, qaReviewOf } from './lib/evaluate.mjs';
+import { evaluateChange, maxLevel, qaReviewOf, qaReviewOrderError } from './lib/evaluate.mjs';
 import { asList, asString, setFrontmatterScalar, splitFrontmatter, validDate } from './lib/frontmatter.mjs';
 import { toplevel } from './lib/git.mjs';
 import { qaReviewRequiredLevels, RISK_LEVELS } from './lib/policy.mjs';
@@ -86,7 +86,7 @@ function commandDigest(id) {
     return 1;
   }
   const selected = selectChanges({ repo, names: [id], env: process.env });
-  const schema = selected.changes[0]?.schema === SCHEMA_INTEGRATED ? SCHEMA_INTEGRATED : SCHEMA_QE;
+  const schema = isIntegratedChange(selected.changes[0]) ? SCHEMA_INTEGRATED : SCHEMA_QE;
   const digest = digestForSchema(repo, schema, asList(frontmatter.data.oracle_paths));
   if (digest.error === 'UNREADABLE') {
     console.error(`Oracle を読み取れません: ${digest.path} (${digest.code})`);
@@ -113,7 +113,7 @@ function commandSeal(id) {
     return 1;
   }
   const selected = selectChanges({ repo, names: [id], env: process.env });
-  const integrated = selected.changes[0]?.schema === SCHEMA_INTEGRATED || selected.changes[0]?.scope === 'integrated';
+  const integrated = isIntegratedChange(selected.changes[0]);
   if (integrated) {
     if (!asString(frontmatter.data.approved_by) || !validDate(asString(frontmatter.data.approved_at))) {
       console.error('quality.md が未承認です。approved_by と approved_at を人間が記入してから seal してください');
@@ -130,6 +130,11 @@ function commandSeal(id) {
     const needed = qa.levels.includes(level) || (!RISK_LEVELS.includes(level) && qa.levels.length > 0);
     if (needed && qaReviewOf(frontmatter.data) !== 'ok') {
       console.error(`risk_level=${level || '(空)'} は quality-policy.md の qa_review_required_levels [${qa.levels.join(', ')}] に含まれるため QA レビューが必要です。QA レビュー担当が qa_reviewed_by と qa_reviewed_at (YYYY-MM-DD) を記入してから seal してください`);
+      return 1;
+    }
+    const orderError = qaReviewOrderError(frontmatter.data);
+    if (needed && orderError) {
+      console.error(orderError);
       return 1;
     }
   } else if (!asString(frontmatter.data.approved_by)) {

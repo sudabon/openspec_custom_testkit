@@ -101,11 +101,11 @@ kit の update で、quality テンプレートの `qa_reviewed_by` / `qa_review
 
 1. update の前に、人間が `quality-policy.md` に `qa_review_required_levels: []` を独立した行として追記する（QA レビューを要求しない）。policy は CODEOWNERS の保護対象なので、この変更も人間のレビューを通る。
 2. kit を update する。`[]` の間も、統合 schema の承認・seal・独立反証は従来どおり必須である。
-3. 配布版の `quality-policy.md` を参考に役割表を分け、QA レビュー担当を決める。`.github/CODEOWNERS` に `CODEOWNERS.example` の QA の行を写し、ブランチ保護で Require review from Code Owners を有効にする。
-4. 進行中の medium / high の change ごとに、QA レビュー担当が `openspec/roles/qa-reviewer.md` で確認し、quality.md に `qa_reviewed_by: ""` と `qa_reviewed_at: ""` の行を足して記入する。seal 済みの change でも、この欄の追加では `oracle_digest` は変わらず、再 seal は要らない。
+3. 配布版の `quality-policy.md` を参考に役割表を分け、QA レビュー担当を決める。`.github/CODEOWNERS` に `CODEOWNERS.example` の QA チーム単独の行を写し、ブランチ保護で Require review from Code Owners を有効にする。同じ行に別の owner を並べると、その owner の承認だけでも通る。CODEOWNERS は frontmatter の記名本人や役割の別人性までは検証しない。
+4. 進行中の medium / high の change ごとに、QA レビュー担当が `openspec/roles/qa-reviewer.md` で確認し、quality.md に `qa_reviewed_by: ""` と `qa_reviewed_at: ""` の行を足して記入する。QA レビュー日が既存の承認日より後なら、人間の承認者が再確認し `approved_at` を含め承認し直す（gate と seal は `qa_reviewed_at <= approved_at` を検査する）。seal 済みの change でも、この欄の追加では `oracle_digest` は変わらず、再 seal は要らない。
 5. 進行中の change の QA レビューが揃ったら、`qa_review_required_levels: [medium, high]`（または組織で決めた Level）に戻す。
 
-不正値（`[critical]`、角括弧の無い値、インデントや箇条書きの付いた行、複数行など）は「不要」とみなされず、doctor・gate・seal が失敗する。`effort` は任意なので、既存の evidence は変更しなくてよい。旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
+不正値（`[critical]`、角括弧の無い値、インデントや箇条書きの付いた行、複数行、キーのハイフン区切りや大文字など）は「不要」とみなされず、doctor と、統合 change を検査する gate・seal が失敗する。未承認・未着手の plan で QA 欄が両方空の場合は警告に留める。承認欄が記入済み、着手済み、または final の場合は欠落で失敗する。`effort` は任意なので、既存の evidence は変更しなくてよい。旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
 
 戻すときは kit を前の版へ update する。quality.md に足した QA レビュー欄と evidence の `effort` は、旧版の gate では無視される。
 

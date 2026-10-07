@@ -10,7 +10,7 @@
 4. 反証の Residual を承認する。medium 以上は Human Code Review、high はドメイン担当を含める。
 5. QA handoff が必要な change では、QA が手動確認範囲と探索チャーターを実施し、`qa-handoff.md` の QA 実施結果を記入する。
 
-Agent は承認欄、QA レビュー欄、`oracle_digest`、seal を埋めない。evidence の `effort` の所要分も推測で埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。誰が実行したかの保証は CODEOWNERS とブランチ保護に依存する。
+Agent は承認欄、QA レビュー欄、`oracle_digest`、seal を埋めない。evidence の `effort` の所要分も推測で埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。CODEOWNERS とブランチ保護は PR レビューを要求する仕組みであり、seal 実行者や frontmatter の記名本人までは検証しない。
 
 役割の入力範囲は `openspec/roles/oracle-writer.md` と `openspec/roles/falsifier.md` が正本である。Claude の adapter は `.claude/agents/` からその定義を参照する。design と実装会話は Oracle の期待値に渡さない。別セッションを起動できない環境では、同じ会話の続きで Oracle や反証を書かず、人間に別セッションの開始を依頼して止まる。
 
@@ -32,17 +32,18 @@ QA レビューは quality.md の承認前に一度だけ行う工程である�
 QA レビューを必須にする Level は policy の `qa_review_required_levels` で決まる。行が無ければ `[medium, high]`（doctor が初期値の適用を表示する）。必須の Level では次のとおり検査する。
 
 - seal は QA レビュー欄が揃っていなければ digest を書き込まずに失敗する。
-- plan / final gate は、実装タスクが進んだ change と final の検査で欄の欠落を失敗にする。タスクが一つも完了していない計画段階では、承認欄と同じく警告に留める。
+- plan / final gate は、承認欄が記入済み、タスクが一つでも完了、または final の場合に QA 欄の欠落を失敗にする。未承認・未着手の plan だけは警告に留める。
 - 片方だけの記入や `YYYY-MM-DD` でない日付は、段階にかかわらず失敗にする。
-- `qa_review_required_levels` の不正値は「不要」とみなさず、doctor・gate・seal が失敗する。
+- gate と seal は `qa_reviewed_at <= approved_at` を検査する。同日は許容する。日付だけのため、同日の作業順序や実際の記入時刻は確認できない。
+- `qa_review_required_levels` の不正値は「不要」とみなさず、doctor と、統合 change を検査する gate・seal が失敗する。
 
-QA レビュー欄は quality.md frontmatter にあり、`oracle_paths` 配下ではないので、欄を足しても `oracle_digest` は変わらない。必須でない Level でも、記入すれば gate は記録として表示する。QA レビューの設定は、統合 schema の全 Risk 必須の承認・seal・独立反証を外さない。旧 `quality-driven` と `spec-driven-e2e` には適用しない。kit は記入者の本人確認をせず、承認者と QA レビュー担当が別人であることも強制しない。`.github/CODEOWNERS.example` の QA チームの割り当てとブランチ保護で担保する。
+QA レビュー欄は quality.md frontmatter にあり、`oracle_paths` 配下ではないので、欄を足しても `oracle_digest` は変わらない。必須でない Level でも、記入すれば gate は記録として表示する。QA レビューの設定は、統合 schema の全 Risk 必須の承認・seal・独立反証を外さない。旧 `quality-driven` と `spec-driven-e2e` には適用しない。kit は記入者の本人確認をせず、承認者と QA レビュー担当が別人であることも強制しない。`.github/CODEOWNERS.example` は QA チームだけを owner にし、Require review from Code Owners と併用して対象ファイルの QA 承認を要求する。複数 owner を同じ行に並べると、いずれか1人の承認で通る。これは frontmatter の記名本人や承認者と QA 担当の別人性を検証する仕組みではない。
 
 ## 人間の検証工数の記録と集計
 
 QA の作業がレビュー担当へ移っただけなのか、全体として減ったのかを見るため、evidence の Execution Records に任意の `effort` 配列で、人間の作業時間を記録できる。各要素は `activity`（`approval` / `seal` / `qa-review` / `falsification-review` / `code-review` / `manual-test` / `other`）、`minutes`（0 以上の数値）、`recorded_by`（記入者）を持つ。`manual-test` は qa-handoff.md の手動確認範囲と探索チャーターの実施時間を記録する先である。
 
-- `effort` が無くても、空でもゲートは失敗しない。あるときは、未知の活動種別・負数や数値でない所要分・記入者の欠落を、要素の位置（`effort[1]` など）を示して構造エラーにする。
+- `effort` の省略または空配列 `[]` ではゲートは失敗しない。`null` や配列以外の値は構造エラーになる。あるときは、未知の活動種別・負数や数値でない所要分・記入者の欠落を、要素の位置（`effort[1]` など）を示して構造エラーにする。
 - 所要分は人間が記入する。Agent は推測で埋めない。
 
 archive 済みの統合 change から集計する:
@@ -53,7 +54,13 @@ node scripts/testkit-gate.mjs effort --since 2026-10-01   # archive フォルダ
 node scripts/testkit-gate.mjs effort --format json
 ```
 
-出力は活動種別ごと・risk_level ごとの合計分・記録件数・change 数、記録あり件数と平均、未記録の件数と change id、記録率、破損件数である。`effort` の無い change は 0 分として合算せず「未記録」として別に数え、平均の分母に入れない。記録率が 50% 未満なら、集計が一部しか表していないことを表示する。evidence を読めない change（Execution Records の欠落・JSON の破損・`effort` の構造エラー）は黙って除外せず、change id と理由を出して終了コード 1 にする。対象は `openspec/changes/archive/` の統合 schema の change だけで、進行中の change と旧 schema の change は数えない。終了コードは 0（集計完了）/ 1（破損あり）/ 2（引数不正）/ 3（内部エラー）。
+出力は活動種別ごと・risk_level ごとの合計分・記録件数・change 数、記録あり件数と平均、未記録の件数と change id、記録率、破損件数である。`effort` の省略または `[]` は「未記録」として別に数え、0 分として合算せず、平均の分母に入れない。同じ活動を1つの change に複数回記録した場合、記録件数は増えるが change 数は1件である。
+
+記録率が 50% 未満なら、表形式と JSON の `warnings` に集計が一部しか表していないことを表示する。quality.md が無い、frontmatter が壊れている、risk_level が欠落・不正の場合、記録のある change の工数は `unknown` にまとめ、change id と理由を同じ警告に表示する。この警告だけでは非ゼロ終了にしない。
+
+破損として報告するのは、evidence.md の欠落、Execution Records の欠落・JSON の破損・`effort` の構造エラー、`.openspec.yaml` の解釈失敗、archive フォルダ名が `YYYY-MM-DD-<id>` 形式でない場合である。既定 schema が必要な archive で config.yaml（または config.yml）を解釈できない場合も、黙って除外せず破損として報告する。change id と理由を出して終了コード 1 にする。
+
+対象は `openspec/changes/archive/` の統合 schema の change で、metadata に schema が無い場合は config の既定 schema を使う。進行中の change と旧 schema の change は数えない。`--since` は有効な日付接頭辞で先に絞り込むので、範囲外の古い archive の破損は集計を失敗させない。日付を判定できないフォルダは範囲外とみなせないため、破損として残る。終了コードは 0（集計完了）/ 1（破損あり）/ 2（引数不正）/ 3（内部エラー）。
 
 ## 計画と適用
 
