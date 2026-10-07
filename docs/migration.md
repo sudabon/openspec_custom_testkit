@@ -58,6 +58,21 @@ kit の update で `templates/qa-handoff.md`、schema の Manual 層と `## 6. Q
 
 既に archive 済みの統合 change に Residual がある場合、その change を検査し直すと QA 実施結果が無いため失敗する。対象 change を検査に含める PR では、上の手順で handoff を追加する。
 
+## 非機能観点表と Projects 列の追加
+
+kit の update で、quality テンプレートの `## Non-functional Viewpoints` 表、test-plan テンプレートの任意の `Projects` 列、schema の instruction、`playwright.config.example.ts` の projects 例、`e2e-conventions` SKILL の `toHaveScreenshot` と `@axe-core/playwright` の規約を配布する。既存 change のテンプレートは再生成しない。
+
+update は stamp に `features.nonfunctionalViewpoints.since`（その日の日付）を書く。既に日付がある stamp では書き換えないので、同じ内容で update を繰り返しても stamp は変わらない。stamp のほかの項目は保持する。
+
+- 導入日より前に作られた統合 change（`.openspec.yaml` の `created` で判定）は、観点表が無くても警告だけで通る。そのまま進めてよいが、表を足せば通常の検査になる。
+- 導入日以降に作る統合 change は観点表が必須になる。`e2e: required` の change は6観点すべての行を、`e2e: not-applicable` の change は6行か `| 全観点 | | <理由> |` の1行を書く。
+- `.openspec.yaml` に `created` が無い統合 change で観点表が無いものは失敗する。`created: YYYY-MM-DD` を足すか、観点表を書く。
+- 旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
+- `Projects` 列が無い test-plan の判定は変わらない。
+- 既存の `playwright.config.ts` は上書きしない。projects の例は `playwright.config.example.ts` として置くだけなので、必要な project を自分の設定へ写す。`@axe-core/playwright` を使うときは `npm install -D @axe-core/playwright` を実行する。
+
+戻すときは kit を前の版へ update する。stamp の `features` は旧版では読まれない。
+
 ## 既知の旧ファイル
 
 旧 stamp の版が QE 0.1.2 または E2E 0.2.0 で、内容が baseline に E2E root 変換を適用したバイトと一致するファイルだけを自動で置き換える。不明な版と独自編集は差分を表示して残す。必須ゲートが残ると install は 0 でも doctor は非ゼロになる。旧 stamp は読まない限り変更しない。

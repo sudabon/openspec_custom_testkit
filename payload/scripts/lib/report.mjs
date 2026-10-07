@@ -1,6 +1,6 @@
 import { hasBoundedToken } from './markdown.mjs';
 import { splitFrontmatter } from './frontmatter.mjs';
-import { tpRows } from './plan-check.mjs';
+import { projectsOf, tpRows } from './plan-check.mjs';
 import { flatten, formatAge, resultsFreshness, specMatches, tagTextOf, validateResults } from './results.mjs';
 
 export { formatAge };
@@ -13,12 +13,17 @@ export function plannedIds(planText) {
     if (value !== 'required' && value !== 'not-applicable') {
       return { error: `e2e の値が不正です: ${value}`, ids: [], applicability: 'unknown' };
     }
-    if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable' };
-    const ids = tpRows(planText).map(row => row['TP-ID']);
-    return { ids: [...new Set(ids)], applicability: 'required' };
+    if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable', projects: {} };
+    const rows = tpRows(planText);
+    const projects = {};
+    for (const row of rows) {
+      const declared = projectsOf(row).projects;
+      if (declared.length) projects[row['TP-ID']] = [...new Set([...(projects[row['TP-ID']] ?? []), ...declared])];
+    }
+    return { ids: [...new Set(rows.map(row => row['TP-ID']))], applicability: 'required', projects };
   }
   const ids = [...planText.matchAll(/TP-\d{3}(?!\d)/g)].map(match => match[0]);
-  return { ids: [...new Set(ids)], applicability: 'legacy' };
+  return { ids: [...new Set(ids)], applicability: 'legacy', projects: {} };
 }
 
 export function buildReport({ changeId, planText, results, maxAge, now = Date.now() }) {
@@ -41,12 +46,36 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
       matched: planned.ids.filter(id => specMatches(row.spec, changeId, id)),
     }));
   const covered = new Set();
+  const passedOn = new Map();
   for (const row of rows) {
     if (row.attempts === 0) continue;
     if (row.status !== 'pass') continue;
-    for (const id of row.matched) covered.add(id);
+    for (const id of row.matched) {
+      covered.add(id);
+      if (!passedOn.has(id)) passedOn.set(id, new Set());
+      passedOn.get(id).add(row.project);
+    }
   }
-  const missing = planned.applicability === 'not-applicable' ? [] : planned.ids.filter(id => !covered.has(id));
+  // A TP with declared Projects is covered only when every declared project has a passing attempt.
+  const gaps = [];
+  if (planned.applicability !== 'not-applicable') {
+    for (const id of planned.ids) {
+      const declared = planned.projects[id] ?? [];
+      if (!declared.length) {
+        if (!covered.has(id)) gaps.push(id);
+        continue;
+      }
+      const passed = passedOn.get(id) ?? new Set();
+      const ran = new Set(rows.filter(row => row.matched.includes(id) && row.attempts > 0).map(row => row.project));
+      const lacking = declared.filter(project => !passed.has(project));
+      if (!lacking.length) continue;
+      const notRun = lacking.filter(project => !ran.has(project));
+      const notPassed = lacking.filter(project => ran.has(project));
+      const detail = [notPassed.length ? `${notPassed.join(', ')} 未pass` : '', notRun.length ? `${notRun.join(', ')} 未実行` : ''].filter(Boolean).join(', ');
+      gaps.push(`${id} (${detail})`);
+    }
+  }
+  const missing = gaps;
   const multiProject = new Set(rows.map(row => row.project)).size > 1;
   const durationSec = results.stats?.duration != null ? (results.stats.duration / 1000).toFixed(1) : '?';
   const lines = [];

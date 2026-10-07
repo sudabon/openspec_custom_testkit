@@ -124,3 +124,17 @@ OpenSpec CLI はローカルの 1.13.1 で、三 schema の validate、`quality-
 全体テストの初回は、配布テスト内の npm pack が sandbox の npm キャッシュ書き込み制限（EPERM）で失敗した。224 件の成功は、許可された sandbox 外で再実行した結果である。
 
 全角コロン・括弧の不正な見出し、インラインコードとフェンスの区別、未閉鎖フェンスの main / archive / WIP 別の診断、フェンス終了の記号・長さ・info 文字列、1〜3 空白付きの見出しを検証した。複数表の列順、説明用メモと箇条書き宣言の区別、インデントしたパイプ表の互換性、コード例内 TP-ID の除外も固定した。不正な config.yaml / config.yml はパス付きの終了コード 2 とし、CI が coverage.md・summary.txt・risk_level を保持することを確認した。内部エラーの各処理段階のテストは、グローバル関数の置換とスタック文字列による発火条件を、処理ごとの依存注入に置き換えた。
+
+## add-nonfunctional-test-viewpoints
+
+記録日: 2026-10-07 JST。Node v26.2.0、OpenSpec CLI 1.13.2。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 278 pass / 0 fail |
+| `npm run lint` | 成功。255 files scanned |
+| `npm run test:smoke` | 成功（exit 0）。同梱 example の chromium / webkit / mobile-safari の3 project 実行を含む |
+| `openspec validate add-nonfunctional-test-viewpoints --strict` | valid |
+| `git diff --check` | 成功 |
+
+観点表の欠落行、未知の F-ID、理由の無い「該当なし」、F-ID と理由の両方記入、`e2e: required` での「全観点」1行、不明・重複した観点名を負例として固定した。表の無い統合 change は、導入日より前の `created` で警告、`created` の欠落・不正、stamp の導入日の欠落、導入日以降の作成で失敗することを確認した。stamp の導入日は初回に記録され、同一内容の再実行で stamp が変わらず、旧 stamp からの update で既存項目が保持される。reporter は宣言 project の未実行で終了コード 1、fail で 3、全 project の pass で 0 を返し、`TP-002 (mobile-safari 未実行)` の形で欠落を表示する。既存の統合 quality fixture には観点表を追加した（表の無い fixture は fail closed の対象になるため）。

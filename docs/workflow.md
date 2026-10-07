@@ -54,6 +54,57 @@ Residual を書くと handoff が必要になる。小さな change で QA に�
 
 旧 `quality-driven` と `spec-driven-e2e` の change には、Manual 層の理由も qa-handoff.md も要求しない。
 
+## 非機能観点（Non-functional Viewpoints）
+
+統合 schema の quality.md は `## Non-functional Viewpoints` 表を持つ。列は `観点` / `Failure Mode` / `該当なし理由` で、観点は次の6つに固定する（テンプレートの表記のまま書く。`/` と `／`、空白の違いは同じ観点として読む）。
+
+- クロスブラウザ／デバイス／レスポンシブ
+- 見た目の回帰
+- アクセシビリティ
+- 文言・多言語
+- 性能
+- 入力系セキュリティ
+
+各行には、割り当てた Failure Mode の ID（`F1, F2` のようにカンマ区切りで複数可）か、該当なし理由のどちらか一方だけを書く。計画ゲートは次の場合に失敗する。
+
+- 観点の行が欠けている、知らない観点名がある、同じ観点が重複している
+- Failure Mode に、同じ quality.md の Failure Modes に無い ID がある（例: 性能行が存在しない `F9` を参照）
+- Failure Mode も理由も空、または Failure Mode 欄が `該当なし` だけで理由が空（`該当なし()` のように中身の無い理由も空とみなす）
+- Failure Mode と理由の両方が書かれている
+
+割り当てた Failure Mode は、Test Layer Mapping で E2E などの層に割り当てる。ゲートが確認するのは ID が Failure Modes にあることまでで、割り当てた層が観点に合っているかは見ない。自動化できない観点（主観的な見た目の評価など）は、その Failure Mode を `Manual` 層にし、QA handoff の手動確認範囲に載せる。
+
+### UI に触れる change の判定と限界
+
+統合 schema は「UI に触れる change か」を test-plan の `e2e` で代用する。`e2e: required` の change は利用者から見える振る舞いを持つとみなし、6観点すべての行を要求する。`e2e: not-applicable` の change は、6行を書くか、観点を `全観点` とした1行（`| 全観点 | | UI 変更なし |`）で済ませてよい。`全観点` の行には理由だけを書き、ほかの観点の行と併用しない。`e2e: required` の change で `全観点` の1行にすると失敗する。
+
+この代用には限界がある。UI に触れるのに `e2e: not-applicable` とした誤りは、観点表の検査では見つからない。quality の層選択と test-plan の整合検査（E2E 層があるのに not-applicable なら失敗）と、人間による quality 承認で見つける。観点ごとの「該当なし」が妥当かもゲートは判定しない。理由は必須なので、quality の承認者が理由を読んで判断する。
+
+### 導入前の change
+
+kit の install / update は、観点表を初めて配置したときに stamp（`.openspec-custom-testkit.json`）の `features.nonfunctionalViewpoints.since` に日付（YYYY-MM-DD）を書き、以後の update では書き換えない。観点表の無い統合 change は次のように扱う。
+
+| 状態 | 結果 |
+|------|------|
+| `.openspec.yaml` の `created` が導入日より前 | 警告のみ（進行中の change を update だけで壊さない） |
+| `created` が導入日以降 | 失敗 |
+| `created` が無い、または YYYY-MM-DD として読めない | 失敗（導入前と確認できないため対象外にしない） |
+| stamp に導入日が無い | 失敗 |
+
+表がある change は、作成日にかかわらず上の規則で検査する。旧 `quality-driven` と `spec-driven-e2e` の change には観点表を要求しない。
+
+### Projects 列（project 単位の実行照合）
+
+test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名のカンマ区切り（例: `chromium, mobile-safari`）で、同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。
+
+- 値がある TP は、書いた全 project で、`@<change-id>` と `@TP-NNN` を持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に数える。
+- 結果に1行も無い project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。実行されたが pass しなかった project は `未pass` と表示する。
+- いずれかの project で fail があれば、欠落より失敗を優先して終了コード 3 を返す。終了コードの意味（0/1/2/3）は変わらない。
+- 列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。列の無い既存 plan の判定と出力は変わらない。
+- 空の要素（`chromium, , chromium`）は計画ゲートが失敗する。重複は1つにまとめる。project 名が Playwright 設定に存在するかは検査しない（動的な設定を実行しないため）。設定に無い名前を書くと、reporter が未実行として欠落を報告する。
+
+project を増やすと CI の時間も増える。クロスブラウザや端末差の確認が必要な TP だけに `Projects` を付ける。見た目の回帰（`toHaveScreenshot`）とアクセシビリティ（`@axe-core/playwright`）のテストの書き方は `e2e-conventions` SKILL にある。kit は導入先の `package.json` に依存を追加しない。
+
 ## E2E 規約 lint
 
 e2e 適用状態が required の change（旧 `spec-driven-e2e` を含む）では、`testkit-gate.mjs check` が E2E ルート配下の `.js` / `.ts` 系ソースを静的に検査する。規則は固定待機（`fixed-wait`）、禁止ロケーター（`forbidden-locator`）、実行の除外・反転（`excluded-test`）、タグ欠落（`missing-tag`）、アサーション欠落（`missing-assertion`）、存在確認だけのアサーション（`weak-assertion`）である。規約との対応表は `.claude/skills/e2e-conventions/SKILL.md` にある。`.feature` は手続きを持たないので対象外とし、`lint` の一覧に「対象外」と表示する。

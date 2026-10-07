@@ -141,6 +141,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
   if (wantPlan && change.lifecycle !== 'deleted' && (change.tasksText || change.schema === SCHEMA_E2E || phase === 'final')) {
     const plan = checkTestPlan(repo, change);
     failures.push(...plan.errors);
+    warnings.push(...plan.warnings);
     if (options.tags && (change.e2e === 'required' || change.schema === SCHEMA_E2E)) {
       failures.push(...checkTagPresence(repo, change, plan.requiredTags, options.cache));
       oks.push('tag-presence は実行 coverage ではありません');

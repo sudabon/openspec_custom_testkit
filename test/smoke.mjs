@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
@@ -85,6 +85,46 @@ if (failedReport.exitCode !== 3) {
   process.exit(1);
 }
 
+// The shipped example declares several projects. A browserless test checks that Playwright accepts
+// the device presets and that the reporter needs a pass on every project listed in Projects.
+mkdirSync(join(root, '.tmp'), { recursive: true });
+const exampleDir = mkdtempSync(join(root, '.tmp/example-'));
+try {
+  writeFileSync(join(exampleDir, 'playwright.config.ts'), readFileSync(join(root, 'payload/playwright.config.example.ts')));
+  mkdirSync(join(exampleDir, 'tests/e2e'), { recursive: true });
+  writeFileSync(join(exampleDir, 'tests/e2e/projects.spec.ts'), "import { test, expect } from '@playwright/test';\ntest('全 project で動く', { tag: ['@smoke-projects', '@TP-001'] }, () => expect(1 + 1).toBe(2));\n");
+  const output = join(exampleDir, 'results.json');
+  const example = run(process.execPath, [join(root, 'node_modules/@playwright/test/cli.js'), 'test', '--config', join(exampleDir, 'playwright.config.ts')], { TESTKIT_RESULTS_JSON: output });
+  if (example.code !== 0) {
+    console.error(example.stdout);
+    console.error('同梱 example の Playwright 実行が失敗しました');
+    process.exit(example.code || 1);
+  }
+  const exampleResults = JSON.parse(readFileSync(output, 'utf8'));
+  const projectPlan = (projects) => `---
+e2e: required
+---
+## E2E観点一覧
+| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected | Projects |
+|-------|-------------|----------|------|--------|---------|--------|----------|----------|
+| TP-001 | example | Visible | R1 | O1 | none | 動く | 2 | ${projects} |
+`;
+  const allProjects = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium, webkit, mobile-safari'), results: exampleResults });
+  if (allProjects.exitCode !== 0) {
+    console.error(allProjects.stdout);
+    console.error('example の全 project の pass を coverage に数えませんでした');
+    process.exit(1);
+  }
+  const absent = buildReport({ changeId: 'smoke-projects', planText: projectPlan('chromium, firefox'), results: exampleResults });
+  if (absent.exitCode !== 1 || !absent.stdout.includes('TP-001 (firefox 未実行)')) {
+    console.error(absent.stdout);
+    console.error('未実行の project を coverage 欠落にしませんでした');
+    process.exit(1);
+  }
+} finally {
+  rmSync(exampleDir, { recursive: true, force: true });
+}
+
 const repo = gitRepo();
 try {
   mkdirSync(join(repo.dir, 'tests/oracle/demo'), { recursive: true });
@@ -101,6 +141,15 @@ oracle_digest: "${digest.digest}"
 | ID | Level |
 |----|-------|
 | R1 | low |
+## Non-functional Viewpoints
+| 観点 | Failure Mode | 該当なし理由 |
+|------|--------------|--------------|
+| クロスブラウザ／デバイス／レスポンシブ | | fixture は画面を持たない |
+| 見た目の回帰 | | fixture は画面を持たない |
+| アクセシビリティ | | fixture は画面を持たない |
+| 文言・多言語 | | fixture は文言を持たない |
+| 性能 | | fixture は性能要件を持たない |
+| 入力系セキュリティ | | fixture は入力を持たない |
 ## Test Oracles
 | ID | 対象 |
 |----|------|

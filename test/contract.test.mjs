@@ -7,7 +7,8 @@ import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
 import { sha256File } from '../payload/scripts/lib/hash.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
-import { checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
+import { checkTestPlan, projectsOf, qualityModel, tpRows, VIEWPOINTS } from '../payload/scripts/lib/plan-check.mjs';
+import { parseTable, section } from '../payload/scripts/lib/markdown.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
 import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
@@ -165,6 +166,15 @@ oracle_digest: "${digest}"
 | ID | Level |
 |----|-------|
 | R1 | ${level} |
+## Non-functional Viewpoints
+| 観点 | Failure Mode | 該当なし理由 |
+|------|--------------|--------------|
+| クロスブラウザ／デバイス／レスポンシブ | | fixture は画面を持たない |
+| 見た目の回帰 | | fixture は画面を持たない |
+| アクセシビリティ | | fixture は画面を持たない |
+| 文言・多言語 | | fixture は文言を持たない |
+| 性能 | | fixture は性能要件を持たない |
+| 入力系セキュリティ | | fixture は入力を持たない |
 ## Test Oracles
 | ID | 対象 |
 |----|------|
@@ -358,6 +368,15 @@ oracle_digest: ""
 | ID | Level |
 |----|-------|
 | R1 | low |
+## Non-functional Viewpoints
+| 観点 | Failure Mode | 該当なし理由 |
+|------|--------------|--------------|
+| クロスブラウザ／デバイス／レスポンシブ | | fixture は画面を持たない |
+| 見た目の回帰 | | fixture は画面を持たない |
+| アクセシビリティ | | fixture は画面を持たない |
+| 文言・多言語 | | fixture は文言を持たない |
+| 性能 | | fixture は性能要件を持たない |
+| 入力系セキュリティ | | fixture は入力を持たない |
 ## Test Oracles
 | ID | 対象 |
 |----|------|
@@ -875,4 +894,21 @@ test('ordinary Oracle prose is not treated as structured reseal history', () => 
     putEvidence(ctx, ctx.data, 'Oracle の変更理由はありません');
     assert.deepEqual(evaluateChange(ctx.repo.dir, change(), { phase: 'final' }).failures, []);
   } finally { ctx.repo.cleanup(); }
+});
+
+test('integrated templates keep Risk and Oracle parsing with the viewpoint register and Projects column', () => {
+  const templates = new URL('../payload/openspec/schemas/quality-driven-e2e/templates/', import.meta.url);
+  const qualityText = readFileSync(new URL('quality.md', templates), 'utf8');
+  const model = qualityModel(qualityText);
+  assert.deepEqual(model.risks.map(row => row.ID), ['R1']);
+  assert.deepEqual(model.oracles.map(row => row.ID), ['O1']);
+  assert.equal(model.layerColumn, true);
+  const register = parseTable(section(qualityText, '## Non-functional Viewpoints'));
+  assert.deepEqual(register.headers, ['観点', 'Failure Mode', '該当なし理由']);
+  assert.deepEqual(register.rows.map(row => row['観点']), VIEWPOINTS);
+
+  const planText = readFileSync(new URL('test-plan.md', templates), 'utf8');
+  const rows = tpRows(planText);
+  assert.deepEqual(rows.map(row => row['TP-ID']), ['TP-001']);
+  assert.deepEqual(projectsOf(rows[0]), { projects: [], blank: false });
 });

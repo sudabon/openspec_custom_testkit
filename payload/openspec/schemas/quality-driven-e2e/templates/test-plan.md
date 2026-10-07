@@ -12,9 +12,11 @@ alternative_verification: []
 
 ## E2E観点一覧
 
-| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |
-|-------|-------------|----------|------|--------|---------|--------|----------|
-| TP-001 | | | R1 | O1 | | | |
+`Projects` 列は任意です。Playwright project 名をカンマ区切りで書いた TP は、書いた全 project で pass したときだけ coverage に数えます。空欄なら、いずれかの project の pass で数えます。
+
+| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected | Projects |
+|-------|-------------|----------|------|--------|---------|--------|----------|----------|
+| TP-001 | | | R1 | O1 | | | | |
 
 ## 対象外シナリオ
 

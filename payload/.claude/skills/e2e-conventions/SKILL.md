@@ -37,6 +37,45 @@ test('在庫切れ商品は注文できない', { tag: ['@add-checkout', '@TP-00
 });
 ```
 
+## 非機能観点の自動化
+
+quality.md の `## Non-functional Viewpoints` で E2E に割り当てた観点は、次の方法で観測する。タグは他のテストと同じく `@<change-id>` と `@TP-NNN` を付ける。
+
+### 見た目の回帰（`toHaveScreenshot`）
+
+```ts
+test('注文一覧の見た目が変わらない', { tag: ['@add-checkout', '@TP-004'] }, async ({ page }) => {
+  await page.goto('/orders');
+  await expect(page).toHaveScreenshot('orders.png', {
+    mask: [page.getByTestId('order-date'), page.getByRole('img', { name: 'アバター' })],
+  });
+});
+```
+
+- 日時・乱数・広告・アバターなど実行ごとに変わる領域は `mask` で隠す。待機や `waitForTimeout` でごまかさない
+- `maxDiffPixels` / `maxDiffPixelRatio` / `threshold` を緩めることはアサーションの緩和として扱う。test-plan の更新と人間の承認なしに変えない。baseline 画像の更新（`--update-snapshots`）も同じ
+- OS やフォントで描画が変わるため、baseline は CI と同じコンテナ・同じ project で作る。手元の macOS で作った画像を CI の Linux と比べない
+- 複数ブラウザ・端末で確認する TP は、test-plan の `Projects` 列に project 名を書く（例: `chromium, mobile-safari`）。書いた全 project で pass したときだけ coverage に数える
+
+### アクセシビリティ（`@axe-core/playwright`）
+
+```ts
+import AxeBuilder from '@axe-core/playwright';
+
+test('注文フォームにアクセシビリティ違反がない', { tag: ['@add-checkout', '@TP-005'] }, async ({ page }) => {
+  await page.goto('/checkout');
+  const results = await new AxeBuilder({ page })
+    // 決済 iframe は外部 SaaS の DOM で、自社で修正できないため除外する
+    .exclude('#payment-frame')
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+```
+
+- 期待値は違反 0 件（`toEqual([])`）にする。件数の上限を設けて通すことは緩和として扱う
+- `exclude()` と `disableRules()` には、除外する理由をテスト内のコメントに書く。理由のない除外は禁止
+- kit は依存を追加しない。未導入なら利用者が `npm install -D @axe-core/playwright` を実行する
+
 ## 禁止事項
 - 失敗を通すためのアサーション緩和・削除は禁止。期待値の変更が必要な場合は
   仕様変更なので、変更せずに人間へエスカレーションする
