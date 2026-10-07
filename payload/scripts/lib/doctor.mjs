@@ -4,7 +4,7 @@ import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
-import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, policyIssues } from './policy.mjs';
+import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, policyIssues, qaReviewRequiredLevels } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
   const failures = [];
@@ -48,6 +48,9 @@ export function doctor(repo, options = {}) {
     if (flaky.error) failures.push(flaky.error);
     const mockAge = mockContractMaxAgeDays(policyText);
     if (mockAge.error) failures.push(mockAge.error);
+    const qa = qaReviewRequiredLevels(policyText);
+    if (qa.error) failures.push(qa.error);
+    else if (qa.defaulted) notes.push('quality-policy.md に qa_review_required_levels がありません。初期値 [medium, high] で QA レビューを要求します。変える場合は人間が追記してください');
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);

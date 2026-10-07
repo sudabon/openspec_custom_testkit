@@ -97,3 +97,32 @@ capability 6、requirement 31、scenario 66。各 scenario は一度だけ載せ
 | V20 | test/smoke.mjs | |
 
 Linux、hosted GitHub Actions、公開レジストリからの npx 導入は未検証。ローカルの macOS と pack 結果で代替しない。承認・seal の合格記録は作っていない。
+
+## qa-review-role
+
+requirement 6、scenario 18。各 scenario は一度だけ載せる。検証はすべて test/qa-review.test.mjs。
+
+| Requirement | Scenario | テスト名 |
+|---|---|---|
+| QA reviewer role in the quality policy | Policy defines distinct human roles | policy defines distinct human roles and the QA review timing |
+| QA reviewer role in the quality policy | QA setting cannot weaken integrated gates | QA setting cannot weaken integrated approval and seal gates |
+| QA reviewer role in the quality policy | Invalid QA level setting | invalid QA level setting fails doctor, gate and seal instead of meaning not required |
+| Human-only QA review record before seal | Seal is blocked without required QA review | seal is blocked without the required QA review |
+| Human-only QA review record before seal | Unapproved untouched plan waits for QA review | a missing QA review before implementation is a warning, like a missing approval |
+| Human-only QA review record before seal | Approved plan cannot omit QA review | approved plans require QA even before the first completed task, including scope-only integration |
+| Human-only QA review record before seal | QA review date must not follow approval | gate and seal require the QA date to precede or equal approval |
+| Human-only QA review record before seal | QA review not required for the level | QA review is not required for a level outside the policy |
+| Human-only QA review record before seal | Existing sealed change keeps its digest | adding empty QA fields keeps an existing seal valid |
+| Human-only QA review record before seal | Legacy schemas are unaffected | legacy schemas are not asked for the QA review |
+| Test design checklist for QA review | Checklist covers design techniques | QA reviewer role lists inputs, exclusions and every test design technique |
+| Test design checklist for QA review | Review finding changes the quality contract | QA findings are returned as proposals and approval fields are re-entered by humans |
+| Optional human effort records | Evidence without effort | evidence without effort is judged by the other checks only |
+| Optional human effort records | Malformed effort entry | malformed effort entries fail and name the element |
+| Effort aggregation across archived changes | Unrecorded changes are not zero | unrecorded changes are counted apart and never averaged as zero |
+| Effort aggregation across archived changes | Activity shift is visible | activity totals sit side by side so the shift between roles is visible |
+| Effort aggregation across archived changes | Broken evidence during aggregation | broken evidence is reported by id and makes the aggregation exit non-zero |
+| QA ownership example | QA owners in the example | CODEOWNERS example assigns QA owners and states the identity limit |
+
+scenario 以外の補助テスト: policy 値の読み取り（`qa_review_required_levels reads lists, ...`）、doctor の初期値表示、plan / final gate の欠落・日付不正、template と schema の instruction、正しい `effort` の受理、template のままの evidence、集計対象の限定、`--since` と引数検査、記録率の低さの表示。
+
+PR #12 の補助回帰テスト（test/qa-review.test.mjs）: risk_level 不正時の seal 拒否、policy キーのハイフン・大文字、effort の空配列と null、既定 schema、同一活動の change 数、config 破損とエラー内の相対パス、空・コメントのみの config、期間外破損の除外、日付不明フォルダ、evidence 欠落、unknown の理由、JSON の低記録率警告、evidence 検査の I/O エラーと内部例外の区別。

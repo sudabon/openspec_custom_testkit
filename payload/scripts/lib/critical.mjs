@@ -17,6 +17,7 @@ export const REQUIRED_MODULES = [
   'scripts/lib/qa-handoff.mjs',
   'scripts/lib/flaky.mjs',
   'scripts/lib/registry.mjs',
+  'scripts/lib/effort.mjs',
 ];
 
 export function isCritical(rel) {
@@ -33,3 +34,7 @@ export const SCHEMA_INTEGRATED = 'quality-driven-e2e';
 export const SCHEMA_QE = 'quality-driven';
 export const SCHEMA_E2E = 'spec-driven-e2e';
 export const E2E_ROOT_DEFAULT = 'tests/e2e';
+
+export function isIntegratedChange(change) {
+  return change?.schema === SCHEMA_INTEGRATED || change?.scope === 'integrated';
+}

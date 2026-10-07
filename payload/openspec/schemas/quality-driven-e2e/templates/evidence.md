@@ -48,7 +48,8 @@
   },
   "reviews": [],
   "oracle_changes": [],
-  "residuals": []
+  "residuals": [],
+  "effort": []
 }
 ```
 
@@ -64,6 +65,27 @@ CI が同じ `command` を実行して同じ `exit_code` を得た run を再現
 - テスト間で状態を共有しないこと（実行順を入れ替えても、単独で実行しても結果が変わらない）
 
 最終確認日が `mock_contract_max_age_days` を超えたモックを照合し直さずに受け入れる場合は、`residuals` にモック名を含む Residual を書き、人間が `approved_by` と `approved_at` を記入します。
+
+`effort` は人間の検証作業にかかった時間の任意の記録です。無くても、空のままでもゲートは失敗しません。空の change は集計（`node scripts/testkit-gate.mjs effort`）で 0 分ではなく「未記録」として数えます。記録する場合は、作業した人間が活動ごとに1要素を書きます。
+
+```text
+"effort": [
+  { "activity": "qa-review", "minutes": 30, "recorded_by": "qa-member" },
+  { "activity": "manual-test", "minutes": 45, "recorded_by": "qa-member" }
+]
+```
+
+| activity | 作業 |
+|----------|------|
+| `approval` | quality.md の確認と承認 |
+| `seal` | Oracle の確認と seal |
+| `qa-review` | QA レビュー（`openspec/roles/qa-reviewer.md`） |
+| `falsification-review` | 反証結果と Residual の確認 |
+| `code-review` | Human Code Review |
+| `manual-test` | qa-handoff.md の手動確認範囲と探索チャーターの実施 |
+| `other` | 上のどれにも当たらない人間の作業 |
+
+`minutes` は 0 以上の数値、`recorded_by` は記入者です。未知の `activity`、負数や数値でない `minutes`、`recorded_by` の欠落は構造エラーになります。Agent は所要分を推測で埋めない。人間が記入しなかった時間は空のままにします。
 
 ## Oracle Changes
 

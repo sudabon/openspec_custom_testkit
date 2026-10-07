@@ -14,6 +14,8 @@ mutation_threshold_high: 70
 
 任意: モック契約の鮮度の上限日数を変える場合は、\`mock_contract_max_age_days: 90\` を同じ書式の独立した行として書きます（正の整数。書かなければ 90 日）。
 
+任意: QA レビューを必須にする Risk Level を変える場合は、\`qa_review_required_levels: [medium, high]\` を同じ書式の独立した行として書きます（low / medium / high を列挙。\`[]\` は不要。書かなければ [medium, high]）。
+
 任意: Risk 別にフレークを不合格にする場合は、\`flaky_fail_levels: [high]\` をインデント・箇条書き記号・バッククォートの無い独立した行として追記します（low / medium / high を列挙。書かなければ従来どおり flaky を pass として数えます）。`;
 
 function gateRow(text, label) {
@@ -53,7 +55,7 @@ export const RISK_LEVELS = ['low', 'medium', 'high'];
 export function flakyFailLevels(policyText) {
   const invalid = detail => ({ levels: [], error: `quality-policy.md の flaky_fail_levels が不正です (${detail})。[high] や [medium, high] のように low / medium / high を角括弧で列挙してください` });
   // Reject setting-like near misses, while allowing prose that mentions the key mid-sentence.
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky_fail_level\w*\b/.test(line));
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*flaky[-_]fail[-_]level[\w-]*\b/i.test(line));
   if (candidates.some(line => !/^flaky_fail_levels:/.test(line))) {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、flaky_fail_levels: [high] の形式で独立した行に書いてください');
   }
@@ -95,7 +97,7 @@ export const MOCK_CONTRACT_MAX_AGE_DEFAULT = 90;
 // be read is an input error instead of silently falling back to a looser or stricter limit.
 export function mockContractMaxAgeDays(policyText) {
   const invalid = detail => ({ days: MOCK_CONTRACT_MAX_AGE_DEFAULT, error: `quality-policy.md の mock_contract_max_age_days が不正です (${detail})。mock_contract_max_age_days: 90 のように正の整数の日数を独立した行に書いてください` });
-  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock_contract_max_age\w*\b/.test(line));
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*mock[-_]contract[-_]max[-_]age[\w-]*\b/i.test(line));
   if (candidates.some(line => !/^mock_contract_max_age_days:/.test(line))) {
     return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けないでください');
   }
@@ -104,4 +106,26 @@ export function mockContractMaxAgeDays(policyText) {
   const value = candidates[0].slice('mock_contract_max_age_days:'.length).replace(/[ \t]+#.*$/, '').trim();
   if (!/^[1-9]\d*$/.test(value)) return invalid(value || '空');
   return { days: Number(value), error: null };
+}
+
+export const QA_REVIEW_DEFAULT_LEVELS = ['medium', 'high'];
+
+// `qa_review_required_levels: [medium, high]` at the start of a line. Missing means the default levels.
+// An unreadable value fails closed: it is reported as an error and still requires the default levels,
+// never "QA review not required".
+export function qaReviewRequiredLevels(policyText) {
+  const invalid = detail => ({ levels: [...QA_REVIEW_DEFAULT_LEVELS], error: `quality-policy.md の qa_review_required_levels が不正です (${detail})。[medium, high] や [] のように low / medium / high を角括弧で列挙し、独立した行に書いてください`, defaulted: false });
+  const candidates = String(policyText ?? '').split(/\r?\n/).filter(line => /^[ \t]*(?:[-*+]\s+)?`*qa[-_]review[-_]required[-_]level[\w-]*\b/i.test(line));
+  if (candidates.some(line => !/^qa_review_required_levels:/.test(line))) {
+    return invalid('書式が不正です。インデント・箇条書き・バッククォートを付けず、qa_review_required_levels: [medium, high] の形式で書いてください');
+  }
+  if (!candidates.length) return { levels: [...QA_REVIEW_DEFAULT_LEVELS], error: null, defaulted: true };
+  if (candidates.length > 1) return invalid('複数の行があります');
+  const value = candidates[0].slice('qa_review_required_levels:'.length).replace(/[ \t]+#.*$/, '').trim();
+  const list = value.match(/^\[(.*)\]$/);
+  if (!list) return invalid(value || '空');
+  const items = list[1].trim() ? list[1].split(',').map(item => item.trim()) : [];
+  const bad = items.filter(item => !RISK_LEVELS.includes(item));
+  if (bad.length) return invalid(bad.map(item => item || '空の要素').join(', '));
+  return { levels: [...new Set(items)], error: null, defaulted: false };
 }

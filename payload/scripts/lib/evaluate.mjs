@@ -1,17 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
+import { isIntegratedChange, SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { digestForSchema } from './digest.mjs';
 import { lintChange } from './e2e-lint.mjs';
 import { checkEvidence } from './evidence-check.mjs';
 import { asList, asString, splitFrontmatter, validDate } from './frontmatter.mjs';
 import { LAYERS, qualityModel, checkTagPresence, checkTestPlan } from './plan-check.mjs';
+import { qaReviewRequiredLevels } from './policy.mjs';
 import { checkHandoff, residualHeadingErrors } from './qa-handoff.mjs';
 import { IDEMPOTENCY_NOTE } from './registry.mjs';
 import { parseTasks, taskState } from './tasks.mjs';
 
 function sealRequired(change, level, env) {
-  if (change.schema === SCHEMA_INTEGRATED || change.scope === 'integrated') return level === 'low' || level === 'medium' || level === 'high';
+  if (isIntegratedChange(change)) return level === 'low' || level === 'medium' || level === 'high';
   const configured = env.QE_SEAL_REQUIRED_LEVELS ?? 'medium high';
   return configured.split(/\s+/).filter(Boolean).includes(level);
 }
@@ -27,12 +28,35 @@ function approvalOf(change, data) {
   return by ? 'ok' : 'empty';
 }
 
+// QA review fields are human-only, like approval. A half-filled record or a malformed date is invalid.
+export function qaReviewOf(data) {
+  const by = asString(data?.qa_reviewed_by);
+  const at = asString(data?.qa_reviewed_at);
+  if (!by && !at) return 'empty';
+  if (!by || !validDate(at)) return 'invalid';
+  return 'ok';
+}
+
+export function qaReviewOrderError(data) {
+  const reviewedAt = asString(data?.qa_reviewed_at);
+  const approvedAt = asString(data?.approved_at);
+  return validDate(reviewedAt) && validDate(approvedAt) && reviewedAt > approvedAt
+    ? 'QA レビュー日は承認日以前である必要があります (qa_reviewed_at <= approved_at)'
+    : null;
+}
+
+function readPolicy(repo) {
+  const policyPath = join(repo, 'openspec/quality-policy.md');
+  return existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '';
+}
+
 export function effectivePhase(requested, change, tasks) {
   if (change.lifecycle === 'archived' || change.lifecycle === 'deleted' || tasks.complete) return 'final';
   return requested === 'final' ? 'final' : 'plan';
 }
 
 export function evaluateChange(repo, change, options = {}) {
+  if (isIntegratedChange(change)) change = { ...change, schema: SCHEMA_INTEGRATED };
   const progress = { level: 'unknown', failures: [], warnings: [], planWarnings: [], oks: [] };
   try {
     return evaluateReadableChange(repo, change, options, progress);
@@ -107,6 +131,26 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
         else if (tasks.anyDone) failures.push('quality.md が未承認のままタスクが進行しています(approved_by が空)');
         else warnings.push('quality.md 未承認(実装開始前に人間の承認が必要)');
 
+        if (change.schema === SCHEMA_INTEGRATED && ['high', 'medium', 'low'].includes(declared)) {
+          const qa = qaReviewRequiredLevels(readPolicy(repo));
+          if (qa.error) failures.push(qa.error);
+          const reviewed = qaReviewOf(frontmatter.data);
+          const needed = qa.levels.includes(declared);
+          const orderError = qaReviewOrderError(frontmatter.data);
+          if (orderError) (needed ? failures : warnings).push(orderError);
+          if (reviewed === 'ok') {
+            if (!orderError) oks.push(`QA レビュー済み: ${asString(frontmatter.data.qa_reviewed_by)}`);
+          } else if (reviewed === 'invalid') {
+            const message = 'QA レビューの記録には空でない qa_reviewed_by と YYYY-MM-DD の qa_reviewed_at が必要です';
+            if (needed) failures.push(message);
+            else warnings.push(message);
+          } else if (needed) {
+            const message = `risk_level=${declared} は qa_review_required_levels [${qa.levels.join(', ')}] に含まれるため、承認・seal 前に QA レビューが必要です(qa_reviewed_by が空)`;
+            if (approved !== 'empty' || tasks.anyDone || phase === 'final') failures.push(message);
+            else warnings.push(message);
+          }
+        }
+
         const digest = digestForSchema(repo, change.schema, asList(frontmatter.data.oracle_paths));
         const recorded = asString(frontmatter.data.oracle_digest);
         const required = declared && sealRequired(change, declared, env);
@@ -128,8 +172,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
         if (phase === 'final') {
           if (!change.tasksText || !tasks.complete) failures.push('未完了タスクが残っています');
           else oks.push('全タスク完了');
-          const policyPath = join(repo, 'openspec/quality-policy.md');
-          const policyText = existsSync(policyPath) ? readFileSync(policyPath, 'utf8') : '';
+          const policyText = readPolicy(repo);
           const evidence = checkEvidence(repo, change, { digest: digest.digest, policyText, manifest: options.manifest, now: options.now });
           failures.push(...evidence.errors);
           warnings.push(...evidence.notes);

@@ -2,6 +2,8 @@
 risk_level: medium        # high | medium | low（Risk Register の最大値。Agent は承認欄を埋めない）
 approved_by: ""           # 全 Risk で必須。空 = 未承認。Agent は編集禁止
 approved_at: ""           # YYYY-MM-DD。全 Risk で必須。Agent は編集禁止
+qa_reviewed_by: ""        # QA レビュー担当。policy の qa_review_required_levels の Level で必須。Agent は編集禁止
+qa_reviewed_at: ""        # YYYY-MM-DD。QA レビュー担当が記入する。Agent は編集禁止
 oracle_paths: []          # 例: ["tests/oracle/<change-name>/"]
 oracle_digest: ""         # scripts/qe-gate.sh seal が書き込む。Agent は編集禁止
 ---
