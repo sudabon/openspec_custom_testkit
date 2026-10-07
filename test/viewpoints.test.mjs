@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
@@ -158,12 +158,19 @@ test('viewpoint register negatives each fail', () => {
 });
 
 test('placeholder-only reasons fail for both individual and all-viewpoint rows', () => {
-  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'N/A', 'na', '...', '…', '該当なし', '該当なし（<理由>）', '該当なし(TBD)']) {
+  for (const reason of ['<理由>', '-', '–', '—', 'TBD', 'tbd', 'TODO', 'todo', '未定', 'なし', 'N/A', 'na', '...', '…', '該当なし', '該当なし（<理由>）', '該当なし(TBD)', '該当なし（TODO）', '該当なし（未定）', '該当なし（なし）']) {
     for (const all of [false, true]) {
       const rows = all ? [['全観点', '', reason]] : fullRows.map(row => row[0] === '性能' ? ['性能', '', reason] : row);
       const result = check({ viewpoints: table(rows), plan: all ? naPlan : requiredPlan() }, { e2e: all ? 'not-applicable' : 'required' });
       assert.ok(result.errors.some(line => /理由/.test(line)), `${reason}, all=${all}: ${result.errors.join(' / ')}`);
     }
+  }
+});
+
+test('placeholder reasons count as empty when a Failure Mode is assigned', () => {
+  for (const reason of ['-', '<理由>', 'TBD', 'TODO', '未定', 'なし', '該当なし（N/A）']) {
+    const rows = fullRows.map(row => row[0] === '性能' ? ['性能', 'F1', reason] : row);
+    assert.deepEqual(check({ viewpoints: table(rows) }).errors, [], reason);
   }
 });
 
@@ -236,6 +243,11 @@ test('metadata diagnostics distinguish missing files, malformed content and inva
     ['openspec/changes/demo/.openspec.yaml', null, /\.openspec.yaml がありません/],
     ['openspec/changes/demo/.openspec.yaml', 'created: [', /\.openspec.yaml が不正/],
     ['openspec/changes/demo/.openspec.yaml', 'created: &date 2026-09-30\ncopy: *date\n', /\.openspec.yaml が不正/],
+    ['openspec/changes/demo/.openspec.yaml', 'schema: quality-driven-e2e\n', /\.openspec.yaml の created がありません/],
+    ['openspec/changes/demo/.openspec.yaml', 'created: !custom 2026-09-30\n', /\.openspec.yaml が不正/],
+    ['openspec/changes/demo/.openspec.yaml', '- 2026-09-30\n', /\.openspec.yaml が不正/],
+    ['openspec/changes/demo/.openspec.yaml', '2026-09-30\n', /\.openspec.yaml が不正/],
+    ['openspec/changes/demo/.openspec.yaml', '', /\.openspec.yaml が不正/],
     ['openspec/changes/demo/.openspec.yaml', 'created: 2026-13-01\n', /created が不正/],
     ['.openspec-custom-testkit.json', null, /\.openspec-custom-testkit.json がありません/],
     ['.openspec-custom-testkit.json', '{', /\.openspec-custom-testkit.json が不正/],
@@ -262,6 +274,26 @@ test('plan-only evaluation fails when quality.md is missing', () => {
     rmSync(join(repo.dir, 'openspec/changes/demo/quality.md'));
     const result = evaluateChange(repo.dir, change({ tasksText: '- [ ] 1.1 a\n' }), { phase: 'plan', quality: false, tags: false });
     assert.ok(result.failures.some(line => /quality.md がありません.*Non-functional Viewpoints/.test(line)), result.failures.join(' / '));
+  } finally {
+    repo.cleanup();
+  }
+});
+
+test('missing quality.md is reported once with either or both gates enabled', () => {
+  const repo = setup({ viewpoints: table(fullRows) });
+  try {
+    rmSync(join(repo.dir, 'openspec/changes/demo/quality.md'));
+    for (const phase of ['plan', 'final']) {
+      for (const options of [{}, { quality: false }, { plan: false }]) {
+        const result = evaluateChange(repo.dir, change({ tasksText: '- [ ] 1.1 a\n' }), { phase, tags: false, ...options });
+        assert.equal(result.failures.filter(line => /quality\.md が/.test(line)).length, 1, JSON.stringify({ phase, options, failures: result.failures }));
+        if (phase === 'final' && options.quality !== false) assert.ok(result.failures.includes('未完了タスクが残っています'));
+      }
+    }
+    rmSync(join(repo.dir, 'openspec/changes/demo/test-plan.md'));
+    const missingBoth = evaluateChange(repo.dir, change({ tasksText: '- [ ] 1.1 a\n' }), { phase: 'plan', tags: false });
+    assert.equal(missingBoth.failures.filter(line => /quality\.md が/.test(line)).length, 1);
+    assert.ok(missingBoth.failures.some(line => /test-plan\.md がありません/.test(line)));
   } finally {
     repo.cleanup();
   }
@@ -320,14 +352,52 @@ test('Projects column is optional, rejects blank entries and merges duplicates',
   assert.deepEqual(japanese.projects, listed.projects);
 });
 
-test('unknown or duplicate plan headers cannot silently disable project coverage', () => {
-  for (const header of ['Project', 'projects', 'Projects（任意）', 'Projets', 'Projects | Projects']) {
+test('project spelling variants, duplicate and empty headers are rejected', () => {
+  for (const header of ['Project', 'projects', 'PROJECTS', 'Projects（任意）', 'Project (optional)', 'Projets', 'Projects | Projects', 'Notes | Notes', '']) {
     const plan = requiredPlan('chromium, mobile-safari').replace(' Projects |', ` ${header} |`);
     const checked = check({ viewpoints: table(fullRows), plan });
     assert.ok(checked.errors.some(line => /E2E観点一覧.*列/.test(line)), `${header}: ${checked.errors.join(' / ')}`);
     const report = buildReport({ changeId: 'demo', planText: plan, results: results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]) });
     assert.equal(report.exitCode, 2, header);
     assert.match(report.stderr, /E2E観点一覧.*列/);
+    if (!header) {
+      assert.ok(checked.errors.some(line => /列 \(空\)/.test(line)));
+      assert.match(report.stderr, /列 \(空\)/);
+    }
+  }
+});
+
+test('custom plan columns preserve coverage with and without Projects', () => {
+  for (const projects of [null, 'chromium, mobile-safari']) {
+    for (const header of ['備考', 'Notes', '優先度']) {
+      const plan = requiredPlan(projects).replace(' Expected |', ` Expected | ${header} |`).replace('| app | click | 1 |', '| app | click | 1 | memo |');
+      const checked = check({ viewpoints: table(fullRows), plan });
+      assert.deepEqual(checked.errors, [], header);
+      assert.deepEqual(checked.projects, projects ? { 'TP-001': ['chromium', 'mobile-safari'] } : {});
+      const run = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]);
+      const report = buildReport({ changeId: 'demo', planText: plan, results: run });
+      assert.equal(report.exitCode, projects ? 1 : 0, report.stderr || report.stdout);
+      if (projects) assert.match(report.stdout, /mobile-safari 未実行/);
+      const all = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }, { tp: 'TP-001', project: 'mobile-safari', status: 'expected' }]);
+      assert.equal(buildReport({ changeId: 'demo', planText: plan, results: all }).exitCode, 0);
+    }
+  }
+});
+
+test('report header validation follows frontmatter even for legacy-schema tables', () => {
+  const legacy = readFileSync(new URL('../payload/openspec/schemas/spec-driven-e2e/templates/test-plan.md', import.meta.url), 'utf8');
+  const run = results([{ tp: 'TP-001', project: 'chromium', status: 'expected' }]);
+  for (const prefix of ['', '---\ne2e: required\n---\n']) {
+    const plan = prefix + legacy;
+    const checked = check({ viewpoints: '', plan }, { schema: 'spec-driven-e2e', scope: 'legacy-e2e' });
+    assert.deepEqual(checked.errors, []);
+    assert.equal(buildReport({ changeId: 'demo', planText: plan, results: run }).exitCode, 0);
+    const variant = plan.replace(' リスク |', ' Project |');
+    // The plan gate uses schema; the standalone reporter uses the explicit frontmatter contract.
+    assert.deepEqual(check({ viewpoints: '', plan: variant }, { schema: 'spec-driven-e2e', scope: 'legacy-e2e' }).errors, []);
+    const report = buildReport({ changeId: 'demo', planText: variant, results: run });
+    assert.equal(report.exitCode, prefix ? 2 : 0);
+    if (prefix) assert.match(report.stderr, /列 Project.*Projects/);
   }
 });
 
@@ -380,6 +450,7 @@ test('reporter requires a pass on every declared project', () => {
   const all = report([tp1, { project: 'chromium', status: 'expected' }, { project: 'mobile-safari', status: 'flaky' }, { project: 'webkit', status: 'skipped' }]);
   assert.equal(all.exitCode, 0, all.stdout);
   assert.doesNotMatch(all.stdout, /カバレッジ欠落/);
+  assert.doesNotMatch(all.stdout, /skip 条件/);
 
   const undeclared = report([{ tp: 'TP-001', project: 'webkit', status: 'expected', title: 'one' }, { project: 'chromium', status: 'expected' }, { project: 'mobile-safari', status: 'expected' }]);
   assert.equal(undeclared.exitCode, 0, undeclared.stdout);
@@ -399,5 +470,16 @@ test('reporter accepts Japanese project separators and diagnoses unexecuted or m
     const report = buildReport({ changeId: 'demo', planText: requiredPlan('chromium'), results: skipped });
     assert.equal(report.exitCode, 1);
     assert.match(report.stdout, attempts.length ? /TP-001 \(chromium 未pass\)/ : /TP-001 \(chromium 未実行\)/);
+    assert.match(report.stdout, /skip 条件を確認/);
+  }
+});
+
+test('skip-only hints do not mask a failure or a pass on the same project', () => {
+  for (const status of ['unexpected', 'expected']) {
+    const run = results([{ tp: 'TP-001', project: 'chromium', status: 'skipped' }, { tp: 'TP-001', project: 'chromium', status }]);
+    run.suites[0].specs[0].tests[0].results = [{ status: 'skipped' }];
+    const report = buildReport({ changeId: 'demo', planText: requiredPlan('chromium'), results: run });
+    assert.equal(report.exitCode, status === 'unexpected' ? 3 : 0);
+    assert.doesNotMatch(report.stdout, /skip 条件/);
   }
 });

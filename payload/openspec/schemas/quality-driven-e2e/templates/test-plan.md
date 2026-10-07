@@ -12,7 +12,7 @@ alternative_verification: []
 
 ## E2E観点一覧
 
-`Projects` 列は任意です。Playwright project 名を `,` または `、` で区切って書いた TP は、書いた全 project で pass したときだけ coverage に数えます。空欄なら、いずれかの project の pass で数えます。列名は下表の表記を使います。不明な列名（`Project` や `Projects（任意）` など）と重複列はエラーになります。
+`Projects` 列は任意です。Playwright project 名を `,` または `、` で区切って書いた TP は、書いた全 project で pass したときだけ coverage に数えます。空欄なら、いずれかの project の pass で数えます。列名は下表の表記を使います。`Projects` に似た列名（`Project` や `Projects（任意）` など）、重複列、空の列名はエラーになります。`備考` や `Notes` などの追加列は無視します。
 
 | TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected | Projects |
 |-------|-------------|----------|------|--------|---------|--------|----------|----------|

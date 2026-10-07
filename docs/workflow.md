@@ -70,7 +70,7 @@ Residual を書くと handoff が必要になる。小さな change で QA に�
 - 観点の行が欠けている、知らない観点名がある、同じ観点が重複している
 - Failure Mode に、同じ quality.md の Failure Modes に無い ID がある（例: 性能行が存在しない `F9` を参照）
 - Failure Mode も理由も空、または Failure Mode 欄が `該当なし` だけで理由が空（`該当なし()` のように中身の無い理由も空とみなす）
-- 理由が `<理由>`・`-`・`–`・`—`・`TBD`・`N/A`・`NA`・`...`・`…` だけである（英字の大小は問わない）。`該当なし（理由）` の括弧内も同じ規則で検査する
+- Failure Mode が無く、理由が `<理由>`・`-`・`–`・`—`・`TBD`・`TODO`・`未定`・`なし`・`N/A`・`NA`・`...`・`…` だけである（英字の大小は問わない）。`該当なし（理由）` の括弧内も同じ規則で検査する。これらは空として扱うため、Failure Mode が指定されていれば理由との二重記入にはならない
 - Failure Mode と理由の両方が書かれている
 
 計画検査の対象となる統合 change で `quality.md` 自体が無い場合も失敗する。`check-test-plan.mjs` は観点表の移行警告を `::warning::` として出力する。その他の評価・lint の警告は従来どおり `testkit-gate.mjs check` で確認する。
@@ -98,10 +98,10 @@ kit の install / update は、観点表を初めて配置したときに stamp�
 
 ### Projects 列（project 単位の実行照合）
 
-test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名を `,` または `、` で区切る（例: `chromium, mobile-safari`）。同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。統合 plan の見出しは `TP-ID` / `Requirement` / `Scenario` / `Risk` / `Oracle` / `Fixture` / `Intent` / `Expected` / `Projects` を使う。不明な列名（`Project`・`projects`・`Projects（任意）` など）や重複列は計画ゲートで失敗し、reporter 単体でも入力エラー（終了コード 2）になる。
+test-plan の `## E2E観点一覧` には任意の `Projects` 列を置ける。値は Playwright project 名を `,` または `、` で区切る（例: `chromium, mobile-safari`）。同梱の `playwright.config.example.ts` の project 名（`chromium` / `webkit` / `mobile-safari`）を例にしている。統合 plan の見出しは `TP-ID` / `Requirement` / `Scenario` / `Risk` / `Oracle` / `Fixture` / `Intent` / `Expected` / `Projects` を使う。`Projects` に似た列名（`Project`・`projects`・`Projects（任意）`・`Projets` など）、重複列、空の列名は計画ゲートで失敗する。`備考`・`Notes`・`優先度` などの追加列は無視する。reporter は schema ではなく frontmatter の有無で形式を判定し、frontmatter がある plan では同じ見出し検査を行い、違反は入力エラー（終了コード 2）になる。旧 `spec-driven-e2e` の表も追加列として受け入れるが、`e2e:` frontmatter を付けると見出し検査の対象になる。frontmatter が無い旧 plan は従来どおり検査しない。
 
 - 値がある TP は、書いた全 project で、`@<change-id>` と `@TP-NNN` を持つテストに実 attempt の pass（expected または flaky）がある場合だけ coverage に数える。
-- 対象 change・TP に対応する結果行が無い、またはすべての行で attempt 記録が0件の project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。skip でも attempt 記録が0件なら `未実行`、1件以上あって pass が無ければ `未pass` と表示する。
+- 対象 change・TP に対応する結果行が無い、またはすべての行で attempt 記録が0件の project は未実行として欠落になり、reporter は `TP-002 (mobile-safari 未実行)` のように TP と project を表示して終了コード 1 を返す。skip でも attempt 記録が0件なら `未実行`、1件以上あって pass が無ければ `未pass` と表示する。実 attempt がある結果行もすべて skip なら、skip 条件を確認するヒントを表示する。
 - いずれかの project で fail があれば、欠落より失敗を優先して終了コード 3 を返す。終了コードの意味（0/1/2/3）は変わらない。
 - 列が無い、または値が空の TP は従来どおり、いずれかの project の pass で数える。列の無い既存 plan の判定と出力は変わらない。
 - 空の要素（`chromium, , chromium`）は計画ゲートが失敗し、reporter 単体では入力エラーになる。重複は1つにまとめる。project 名が Playwright 設定に存在するかは検査しない（動的な設定を実行しないため）。設定に無い名前を書くと、reporter が未実行として欠落を報告し、`Projects` の指定と Playwright の project 名・実行対象・skip 条件の確認を促す。

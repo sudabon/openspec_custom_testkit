@@ -88,14 +88,16 @@ export function tpRows(planText) {
   return parseTable(section(planText, '## E2E観点一覧')).rows.filter(row => /^TP-\d{3}$/.test(row['TP-ID'] ?? ''));
 }
 
-const PLAN_HEADERS = ['TP-ID', 'Requirement', 'Scenario', 'Risk', 'Oracle', 'Fixture', 'Intent', 'Expected', 'Projects'];
+// Reserve Projects and its common spelling variants, while preserving custom columns.
+const PROJECT_HEADER_VARIANT = /^projec?ts?(?:\s*[（(].*[)）])?$/i;
 
 export function testPlanHeaderErrors(planText) {
   const { headers } = parseTable(section(planText, '## E2E観点一覧'));
   const errors = [];
   const seen = new Set();
   for (const header of headers) {
-    if (!PLAN_HEADERS.includes(header)) errors.push(`E2E観点一覧 の列 ${header || '(空)'} は不明です（使用できる列: ${PLAN_HEADERS.join(', ')}）`);
+    if (!header) errors.push('E2E観点一覧 の列 (空) は不正です（列名を指定してください）');
+    else if (header !== 'Projects' && PROJECT_HEADER_VARIANT.test(header)) errors.push(`E2E観点一覧 の列 ${header} は不正です（project の指定には Projects を使います）`);
     if (seen.has(header)) errors.push(`E2E観点一覧 の列 ${header} が重複しています`);
     seen.add(header);
   }
@@ -123,7 +125,7 @@ function viewpointName(cell) {
 // Strip the optional "該当なし" marker and parentheses; the remaining text must be a concrete reason.
 function reasonText(cell) {
   const reason = asString(cell).replace(/^該当なし\s*/, '').replace(/^[(（]\s*/, '').replace(/\s*[)）]$/, '').trim();
-  return /^(<[^>]*>|[-–—]|tbd|n\/?a|\.{3}|…)$/i.test(reason) ? '' : reason;
+  return /^(<[^>]*>|[-–—]|tbd|todo|未定|なし|n\/?a|\.{3}|…)$/i.test(reason) ? '' : reason;
 }
 
 function viewpointErrors(id, text, e2e) {
@@ -147,7 +149,7 @@ function viewpointErrors(id, text, e2e) {
     const reason = reasonText(row['該当なし理由']);
     if (modeCell === NOT_APPLICABLE && !reason) errors.push(`${id}: Non-functional Viewpoints の ${name} は該当なしの理由がありません`);
     else if (!modes.length && !reason) errors.push(`${id}: Non-functional Viewpoints の ${name} に Failure Mode も該当なしの理由もありません`);
-    else if (modes.length && asString(row['該当なし理由'])) errors.push(`${id}: Non-functional Viewpoints の ${name} に Failure Mode と該当なし理由の両方があります（どちらか一方にします）`);
+    else if (modes.length && reason) errors.push(`${id}: Non-functional Viewpoints の ${name} に Failure Mode と該当なし理由の両方があります（どちらか一方にします）`);
     if (name === ALL_VIEWPOINTS && modes.length) errors.push(`${id}: Non-functional Viewpoints の ${ALL_VIEWPOINTS} には該当なしの理由だけを書きます`);
     for (const mode of modes) {
       if (!failureIds.has(mode)) errors.push(`${id}: Non-functional Viewpoints の ${name} が参照する ${mode} は Failure Modes にありません`);

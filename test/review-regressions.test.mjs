@@ -229,8 +229,9 @@ test('reporter and gate read TP-IDs from the same table column', () => {
       assert.deepEqual(checkTestPlan(repo.dir, change).requiredTags, expected);
     }
     const report = buildReport({ changeId: 'demo', planText: plan, results: { suites: [] } });
-    assert.equal(report.exitCode, 2);
-    assert.match(report.stderr, /E2E観点一覧 の列 ID は不明/);
+    assert.equal(report.exitCode, 1);
+    assert.equal(report.stderr, '');
+    assert.match(report.stdout, /required の TP が 0 件/);
   } finally { repo.cleanup(); }
 });
 

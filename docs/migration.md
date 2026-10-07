@@ -69,7 +69,7 @@ update は stamp に `features.nonfunctionalViewpoints.since`（その日の日�
 - `.openspec.yaml` に `created` が無い統合 change で観点表が無いものは失敗する。`created: YYYY-MM-DD` を足すか、観点表を書く。
 - 旧 `quality-driven` と `spec-driven-e2e` の change は影響を受けない。
 - `Projects` 列が無い test-plan の判定は変わらない。
-- 統合 test-plan の不明な列名と重複列は失敗する。`Project`・`projects`・`Projects（任意）` は `Projects` に直す。許可される列名は test-plan テンプレートを参照する。
+- 統合 test-plan の `Projects` に似た列名（`Project`・`projects`・`Projects（任意）`・`Projets` など）、重複列、空の列名は失敗する。project 指定には正確に `Projects` を使う。`備考`・`Notes`・`優先度` などの追加列は従来どおり無視し、既存 plan の互換性を保つ。
 - 既存の `playwright.config.ts` は上書きしない。projects の例は `playwright.config.example.ts` として置くだけなので、必要な project を自分の設定へ写す。`@axe-core/playwright` を使うときは `npm install -D @axe-core/playwright` を実行する。
 
 戻すときは kit を前の版へ update する。stamp の `features` は旧版では読まれない。

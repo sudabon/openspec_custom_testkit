@@ -58,15 +58,19 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
 
   const wantQuality = options.quality !== false && (change.qe || change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_QE);
   const wantPlan = options.plan !== false && (change.schema === SCHEMA_INTEGRATED || change.schema === SCHEMA_E2E || change.scope === 'integrated');
+  const runPlan = wantPlan && change.lifecycle !== 'deleted' && Boolean(change.tasksText || change.schema === SCHEMA_E2E || phase === 'final');
   const legacyQe = change.schema === SCHEMA_QE || selectedCustomQe;
   if (change.pendingPlan && !change.tasksText && phase === 'plan') warnings.push(`${change.id}: 計画途中(test-plan 未作成)`);
 
   if (wantQuality && change.lifecycle !== 'deleted' && (change.schema === SCHEMA_INTEGRATED || legacyQe)) {
     const qualityPath = join(repo, change.path, 'quality.md');
     if (!existsSync(qualityPath)) {
-      if (change.tasksText) failures.push('quality.md がないまま tasks.md が作成されています');
-      else if (phase !== 'final') warnings.push('計画段階(quality.md 未作成)');
-      else failures.push('quality.md がありません');
+      // With a plan to inspect, the integrated plan check owns this diagnostic.
+      if (!(runPlan && change.schema === SCHEMA_INTEGRATED && existsSync(join(repo, change.path, 'test-plan.md')))) {
+        if (change.tasksText) failures.push('quality.md がないまま tasks.md が作成されています');
+        else if (phase !== 'final') warnings.push('計画段階(quality.md 未作成)');
+        else failures.push('quality.md がありません');
+      }
       if (phase === 'final') {
         if (!change.tasksText || !tasks.complete) failures.push('未完了タスクが残っています');
         const evidence = checkEvidence(repo, change, { digest: '', policyText: '', manifest: options.manifest });
@@ -138,7 +142,7 @@ function evaluateReadableChange(repo, change, options = {}, progress = {}) {
     }
   }
 
-  if (wantPlan && change.lifecycle !== 'deleted' && (change.tasksText || change.schema === SCHEMA_E2E || phase === 'final')) {
+  if (runPlan) {
     const plan = checkTestPlan(repo, change);
     failures.push(...plan.errors);
     warnings.push(...plan.warnings);

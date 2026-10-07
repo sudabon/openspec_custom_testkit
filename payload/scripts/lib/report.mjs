@@ -13,6 +13,7 @@ export function plannedIds(planText) {
     if (value !== 'required' && value !== 'not-applicable') {
       return { error: `e2e の値が不正です: ${value}`, ids: [], applicability: 'unknown' };
     }
+    // Frontmatter opts into structured plan parsing regardless of the change's schema.
     const headerErrors = testPlanHeaderErrors(planText);
     if (headerErrors.length) return { error: headerErrors.join('\n'), ids: [], applicability: value };
     if (value === 'not-applicable') return { ids: [], applicability: 'not-applicable', projects: {} };
@@ -76,6 +77,11 @@ export function buildReport({ changeId, planText, results, maxAge, now = Date.no
       const notRun = lacking.filter(project => !ran.has(project));
       if (notRun.length) projectHints.push(`${id}: Projects の指定 (${notRun.join(', ')}) と Playwright の project 名・実行対象・skip 条件を確認してください`);
       const notPassed = lacking.filter(project => ran.has(project));
+      const skipped = notPassed.filter(project => {
+        const attempts = rows.filter(row => row.matched.includes(id) && row.project === project && row.attempts > 0);
+        return attempts.every(row => row.status === 'skip');
+      });
+      if (skipped.length) projectHints.push(`${id}: ${skipped.join(', ')} は skip のみです。skip 条件を確認してください`);
       const detail = [notPassed.length ? `${notPassed.join(', ')} 未pass` : '', notRun.length ? `${notRun.join(', ')} 未実行` : ''].filter(Boolean).join(', ');
       gaps.push(`${id} (${detail})`);
     }
