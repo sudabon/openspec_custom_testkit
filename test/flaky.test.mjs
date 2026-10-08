@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { main } from '../lib/cli.mjs';
 import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { flakyFailLevels, policyIssues } from '../payload/scripts/lib/policy.mjs';
-import { capture, gitRepo, writeIn } from './support.mjs';
+import { capture, gitRepo, writeDerivedSchema, writeIn } from './support.mjs';
 
 const shippedPolicy = readFileSync(new URL('../payload/openspec/quality-policy.md', import.meta.url), 'utf8');
 
@@ -657,5 +657,26 @@ test('the documented quarantine and release steps reproduce on a fixture repo', 
     assert.doesNotMatch(released.stdout, /隔離/);
   } finally {
     repo.cleanup();
+  }
+});
+
+test('Derived changes inherit every integrated gate: the reporter applies the flaky policy', () => {
+  const run = results([[['TP-001'], 'flaky'], [['TP-002'], 'expected'], [['TP-003'], 'expected']]);
+  const integrated = reporterRepo({ schema: 'quality-driven-e2e' });
+  const derived = reporterRepo({ schema: 'quality-driven-e2e-mockup' });
+  try {
+    writeDerivedSchema(derived.dir);
+    const expected = runReporter(integrated, run);
+    assert.equal(expected.status, 3, expected.stdout + expected.stderr);
+    const failed = runReporter(derived, run);
+    assert.equal(failed.status, 3, failed.stdout + failed.stderr);
+    assert.match(failed.stdout, /フレーク不合格: TP-001 \(high\)/);
+    writeIn(derived.dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json', '{');
+    const broken = runReporter(derived, run);
+    assert.equal(broken.status, 2);
+    assert.match(broken.stderr, /testkit-compat.json が無効です/);
+  } finally {
+    integrated.cleanup();
+    derived.cleanup();
   }
 });

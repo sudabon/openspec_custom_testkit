@@ -6,7 +6,7 @@ import { runEffort } from './lib/effort.mjs';
 import { formatLintReport, lintRepo } from './lib/e2e-lint.mjs';
 import { appendGithubOutput, emit, processIo, resolveRepo, isMain } from './lib/entry.mjs';
 import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
-import { selectChanges } from './lib/select.mjs';
+import { schemaLine, selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: testkit-gate.mjs doctor
        testkit-gate.mjs select [--base <ref>] [<change>...] --json
@@ -100,6 +100,7 @@ function commandSelect(selected, io) {
       id: change.id,
       path: change.path,
       schema: change.schema,
+      declaredSchema: change.declaredSchema,
       lifecycle: change.lifecycle,
       qe: change.qe,
       e2e: change.e2e,
@@ -143,6 +144,8 @@ function commandCheck(repo, selected, args, env, io) {
       base: selected.base,
     });
     io.log(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
+    const shown = schemaLine(change);
+    if (shown) io.log(`  ${shown}`);
     for (const line of result.oks) io.log(`  ✓ ${line}`);
     for (const line of result.warnings) io.log(`  ! ${line}`);
     for (const line of result.failures) io.log(`  ✗ ${line}`);

@@ -13,7 +13,7 @@ import { sha256File } from '../payload/scripts/lib/hash.mjs';
 import { qaReviewNeeded, sealBlockers } from '../payload/scripts/lib/seal.mjs';
 // Namespace import: a missing export fails only the tests that use it, not the whole file.
 import * as policy from '../payload/scripts/lib/policy.mjs';
-import { changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
+import { changeFixture, gitRepo, runGate, writeDerivedSchema, writeIn } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
 const QE_GATE = fileURLToPath(new URL('payload/scripts/qe-gate.mjs', root));
@@ -818,4 +818,24 @@ test('sealBlockers stops at the first blocker and reads the policy only after ap
   const reviewed = { ...approved, qa_reviewed_by: 'qa', qa_reviewed_at: '2026-10-03' };
   assert.deepEqual(sealBlockers(integrated, reviewed, ''), ['QA レビュー日は承認日以前である必要があります (qa_reviewed_at <= approved_at)']);
   assert.deepEqual(sealBlockers(integrated, { ...reviewed, qa_reviewed_at: '2026-10-01' }, ''), []);
+});
+
+test('archived derived-schema changes are tallied with the integrated ones', t => {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  archived(repo, '2026-09-01-add-mockup', { schema: 'quality-driven-e2e-mockup', level: 'high', effort: [
+    { activity: 'qa-review', minutes: 25, recorded_by: 'qa' },
+  ] });
+  archived(repo, '2026-09-02-add-cart', { level: 'medium' });
+  archived(repo, '2026-09-03-team', { schema: 'team-custom', effort: [{ activity: 'other', minutes: 99, recorded_by: 'x' }] });
+  const report = JSON.parse(effortCli(repo.dir, '--format', 'json').stdout);
+  assert.equal(report.targets, 2);
+  assert.deepEqual(report.recorded.ids, ['add-mockup']);
+  assert.deepEqual(report.unrecorded.ids, ['add-cart']);
+  assert.equal(report.total_minutes, 25);
+
+  writeIn(repo.dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json', '{"extends": "quality-driven"}');
+  const broken = JSON.parse(effortCli(repo.dir, '--format', 'json').stdout);
+  assert.equal(broken.broken.count, 1);
+  assert.match(broken.broken.changes[0].reason, /testkit-compat.json が無効です/);
 });

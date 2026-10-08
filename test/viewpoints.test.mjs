@@ -8,7 +8,7 @@ import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan, VIEWPOINTS } from '../payload/scripts/lib/plan-check.mjs';
 import { buildReport } from '../payload/scripts/lib/report.mjs';
 import { planRows } from '../payload/scripts/lib/coverage-map.mjs';
-import { changeFixture, gitRepo, writeIn } from './support.mjs';
+import { asDerived, changeFixture, gitRepo, writeIn } from './support.mjs';
 
 const change = (over = {}) => changeFixture({ skipSpecs: true, ...over });
 
@@ -663,5 +663,18 @@ test('skip-only hints do not mask a failure or a pass on the same project', () =
     const report = buildReport({ changeId: 'demo', planText: requiredPlan('chromium'), results: run });
     assert.equal(report.exitCode, status === 'unexpected' ? 3 : 0);
     assert.doesNotMatch(report.stdout, /skip 条件/);
+  }
+});
+
+test('Derived changes inherit every integrated gate: a missing viewpoint row fails the same way', () => {
+  const repo = setup({ viewpoints: table(fullRows.filter(row => row[0] !== '見た目の回帰')) });
+  try {
+    const integrated = checkTestPlan(repo.dir, change());
+    assert.ok(integrated.errors.some(line => line.includes('見た目の回帰')), integrated.errors.join('\n'));
+    const derived = asDerived(repo.dir, change());
+    assert.equal(derived.declaredSchema, 'quality-driven-e2e-mockup');
+    assert.deepEqual(checkTestPlan(repo.dir, derived).errors, integrated.errors);
+  } finally {
+    repo.cleanup();
   }
 });

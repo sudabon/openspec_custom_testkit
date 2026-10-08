@@ -52,6 +52,8 @@ install の終了コード 0 は処理が終わったことだけを表します
 
 fixture に出る `FIXTURE-DUMMY-APPROVAL` は人間の承認ではありません。
 
+アドオン kit が統合 schema に artifact を足した派生 schema を配布する場合は、`openspec/schemas/<name>/testkit-compat.json` で互換を宣言すると、その change も同じゲートを受けます。宣言の形式と、壊れた宣言で検査が外れない仕組みは [docs/workflow.md](docs/workflow.md#派生-schema) にあります。
+
 ## シナリオ対応表
 
 ```bash

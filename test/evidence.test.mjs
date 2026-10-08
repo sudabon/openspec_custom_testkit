@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { digestForSchema } from '../payload/scripts/lib/digest.mjs';
 import { sha256File } from '../payload/scripts/lib/hash.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
-import { gitRepo } from './support.mjs';
+import { asDerived, gitRepo } from './support.mjs';
 
 function setup(level = 'low') {
   const repo = gitRepo();
@@ -170,6 +170,25 @@ test('non-object Execution Records entries are structural errors, not crashes', 
     writeEvidence(ctx, '# Evidence\n## Execution Records\n```json\nnull\n```\n');
     const empty = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'final', tags: false });
     assert.ok(empty.failures.some(line => line.includes('Execution Records')), JSON.stringify(empty.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('Derived changes inherit every integrated gate: missing falsification fails the same way', () => {
+  const ctx = setup('high');
+  ctx.change.e2e = 'not-applicable';
+  try {
+    writeQuality(ctx, { layer: 'Unit' });
+    const base = evidenceJson(ctx);
+    base.runs[0].source_sha256 = sha256File(join(ctx.repo.dir, 'test-results/run.json'));
+    base.falsification = { performed: false, summary: '', counterexamples: [] };
+    writeEvidence(ctx, `# Evidence\n## 追跡\n| Risk | Result |\n|------|--------|\n| R1 | pass |\n## Execution Records\n\`\`\`json\n${JSON.stringify(base)}\n\`\`\`\n## Oracle Changes\n- なし\n`);
+    const integrated = evaluateChange(ctx.repo.dir, ctx.change, { phase: 'final', tags: false });
+    assert.ok(integrated.failures.some(line => line.includes('反証')));
+    const derived = asDerived(ctx.repo.dir, ctx.change);
+    assert.equal(derived.declaredSchema, 'quality-driven-e2e-mockup');
+    assert.deepEqual(evaluateChange(ctx.repo.dir, derived, { phase: 'final', tags: false }).failures, integrated.failures);
   } finally {
     ctx.repo.cleanup();
   }

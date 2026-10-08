@@ -22,6 +22,7 @@
 | `files.mjs` / `git.mjs` | ファイル一覧と fs エラーの判定、git の呼び出し |
 | `entry.mjs` | symlink を実体パスへ解決する直接実行判定（`isMain`）、エントリポイントの repo 解決、`GITHUB_OUTPUT` への追記、結果の出力 |
 | `seal.mjs` | `quality.md` の読み込み、seal を止める条件（承認・QA レビュー）、QA レビュー要否の判定（`qaReviewNeeded`。不正な Risk Level は要とみなす） |
+| `schema-family.mjs` | 派生 schema の互換宣言（`testkit-compat.json`）の読み込みと検証、schema 名から判定上の系統を返す `resolveSchemaFamily`、doctor 用の一覧。アドオンにも公開する |
 
 E2E 規約の lint は `e2e-lint.mjs` を入口とし、実装を `e2e-lint/` の6つのモジュールに分けている。入口は公開 API（`RULES`、`WEAK_MATCHERS`、`analyzeSource`、`lintSource`、`lintRepo`、`lintChange`、`formatLintReport`）を再 export するだけで、import 元はこのパスを使い続ける。表は最下層の lexer から順に並べており、依存は表の下の行から上の行への一方向である。上の行のモジュールは下の行のモジュールを import しない。
 

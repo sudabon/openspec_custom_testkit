@@ -8,7 +8,7 @@ import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { lintChange, lintRepo, lintSource } from '../payload/scripts/lib/e2e-lint.mjs';
 import { evaluateChange, maxLevel } from '../payload/scripts/lib/evaluate.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { capture, changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
+import { asDerived, capture, changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
 
 const fixtures = fileURLToPath(new URL('./fixtures/e2e-lint/', import.meta.url));
 const shippedPolicy = readFileSync(new URL('../payload/openspec/quality-policy.md', import.meta.url), 'utf8');
@@ -1100,4 +1100,20 @@ test('known high risk survives unknown changes and still requires and runs mutat
     assert.deepEqual(commands, [['bash', '-c', 'run-mutation']]);
     assert.match(readFileSync(join(repo.dir, 'output'), 'utf8'), /risk_level=high/);
   } finally { repo.cleanup(); }
+});
+
+test('Derived changes inherit every integrated gate: the lint enforces the same findings', () => {
+  const { repo, base } = scopeRepo();
+  try {
+    const integrated = lintRepo(repo.dir, [change()], { phase: 'plan', base, env: { QE_E2E_LINT_MODE: 'warn' } });
+    assert.equal(integrated.failed, 2);
+    const derived = asDerived(repo.dir, change());
+    assert.equal(derived.declaredSchema, 'quality-driven-e2e-mockup');
+    const result = lintRepo(repo.dir, [derived], { phase: 'plan', base, env: { QE_E2E_LINT_MODE: 'warn' } });
+    assert.deepEqual(files(result.enforced), files(integrated.enforced));
+    assert.deepEqual(files(result.warned), files(integrated.warned));
+    assert.equal(result.failed, integrated.failed);
+  } finally {
+    repo.cleanup();
+  }
 });

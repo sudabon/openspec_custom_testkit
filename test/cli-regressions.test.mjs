@@ -5,7 +5,7 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, symlinkSync } fr
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { USAGE } from '../lib/cli.mjs';
-import { tempDir, writeIn } from './support.mjs';
+import { GATE, gitRepo, tempDir, writeDerivedChange, writeDerivedSchema, writeIn } from './support.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 
@@ -176,4 +176,53 @@ test('missing output baseline fails unless regeneration is explicitly enabled', 
   checkExit(regenerated, 0);
   assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), JSON.parse(original));
   checkExit(run(args, dir, { UPDATE_OUTPUT_BASELINE: '' }), 0);
+});
+
+// A pull request with an integrated, a legacy QE, a legacy E2E, an unrelated and a derived-schema change.
+function mixedPullRequest(t) {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  repo.commit('schemas');
+  const base = repo.git(['rev-parse', 'HEAD']).trim();
+  writeDerivedChange(repo.dir, 'derived');
+  writeDerivedChange(repo.dir, 'integrated', { schema: 'quality-driven-e2e' });
+  writeIn(repo.dir, 'openspec/changes/qe/.openspec.yaml', 'schema: quality-driven\n');
+  writeIn(repo.dir, 'openspec/changes/e2e/.openspec.yaml', 'schema: spec-driven-e2e\n');
+  writeIn(repo.dir, 'openspec/changes/other/.openspec.yaml', 'schema: team-custom\n');
+  repo.commit('mixed');
+  return { repo, base };
+}
+
+function selectJson(repo, base, env = {}) {
+  const result = run([GATE, 'select', '--base', base, '--json'], repo.dir, env);
+  return Object.fromEntries(JSON.parse(result.stdout).changes.map(change => [change.id, change]));
+}
+
+test('Derived schema in a mixed pull request is selected like the integrated change', t => {
+  const { repo, base } = mixedPullRequest(t);
+  const byId = selectJson(repo, base);
+  const pick = change => ({ schema: change.schema, qe: change.qe, e2e: change.e2e });
+  assert.deepEqual(pick(byId.derived), pick(byId.integrated));
+  assert.equal(byId.derived.declaredSchema, 'quality-driven-e2e-mockup');
+  assert.equal(byId.qe.qe, true);
+  assert.equal(byId.qe.e2e, 'not-applicable');
+  assert.equal(byId.e2e.qe, false);
+  assert.equal(byId.e2e.e2e, 'required');
+  assert.match(byId.other.reason, /無関係な schema: team-custom/);
+  for (const change of Object.values(byId)) assert.equal(change.declaredSchema, change.id === 'derived' ? 'quality-driven-e2e-mockup' : change.schema);
+});
+
+test('Environment variable cannot downgrade a derived change to legacy QE', t => {
+  const { repo, base } = mixedPullRequest(t);
+  const plain = run([GATE, 'check', '--base', base], repo.dir);
+  const env = { QE_SCHEMA: 'quality-driven-e2e-mockup', QE_SEAL_REQUIRED_LEVELS: '' };
+  const byId = selectJson(repo, base, env);
+  assert.equal(byId.derived.schema, 'quality-driven-e2e');
+  assert.equal(byId.derived.qe, true);
+  const checked = run([GATE, 'check', '--base', base], repo.dir, env);
+  assert.equal(checked.status, 1);
+  const derivedBlock = text => text.split('▶ ').find(block => block.startsWith('derived '));
+  // Integrated seals ignore QE_SEAL_REQUIRED_LEVELS, so the derived change still needs a seal at risk_level low.
+  assert.match(derivedBlock(checked.stdout), /risk_level=low では実装開始前に Oracle の seal が必要です/);
+  assert.equal(derivedBlock(checked.stdout), derivedBlock(plain.stdout));
 });

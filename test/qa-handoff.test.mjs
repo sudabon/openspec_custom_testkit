@@ -7,7 +7,7 @@ import { sha256File } from '../payload/scripts/lib/hash.mjs';
 import { evaluateChange } from '../payload/scripts/lib/evaluate.mjs';
 import { checkTestPlan } from '../payload/scripts/lib/plan-check.mjs';
 import { handoffNeed, residualHeadingErrors } from '../payload/scripts/lib/qa-handoff.mjs';
-import { gitRepo } from './support.mjs';
+import { asDerived, gitRepo } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
 const TEMPLATE = readFileSync(new URL('payload/openspec/schemas/quality-driven-e2e/templates/qa-handoff.md', root), 'utf8');
@@ -642,6 +642,20 @@ test('manual kinds, charter count, and duplicate ids are checked', () => {
     assert.ok(has(result, '探索チャーターが 0 件'), JSON.stringify(result.failures));
     assert.ok(has(result, '自動化済み範囲で R1 が重複'), JSON.stringify(result.failures));
     assert.ok(has(result, '手動確認範囲で F2 が重複'), JSON.stringify(result.failures));
+  } finally {
+    ctx.repo.cleanup();
+  }
+});
+
+test('Derived changes inherit every integrated gate: a Manual layer still requires the handoff', () => {
+  const ctx = setup();
+  try {
+    manualCase(ctx);
+    const integrated = run(ctx);
+    assert.ok(has(integrated, 'qa-handoff.md がありません'), JSON.stringify(integrated.failures));
+    ctx.change = asDerived(ctx.repo.dir, ctx.change);
+    assert.equal(ctx.change.declaredSchema, 'quality-driven-e2e-mockup');
+    assert.deepEqual(run(ctx).failures, integrated.failures);
   } finally {
     ctx.repo.cleanup();
   }

@@ -6,6 +6,12 @@
 - OpenSpec CLI 1.13.1。
 - 旧 `quality-driven` と `spec-driven-e2e` の成果物形式は維持する。統合の承認、seal、反証、JSON evidence を旧 change へ遡及しない。
 
+## 派生 schema を前提とするアドオン
+
+派生 schema（`openspec/schemas/<name>/testkit-compat.json`）を扱える testkit の版には、`scripts/lib/schema-family.mjs` が配布されている。アドオンの install と doctor は、導入先にこのファイルがあるかで対応版かを判定する。判定結果を再利用する場合は、このモジュールの `resolveSchemaFamily` / `readCompatDeclaration` を import する。判定を弱める設定口は無い。
+
+testkit を前の版に戻すと、派生 schema の change は再び対象外になる。アドオン導入後の downgrade は、アドオン側の doctor で検出する。宣言と構造の詳細は [workflow.md](workflow.md#派生-schema) にある。
+
 ## 終了コード
 
 | 入口 | 0 | 1 | 2 | 3 |

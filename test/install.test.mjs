@@ -8,7 +8,7 @@ import { join, relative, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { PathError, UsageError, decideAction, exitCodeFor, loadLegacyIndex, main, transformBytes } from '../lib/cli.mjs';
 import { mergeConfig } from '../lib/config-merge.mjs';
-import { capture, tempDir } from './support.mjs';
+import { capture, tempDir, writeDerivedSchema } from './support.mjs';
 
 const root = new URL('..', import.meta.url);
 
@@ -436,4 +436,53 @@ test('io.now stamps installedAt and the viewpoint date', async t => {
   const stamp = JSON.parse(readFileSync(join(target, '.openspec-custom-testkit.json'), 'utf8'));
   assert.equal(stamp.installedAt, now().toISOString());
   assert.equal(stamp.features.nonfunctionalViewpoints.since, '2026-01-02');
+});
+
+// Every file under `dir`, keyed by path, with its bytes.
+function snapshot(dir) {
+  return Object.fromEntries(readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => {
+      const abs = join(entry.parentPath ?? entry.path, entry.name);
+      return [relative(dir, abs), readFileSync(abs, 'base64')];
+    }));
+}
+
+test('Update keeps the derived schema: install, update and --force leave it and the default schema alone', async () => {
+  const target = tempDir('tk-install-');
+  execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+  const first = await capture(main, ['install', '--force', '--target', target]);
+  assert.equal(first.code, 0, first.text);
+  const derivedDir = writeDerivedSchema(target);
+  writeFileSync(join(derivedDir, 'templates/proposal.md'), '# addon edit\n');
+  const config = join(target, 'openspec/config.yaml');
+  writeFileSync(config, readFileSync(config, 'utf8').replace(/^schema: .*$/m, 'schema: quality-driven-e2e-mockup'));
+  const before = snapshot(derivedDir);
+  const configBefore = readFileSync(config, 'utf8');
+  for (const args of [['install'], ['update'], ['update', '--force'], ['install', '--force']]) {
+    const result = await capture(main, [...args, '--target', target]);
+    assert.equal(result.code, 0, result.text);
+    assert.doesNotMatch(result.text, /自動変更しません/, args.join(' '));
+    assert.deepEqual(snapshot(derivedDir), before, args.join(' '));
+    assert.equal(readFileSync(config, 'utf8'), configBefore, args.join(' '));
+  }
+  rmSync(target, { recursive: true, force: true });
+});
+
+test('Doctor lists a derived schema in the notes and fails on an invalid declaration', async () => {
+  const { doctor } = await import('../payload/scripts/lib/doctor.mjs');
+  const target = tempDir('tk-install-');
+  execFileSync('git', ['-c', 'init.defaultBranch=main', '-C', target, 'init'], { stdio: 'ignore' });
+  assert.equal((await capture(main, ['install', '--force', '--target', target])).code, 0);
+  const baseline = doctor(target);
+  writeDerivedSchema(target);
+  const listed = doctor(target);
+  assert.equal(listed.ok, baseline.ok);
+  assert.deepEqual(listed.failures, baseline.failures);
+  assert.ok(listed.notes.some(note => note.includes('派生 schema quality-driven-e2e-mockup を統合 schema (quality-driven-e2e) の系統として扱います')), listed.notes.join('\n'));
+  writeFileSync(join(target, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json'), '{"extends": "quality-driven-e2e", "compatVersion": 2}');
+  const broken = doctor(target);
+  assert.equal(broken.ok, false);
+  assert.ok(broken.failures.some(line => line.includes('openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json') && line.includes('compatVersion')), broken.failures.join('\n'));
+  rmSync(target, { recursive: true, force: true });
 });

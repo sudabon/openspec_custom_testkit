@@ -121,3 +121,14 @@ test('config blocks an edit that would turn valid input into invalid YAML', () =
     assert.match(merged.warnings[0], /元ファイルを保持します.*Map keys must be unique/s);
   }
 });
+
+test('a default schema that is a valid derived schema is kept without the migration warning', () => {
+  const original = 'schema: quality-driven-e2e-mockup\n';
+  const derived = mergeConfig(original, null, { isDerivedSchema: name => name === 'quality-driven-e2e-mockup' });
+  assert.match(derived.text, /^schema: quality-driven-e2e-mockup\n/);
+  assert.deepEqual(derived.warnings, []);
+  assert.match(derived.notes.join('\n'), /quality-driven-e2e-mockup は quality-driven-e2e の派生 schema なので変更しません/);
+  const custom = mergeConfig(original);
+  assert.match(custom.text, /^schema: quality-driven-e2e-mockup\n/);
+  assert.match(custom.warnings[0], /自動変更しません/);
+});
