@@ -152,6 +152,21 @@ export function isIntegratedFamily(repo, schema, options) {
   return resolveSchemaFamily(repo, schema, options).family === SCHEMA_INTEGRATED;
 }
 
+// Names of the schemas whose declaration is valid at `rev`, sorted. A git failure throws instead of returning an
+// empty list, so callers never read "no declarations" from a revision they could not read.
+export function listCompatDeclarations(repo, { rev }) {
+  const listed = git(repo, ['ls-tree', '-r', '-z', '--name-only', '--full-tree', rev, '--', SCHEMAS_ROOT]);
+  const names = listed.split('\0')
+    .map(path => path.match(/^openspec\/schemas\/([^/]+)\/testkit-compat\.json$/)?.[1])
+    .filter(Boolean)
+    .sort();
+  return names.filter(name => {
+    const declaration = readCompatDeclaration(repo, name, { rev });
+    if (declaration.gitError) throw new Error(declaration.gitError);
+    return declaration.valid === true;
+  });
+}
+
 // Every project-local schema directory that carries a declaration, valid or not, sorted by name.
 export function listDerivedSchemas(repo) {
   const root = join(repo, SCHEMAS_ROOT);
