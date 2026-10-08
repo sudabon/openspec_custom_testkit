@@ -12,7 +12,7 @@ import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { parseYamlText } from '../payload/scripts/lib/frontmatter.mjs';
 import { hasBoundedToken } from '../payload/scripts/lib/markdown.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { changeFixture, gitRepo, runGate, tempDir, writeIn } from './support.mjs';
+import { changeFixture, gitRepo, runGate, tempDir, writeDerivedChange, writeDerivedSchema, writeIn } from './support.mjs';
 
 const sample = JSON.parse(readFileSync(new URL('./fixtures/legacy-sample-results.json', import.meta.url), 'utf8'));
 
@@ -288,4 +288,36 @@ test('outside a git repository check-test-plan exits 2, while testkit-gate falls
   const coverage = runGate(dir, ['coverage'], { env });
   assert.equal(coverage.status, 2);
   assert.match(coverage.stderr, /openspec\/ がありません: /);
+});
+
+test('Seal uses the integrated digest for a derived-schema change and is required at every risk level', t => {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  const dir = writeDerivedChange(repo.dir);
+  const qualityPath = join(dir, 'quality.md');
+  const approved = readFileSync(qualityPath, 'utf8')
+    .replace('approved_by: ""', 'approved_by: "FIXTURE-DUMMY-APPROVAL"')
+    .replace('approved_at: ""', 'approved_at: "2026-10-01"');
+  writeIn(repo.dir, 'openspec/changes/mockup-demo/quality.md', approved);
+  const gate = fileURLToPath(new URL('../payload/scripts/qe-gate.sh', import.meta.url));
+
+  const [selected] = selectChanges({ repo: repo.dir, names: ['mockup-demo'], env: { QE_SEAL_REQUIRED_LEVELS: '' } }).changes;
+  const unsealed = evaluateChange(repo.dir, selected, { phase: 'plan', env: { QE_SEAL_REQUIRED_LEVELS: '' } });
+  assert.ok(unsealed.failures.some(line => line.includes('risk_level=low では実装開始前に Oracle の seal が必要です')), unsealed.failures.join('\n'));
+
+  const sealed = spawnSync('bash', [gate, 'seal', 'mockup-demo'], { cwd: repo.dir, encoding: 'utf8' });
+  assert.equal(sealed.status, 0, sealed.stderr);
+  const digest = parseYamlText(readFileSync(qualityPath, 'utf8').split('---')[1]).data.oracle_digest;
+  assert.match(digest, /^manifest-sha256:/);
+  assert.equal(digest, manifestDigest(repo.dir, ['tests/oracle/demo']).digest);
+  const digestOnly = spawnSync('bash', [gate, 'digest', 'mockup-demo'], { cwd: repo.dir, encoding: 'utf8' });
+  assert.equal(digestOnly.stdout.trim(), digest);
+
+  // An invalid declaration never falls back to the legacy seal.
+  writeIn(repo.dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json', '{"extends": "quality-driven-e2e", "compatVersion": 2}');
+  writeIn(repo.dir, 'openspec/changes/mockup-demo/quality.md', approved);
+  const refused = spawnSync('bash', [gate, 'seal', 'mockup-demo'], { cwd: repo.dir, encoding: 'utf8' });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /testkit-compat.json が無効です/);
+  assert.match(readFileSync(qualityPath, 'utf8'), /oracle_digest: ""/);
 });

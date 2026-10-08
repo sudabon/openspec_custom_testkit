@@ -12,7 +12,7 @@ import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
 import { selectChanges } from '../payload/scripts/lib/select.mjs';
 import { main } from '../lib/cli.mjs';
-import { gitRepo, runGate, tempDir, writeIn } from './support.mjs';
+import { gitRepo, runGate, tempDir, writeDerivedSchema, writeIn } from './support.mjs';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/coverage/repo', import.meta.url));
 const RESULTS = fileURLToPath(new URL('./fixtures/coverage/regression-results.json', import.meta.url));
@@ -330,6 +330,7 @@ test('doctor reports an older install without the coverage modules as incomplete
     assert.equal(old.ok, false);
     assert.match(old.failures.join('\n'), /scripts\/lib\/coverage-map\.mjs/);
     assert.match(old.failures.join('\n'), /scripts\/lib\/e2e-lint\.mjs/);
+    assert.match(old.failures.join('\n'), /必須 module が導入記録にありません（旧版のままです）: scripts\/lib\/schema-family\.mjs。install を再実行してください/);
     assert.equal(await main(['install', '--force', '--target', repo.dir], quiet), 0);
     assert.equal(doctor(repo.dir).ok, true);
   } finally {
@@ -1384,4 +1385,23 @@ test('custom YAML tags only invalidate config when they apply to the schema', t 
     assert.equal(out.exitCode, 2, value);
     assert.ok(out.stderr.includes('openspec/config.yaml が不正です:'));
   }
+});
+
+test('an archived derived-schema change protects its scenarios like an integrated one, without a warning', t => {
+  const dir = protectedRepo(t);
+  const integrated = buildCoverage(dir, { env: {} });
+  writeDerivedSchema(dir);
+  writeIn(dir, 'openspec/changes/archive/2026-01-01-a/.openspec.yaml', 'schema: quality-driven-e2e-mockup\n');
+  const derived = buildCoverage(dir, { env: { QE_SCHEMA: 'quality-driven-e2e-mockup' } });
+  assert.equal(derived.scenarios[0].classification, CLASS.e2e);
+  assert.deepEqual(derived.scenarios, integrated.scenarios);
+  assert.deepEqual(derived.warnings, []);
+
+  // Without its declaration the same schema is unsupported again; an invalid one is an input error.
+  rmSync(join(dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json'));
+  assert.match(buildCoverage(dir, { env: {} }).warnings[0], /未対応の schema quality-driven-e2e-mockup/);
+  writeIn(dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json', '{');
+  const broken = runCoverage({ repo: dir, format: 'json', env: {} });
+  assert.notEqual(broken.exitCode, 0);
+  assert.match(broken.stderr, /testkit-compat.json が無効です/);
 });

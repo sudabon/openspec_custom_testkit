@@ -5,6 +5,7 @@ import { readChangeMetadata, readDefaultSchema } from './change-metadata.mjs';
 import { listActiveChanges, parseArchiveFolder } from './changes.mjs';
 import { asString, splitFrontmatter } from './frontmatter.mjs';
 import { git, gitShow, parseNameStatus } from './git.mjs';
+import { resolveSchemaFamily } from './schema-family.mjs';
 
 function stripArchiveId(folder) {
   return parseArchiveFolder(folder).id ?? folder;
@@ -44,10 +45,11 @@ function applicability(repo, dir, schema) {
 }
 
 function decorate(repo, record, baseRef, env) {
-  const head = record.lifecycle === 'deleted'
+  const rawHead = record.lifecycle === 'deleted'
     ? { schema: null, missing: true, broken: false }
     : interpretSchema(repo, record.dir, null);
-  const base = baseRef ? interpretSchema(repo, record.baseDir ?? record.dir, baseRef) : { schema: null, missing: true, broken: false };
+  const rawBase = baseRef ? interpretSchema(repo, record.baseDir ?? record.dir, baseRef) : { schema: null, missing: true, broken: false };
+  const { head, base } = applyFamilies(repo, rawHead, rawBase, baseRef);
   const resolved = resolveSchema(repo, record, head, base);
   const { schema, forcedIntegrated, unknown, fallback } = resolved;
   const errors = [...resolved.errors, ...deletionErrors(record, resolved, base)];
@@ -64,6 +66,7 @@ function decorate(repo, record, baseRef, env) {
     id: record.id,
     path: record.dir,
     schema: schema || null,
+    declaredSchema: rawHead.schema || (record.lifecycle === 'deleted' ? rawBase.schema : null) || schema || null,
     lifecycle: record.lifecycle,
     qe,
     e2e: described.e2e,
@@ -71,10 +74,39 @@ function decorate(repo, record, baseRef, env) {
     reason: described.reason,
     errors,
     fallback,
+    familyError: head.familyError ?? null,
     skipSpecs: head.skipSpecs === true,
     pendingPlan: described.pendingPlan === true,
     tasksText: tasks,
   };
+}
+
+// Replaces each side's schema by its family, so a valid derived schema is gated as quality-driven-e2e from here on.
+// A declaration only adds gates. When HEAD has no valid declaration for its schema but the base had one (for that
+// schema, whether or not the change existed there), or when git cannot read the base declaration, the HEAD side is
+// broken and the base integrated, so resolveSchema keeps the change integrated and fails it. An invalid declaration
+// without a valid base one makes the change unknown.
+function applyFamilies(repo, rawHead, rawBase, baseRef) {
+  const failClosed = error => ({
+    head: { ...rawHead, broken: true, error, familyError: error },
+    base: { ...rawBase, schema: SCHEMA_INTEGRATED },
+  });
+  const baseFamily = baseRef && rawBase.schema ? resolveSchemaFamily(repo, rawBase.schema, { rev: baseRef }) : null;
+  if (baseFamily?.unreadable) return failClosed(baseFamily.error);
+  const base = baseFamily?.family ? { ...rawBase, schema: baseFamily.family } : rawBase;
+  if (!rawHead.schema || rawHead.broken) return { head: rawHead, base };
+  const headFamily = resolveSchemaFamily(repo, rawHead.schema);
+  if (headFamily.family === SCHEMA_INTEGRATED) return { head: { ...rawHead, schema: SCHEMA_INTEGRATED }, base };
+  const atBase = baseRef ? resolveSchemaFamily(repo, rawHead.schema, { rev: baseRef }) : null;
+  if (atBase?.unreadable) return failClosed(atBase.error);
+  if (atBase?.derived) {
+    const path = `openspec/schemas/${rawHead.schema}/testkit-compat.json`;
+    return failClosed(headFamily.error
+      ? `比較元で有効だった互換宣言が HEAD で無効になっています。統合 change として検査を続けます: ${headFamily.error}`
+      : `比較元で有効だった ${rawHead.schema} の互換宣言 (${path}) が HEAD で失われています。統合 change として検査を続けます`);
+  }
+  if (headFamily.error) return { head: { ...rawHead, broken: true, error: headFamily.error, familyError: headFamily.error }, base };
+  return { head: { ...rawHead, schema: headFamily.family }, base };
 }
 
 // The schema to gate with. Broken or lost metadata of a change that was integrated at the base stays integrated;
@@ -102,7 +134,11 @@ function resolveSchema(repo, record, head, base) {
       schema = base.schema;
     } else {
       const configured = configSchema(repo) || 'spec-driven';
-      if (configured === SCHEMA_INTEGRATED) {
+      const family = resolveSchemaFamily(repo, configured);
+      if (family.error) {
+        unknown = true;
+        errors.push(`.openspec.yaml が無く、既定 schema ${configured} の互換宣言が無効です: ${family.error}`);
+      } else if (family.family === SCHEMA_INTEGRATED) {
         unknown = true;
         errors.push('.openspec.yaml が無いため、統合 schema の検査を対象外にしません');
       } else {
@@ -198,7 +234,16 @@ function allActive(repo) {
 export function changeSchema(repo, dir) {
   const head = interpretSchema(repo, dir, null);
   if (head.broken) return { error: `${dir}/.openspec.yaml を解釈できません: ${head.error}` };
-  return { schema: head.schema || configSchema(repo) || 'spec-driven' };
+  const family = resolveSchemaFamily(repo, head.schema || configSchema(repo) || 'spec-driven');
+  if (family.error) return { error: family.error };
+  return { schema: family.family };
+}
+
+// The text-output line for a change gated under a schema other than the one it declares, or null.
+// Integrated and legacy changes print nothing new, so their output stays as before.
+export function schemaLine(change) {
+  if (!change?.declaredSchema || !change.schema || change.declaredSchema === change.schema) return null;
+  return `schema: ${change.schema} (宣言: ${change.declaredSchema})`;
 }
 
 export function isChangeName(name) {

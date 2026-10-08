@@ -7,7 +7,7 @@ import { effectivePhase, evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { headRevision, toplevel } from './lib/git.mjs';
 import { buildReport } from './lib/report.mjs';
 import { renderJson, runCoverage } from './lib/coverage-map.mjs';
-import { selectChanges } from './lib/select.mjs';
+import { schemaLine, selectChanges } from './lib/select.mjs';
 import { isE2eRequired } from './lib/critical.mjs';
 import { reportInputs } from './lib/flaky.mjs';
 import { readRiskLevel } from './lib/change-metadata.mjs';
@@ -296,6 +296,8 @@ function evaluateAll(job, selected, phase, manifest, evaluate) {
       continue;
     }
     lines.push(`▶ ${change.id} (${change.lifecycle}/${result.phase})`);
+    const shown = schemaLine(change);
+    if (shown) lines.push(shown);
     for (const warning of result.warnings) lines.push(`! ${warning}`);
     for (const failure of result.failures) lines.push(`✗ ${failure}`);
     if (result.failures.length && !job.code) job.code = 1;

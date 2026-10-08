@@ -7,7 +7,7 @@ import { evaluateChange, maxLevel } from './lib/evaluate.mjs';
 import { asList, setFrontmatterScalar } from './lib/frontmatter.mjs';
 import { readPolicyText } from './lib/policy.mjs';
 import { loadQuality, sealBlockers } from './lib/seal.mjs';
-import { isChangeName, selectChanges } from './lib/select.mjs';
+import { isChangeName, schemaLine, selectChanges } from './lib/select.mjs';
 
 const USAGE = `usage: qe-gate.mjs seal <change>
        qe-gate.mjs digest <change>
@@ -15,6 +15,8 @@ const USAGE = `usage: qe-gate.mjs seal <change>
 
 function printEvaluation(change, result) {
   console.log(`▶ ${change.id} (${change.lifecycle})`);
+  const shown = schemaLine(change);
+  if (shown) console.log(`  ${shown}`);
   for (const line of result.oks) console.log(`  ✓ ${line}`);
   for (const line of result.warnings) console.log(`  ! ${line}`);
   for (const line of result.failures) console.log(`  ✗ ${line}`);

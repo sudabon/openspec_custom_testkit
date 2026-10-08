@@ -43,6 +43,8 @@ export function loadQuality(repo, id) {
 // Reasons the seal must stop before the Oracle digest, in check order; the CLI stops at the first one, so at most one
 // is returned. `policyText` may be a function so that the policy is read only once approval has been checked.
 export function sealBlockers(change, data, policyText) {
+  // An invalid derived-schema declaration must not fall back to the weaker legacy seal.
+  if (change.familyError) return [change.familyError];
   if (!isIntegratedChange(change)) {
     return asString(data.approved_by) ? [] : ['quality.md が未承認です。approved_by を記入してから seal してください'];
   }

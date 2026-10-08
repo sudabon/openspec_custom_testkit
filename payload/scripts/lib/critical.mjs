@@ -29,6 +29,7 @@ export const REQUIRED_MODULES = [
   'scripts/lib/ids.mjs',
   'scripts/lib/entry.mjs',
   'scripts/lib/seal.mjs',
+  'scripts/lib/schema-family.mjs',
 ];
 
 export function isCritical(rel) {

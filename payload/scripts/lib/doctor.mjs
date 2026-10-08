@@ -4,6 +4,7 @@ import { isCritical, REQUIRED_MODULES, STAMP_FILE } from './critical.mjs';
 import { assessTarget } from './environment.mjs';
 import { sha256File } from './hash.mjs';
 import { installedE2eRoot, readJsonIfExists } from './e2e-root.mjs';
+import { listDerivedSchemas } from './schema-family.mjs';
 import { e2eLintPolicy, flakyFailLevels, mockContractMaxAgeDays, POLICY_PATH, policyIssues, qaReviewRequiredLevels, readPolicyText } from './policy.mjs';
 
 export function doctor(repo, options = {}) {
@@ -50,6 +51,10 @@ export function doctor(repo, options = {}) {
     const qa = qaReviewRequiredLevels(policyText);
     if (qa.error) failures.push(qa.error);
     else if (qa.defaulted) notes.push('quality-policy.md に qa_review_required_levels がありません。初期値 [medium, high] で QA レビューを要求します。変える場合は人間が追記してください');
+  }
+  for (const schema of listDerivedSchemas(repo)) {
+    if (schema.valid) notes.push(`派生 schema ${schema.name} を統合 schema (quality-driven-e2e) の系統として扱います (${schema.path})`);
+    else failures.push(`派生 schema の互換宣言が無効です: ${schema.path}: ${schema.errors.join(' / ')}。統合 schema が更新された場合は、アドオンで派生 schema を再生成してください`);
   }
   const env = assessTarget(repo, options);
   notes.push(...env.messages);

@@ -174,3 +174,26 @@ workflow の公開系 step は local harness で確認した。保持日数の�
 要約生成の両段階の例外、GITHUB_OUTPUT 書き込み失敗で終了コード 0 / 3 が保持されることを確認した。欠落・破損した入力の案内、回帰実行による E2E 成果物の上書き防止、早期終了時の理由と PR コメント用 summary_file の出力を local harness で検証した。workflow の run スクリプトを実行し、HTML の実ファイル確認と testkit-results のアップロード失敗が step summary・PR コメントに反映されることを確認した（GitHub API は fake gh）。
 
 全体テストと smoke の初回実行は sandbox の npm キャッシュ書き込み制限・Chromium 起動制限で失敗したため、sandbox 外で再実行して成功した。実際の reusable workflow による artifact upload と PR コメント投稿は、このローカル検証には含めていない。
+
+## add-derived-schema-compatibility
+
+記録日: 2026-10-08。ホストは Darwin、Node 26.2.0、OpenSpec CLI 1.13.2。push、npm 公開はしていない。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 531 pass / 0 fail |
+| `npm run lint` | 成功 |
+| `npm run test:smoke` | 成功（exit 0） |
+| `npm pack --dry-run` | 成功。`payload/scripts/lib/schema-family.mjs` を含む |
+| `node scripts/build-manifest.mjs --check` | up to date |
+
+一時 repo（`git init` → `openspec init --tools none` → testkit の `install`）に、統合 schema のコピーへ `mockup-plan` artifact を1つ足した `openspec/schemas/quality-driven-e2e-mockup/` と `testkit-compat.json`（`{"extends": "quality-driven-e2e", "compatVersion": 1}`）を手で置いて実行した。
+
+| コマンド | 結果 |
+|---|---|
+| `openspec schema validate quality-driven-e2e-mockup` | exit 0。`Schema 'quality-driven-e2e-mockup' is valid` |
+| `openspec new change demo --schema quality-driven-e2e-mockup` | exit 0。`openspec status --change demo` の artifact は統合 schema の6つと `mockup-plan` |
+| `node scripts/testkit-gate.mjs doctor` | exit 0。`doctor: complete`。注記に `派生 schema quality-driven-e2e-mockup を統合 schema (quality-driven-e2e) の系統として扱います` |
+| `node scripts/testkit-gate.mjs check demo` | exit 0。`schema: quality-driven-e2e (宣言: quality-driven-e2e-mockup)` を表示し、統合 change と同じく「計画途中(test-plan 未作成)」「計画段階(quality.md 未作成)」の警告。無関係な schema として対象外にはならない |
+
+`select demo --json` の要素は `schema: quality-driven-e2e`、`declaredSchema: quality-driven-e2e-mockup`、`qe: true`、`e2e: unknown`（test-plan 未作成）だった。

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { SCHEMA_E2E, SCHEMA_INTEGRATED, SCHEMA_QE } from './critical.mjs';
 import { readChangeMetadata } from './change-metadata.mjs';
+import { resolveSchemaFamily } from './schema-family.mjs';
 import { ARCHIVE_ROOT, CHANGES_ROOT, listActiveChanges, listArchivedChanges } from './changes.mjs';
 import { asString, isCustomTag, isPlainMapping } from './frontmatter.mjs';
 import { errorCode, isFsError, listFiles } from './files.mjs';
@@ -250,9 +251,16 @@ export function resolveCapability(delta, row) {
   return { error: `delta spec の複数箇所に一致します: ${hits.map(hit => `${hit.capability} / ${hit.requirement}`).join(', ')}` };
 }
 
+// A valid derived schema counts as the integrated schema; an invalid declaration makes the input invalid.
+function familyOf(repo, schema, rel) {
+  const family = resolveSchemaFamily(repo, schema);
+  if (family.error) throw new InvalidCoverageInputError(`${rel}: ${family.error}`);
+  return family.family;
+}
+
 function readChange(repo, dir, id, order, { defaultSchema, configPath, qeSchema }) {
   const localSchema = schemaOf(repo, dir);
-  const schema = localSchema ?? defaultSchema;
+  const schema = familyOf(repo, localSchema ?? defaultSchema, localSchema ? `${dir}/.openspec.yaml` : configPath);
   const change = { id, dir, order, schema, rows: [], textOnly: [], unresolved: [], warnings: [], skipped: schema === SCHEMA_QE || (schema === qeSchema && ![SCHEMA_INTEGRATED, SCHEMA_E2E, 'spec-driven'].includes(schema)) };
   const delta = deltaIndex(repo, dir);
   change.delta = delta;

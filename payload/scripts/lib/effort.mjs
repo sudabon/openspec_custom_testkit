@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { SCHEMA_INTEGRATED } from './critical.mjs';
 import { readChangeMetadata, readDefaultSchema, readRiskLevel } from './change-metadata.mjs';
+import { resolveSchemaFamily } from './schema-family.mjs';
 import { listArchivedChanges } from './changes.mjs';
 import { executionBlock } from './evidence-check.mjs';
 import { isPlainMapping as isRecord, validDate } from './frontmatter.mjs';
@@ -57,12 +58,15 @@ function defaultSchema(repo) {
   return { schema: config.schema };
 }
 
+// The family the change is tallied under: a valid derived schema counts as quality-driven-e2e.
 function schemaOf(repo, dir, fallback) {
   const metadata = readChangeMetadata(repo, dir, { strict: true });
-  if (metadata.missing) return fallback;
   if (metadata.problem === 'schema') return { error: '.openspec.yaml の schema は文字列である必要があります' };
   if (metadata.problem) return { error: `.openspec.yaml を解釈できません${metadata.errors[0] ? ` (${metadata.errors[0]})` : ''}` };
-  return metadata.schema ? { schema: metadata.schema } : fallback;
+  const declared = metadata.missing || !metadata.schema ? fallback : { schema: metadata.schema };
+  if (declared.error || !declared.schema) return declared;
+  const family = resolveSchemaFamily(repo, declared.schema);
+  return family.error ? { error: family.error } : { schema: family.family };
 }
 
 function riskLevelOf(repo, dir) {

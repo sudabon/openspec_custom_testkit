@@ -62,6 +62,44 @@ node scripts/testkit-gate.mjs effort --format json
 
 対象は `openspec/changes/archive/` の統合 schema の change で、metadata に schema が無い場合は config の既定 schema を使う。進行中の change と旧 schema の change は数えない。`--since` は有効な日付接頭辞で先に絞り込むので、範囲外の古い archive の破損は集計を失敗させない。日付を判定できないフォルダは範囲外とみなせないため、破損として残る。終了コードは 0（集計完了）/ 1（破損あり）/ 2（引数不正）/ 3（内部エラー）。
 
+## 派生 schema
+
+アドオン kit は、統合 schema `quality-driven-e2e` に artifact やタスクを足した派生 schema を配布できる。OpenSpec の schema.yaml には継承が無いので、派生 schema であることは testkit 側の宣言ファイルで示す。宣言が有効な派生 schema の change は、select・check（plan / final）・lint・seal・evidence・QA handoff・非機能観点・coverage・effort・reporter のすべてで `quality-driven-e2e` の change と同じ検査を受ける。`QE_SCHEMA` や `QE_SEAL_REQUIRED_LEVELS` で旧 schema 扱いにしたり検査を外したりはできない。
+
+### 宣言の形式と有効条件
+
+派生 schema のディレクトリに `openspec/schemas/<name>/testkit-compat.json` を置く。
+
+```json
+{ "extends": "quality-driven-e2e", "compatVersion": 1 }
+```
+
+宣言は次をすべて満たすときだけ有効になる。比較の基準は、導入先の `openspec/schemas/quality-driven-e2e/schema.yaml` である。
+
+- `extends` が `quality-driven-e2e`、`compatVersion` が整数 `1`
+- 同じディレクトリの `schema.yaml` の `name` がディレクトリ名と一致する
+- 名前が `quality-driven-e2e`、`quality-driven`、`spec-driven-e2e`、`spec-driven` のいずれでもない
+- 統合 schema の全 artifact（proposal / specs / quality / design / test-plan / tasks）を同じ `generates` で持ち、各 `requires` が統合 schema の `requires` をすべて含む
+- `apply.requires` が `tasks` を含み、`apply.tracks` が `tasks.md`
+- `templates/` に `evidence.md` と `qa-handoff.md` がある
+
+宣言を読むのは project-local の `openspec/schemas/` だけである。`select --json` の要素には、判定上の `schema`（`quality-driven-e2e`）と宣言上の `declaredSchema` が並ぶ。check のテキスト出力には `schema: quality-driven-e2e (宣言: <name>)` の行が加わる。`doctor` は有効な派生 schema を注記に出す。
+
+### fail closed の条件
+
+宣言は検査を足す方向にしか働かない。次の場合、ゲートはその change を対象外にせず、診断を出して失敗する。
+
+- 宣言が JSON として読めない、または上の有効条件を満たさない（doctor も失敗する）
+- `--base` の比較元では有効だった宣言が、HEAD で削除または無効化されている。この場合は統合 change として検査を続けたうえで失敗する
+- 比較元の宣言を git で読めない（浅い clone など）
+
+宣言の無い独自 schema は、これまでどおり理由付きの対象外になる。testkit の update で統合 schema の artifact が増えると、古い派生 schema の宣言は無効になる。アドオンで派生 schema を再生成する。
+
+### testkit が検査しないもの
+
+- 派生 schema が足した artifact（例: `mockup-plan.md`）やタスクグループ（例: `## 7. Mockup`）。検査はアドオンのゲートの責務で、testkit はその存在を理由に失敗させることもない。
+- artifact の `instruction` の文面。構造検査は `generates` / `requires` / `apply` / templates の有無だけを見る。派生 schema が Agent への指示を弱めても、ゲートは統合 schema と同じ基準で判定するので検査は外れない。ただし指示の妥当性は、アドオンの doctor（統合 schema との同期チェック）と人間のレビューで確かめる。
+
 ## 計画と適用
 
 `skip_specs: true` のとき specs は skipped になり、架空の spec は作らない。quality と test-plan は proposal と変更範囲から書く。OpenSpec 1.13.1 では、skipped な specs のあと quality は ready になる。tasks まで揃うと、evidence が無くても apply は ready になる。
