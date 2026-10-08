@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { listDerivedSchemas, readCompatDeclaration, resolveSchemaFamily } from '../payload/scripts/lib/schema-family.mjs';
+import { listCompatDeclarations, listDerivedSchemas, readCompatDeclaration, resolveSchemaFamily } from '../payload/scripts/lib/schema-family.mjs';
 import { gitRepo, tempDir, writeDerivedSchema, writeIn } from './support.mjs';
 
 const NAME = 'quality-driven-e2e-mockup';
@@ -103,4 +103,21 @@ test('a revision is read with git, and a git failure is not "no declaration"', t
   assert.equal(missing.family, null);
   assert.match(missing.error, /refs\/does-not-exist の .*testkit-compat.json を読めません/);
   assert.equal(readCompatDeclaration(repo.dir, NAME, { rev: 'refs/does-not-exist' }).exists, null);
+});
+
+test('listCompatDeclarations returns only the valid declarations at a revision and throws on a git failure', t => {
+  const repo = gitRepo(t);
+  const empty = repo.git(['rev-parse', 'HEAD']).trim();
+  assert.deepEqual(listCompatDeclarations(repo.dir, { rev: empty }), []);
+  writeDerivedSchema(repo.dir, NAME);
+  writeDerivedSchema(repo.dir, 'quality-driven-e2e-broken', { compat: JSON.stringify({ extends: 'quality-driven-e2e', compatVersion: 2 }) });
+  writeDerivedSchema(repo.dir, 'team-custom', { compat: null });
+  repo.commit('schemas');
+  const base = repo.git(['rev-parse', 'HEAD']).trim();
+  rmSync(join(repo.dir, `openspec/schemas/${NAME}/testkit-compat.json`));
+  repo.commit('drop declaration');
+
+  assert.deepEqual(listCompatDeclarations(repo.dir, { rev: base }), [NAME]);
+  assert.deepEqual(listCompatDeclarations(repo.dir, { rev: 'HEAD' }), []);
+  assert.throws(() => listCompatDeclarations(repo.dir, { rev: 'refs/does-not-exist' }));
 });

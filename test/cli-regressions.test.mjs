@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { USAGE } from '../lib/cli.mjs';
@@ -225,4 +225,36 @@ test('Environment variable cannot downgrade a derived change to legacy QE', t =>
   // Integrated seals ignore QE_SEAL_REQUIRED_LEVELS, so the derived change still needs a seal at risk_level low.
   assert.match(derivedBlock(checked.stdout), /risk_level=low では実装開始前に Oracle の seal が必要です/);
   assert.equal(derivedBlock(checked.stdout), derivedBlock(plain.stdout));
+});
+
+// The review's reproduction: PR1 drops only the declaration of a schema an untouched active change still declares,
+// and PR2 would finish its implementation tasks. PR1 must already fail, before the base loses the declaration.
+test('Declaration dropped in one pull request and the change finished in the next: the first pull request fails', t => {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  writeDerivedChange(repo.dir, 'demo');
+  writeIn(repo.dir, 'openspec/changes/demo/tasks.md', '## 1. Oracle\n\n- [x] 1.1 oracle\n\n## 2. Implementation\n\n- [ ] 2.1 implement\n');
+  repo.commit('main');
+  const main = repo.git(['rev-parse', 'HEAD']).trim();
+  rmSync(join(repo.dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json'));
+  repo.commit('PR1: drop the declaration');
+  const pr1 = run([GATE, 'check', '--base', main], repo.dir);
+  checkExit(pr1, 1);
+  assert.match(pr1.stdout, /▶ demo /);
+  assert.match(pr1.stdout, /互換宣言 .* が HEAD で失われています/);
+});
+
+test('Archive move that also switches the schema out of the integrated family fails', t => {
+  const repo = gitRepo(t);
+  writeDerivedChange(repo.dir, 'demo', { schema: 'quality-driven-e2e' });
+  repo.commit('main');
+  const main = repo.git(['rev-parse', 'HEAD']).trim();
+  mkdirSync(join(repo.dir, 'openspec/changes/archive'));
+  repo.git(['mv', 'openspec/changes/demo', 'openspec/changes/archive/2026-10-08-demo']);
+  writeIn(repo.dir, 'openspec/changes/archive/2026-10-08-demo/.openspec.yaml', 'schema: team-custom\ncreated: 2026-10-01\n');
+  repo.commit('archive with a new schema');
+  const checked = run([GATE, 'check', '--base', main], repo.dir);
+  checkExit(checked, 1);
+  assert.match(checked.stdout, /schema が quality-driven-e2e から team-custom に変更されています/);
+  assert.doesNotMatch(checked.stdout, /無関係な schema/);
 });

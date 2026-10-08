@@ -197,3 +197,24 @@ workflow の公開系 step は local harness で確認した。保持日数の�
 | `node scripts/testkit-gate.mjs check demo` | exit 0。`schema: quality-driven-e2e (宣言: quality-driven-e2e-mockup)` を表示し、統合 change と同じく「計画途中(test-plan 未作成)」「計画段階(quality.md 未作成)」の警告。無関係な schema として対象外にはならない |
 
 `select demo --json` の要素は `schema: quality-driven-e2e`、`declaredSchema: quality-driven-e2e-mockup`、`qe: true`、`e2e: unknown`（test-plan 未作成）だった。
+
+## harden-schema-switch-detection
+
+記録日: 2026-10-08。ホストは Darwin、Node 26.2.0、OpenSpec CLI 1.13.2。push、npm 公開はしていない。
+
+| コマンド | 結果 |
+|---|---|
+| `npm test` | 542 pass / 0 fail |
+| `npm run lint` | 成功。337 files scanned |
+| `npm run test:smoke` | 成功（exit 0） |
+| `node scripts/build-manifest.mjs --check` | up to date |
+
+経路ごとに一時 repo を作り（`git init` → `openspec init --tools none` → testkit の `install`）、統合 schema のコピーへ `mockup-plan` artifact を1つ足した `openspec/schemas/quality-driven-e2e-mockup/` と有効な `testkit-compat.json` を置いた。`openspec new change` で `integ`（`quality-driven-e2e`）と `mock`（`quality-driven-e2e-mockup`）を作って main にコミットし、`pr` ブランチで1コミットだけ加えて `node scripts/testkit-gate.mjs check --base main` を実行した。差分の無い状態では `checked: 0 change(s)`、exit 0 だった。
+
+| 経路 | PR のコミット | 結果 |
+|---|---|---|
+| (a) 宣言だけを削除 | `testkit-compat.json` の削除のみ。`openspec/changes/` に差分なし | exit 1。`mock` が選択に加わり、`schema: quality-driven-e2e (宣言: quality-driven-e2e-mockup)` と `比較元で有効だった quality-driven-e2e-mockup の互換宣言 (...) が HEAD で失われています` |
+| (b) `quality-driven-e2e` → `team-custom` | `integ/.openspec.yaml` の `schema:` を書き換え | exit 1。`比較元で統合系統だった change の schema が quality-driven-e2e から team-custom に変更されています`。無関係な schema として対象外にはならない |
+| (c) 派生 schema → `team-custom` | `mock/.openspec.yaml` の `schema:` を書き換え | exit 1。`比較元で統合系統だった change の schema が quality-driven-e2e-mockup から team-custom に変更されています` |
+
+修正前の `select.mjs` で同じ回帰テストを実行すると、追加した失敗系のテスト 8 件がすべて失敗することも確かめた（統合系統どうしの付け替えと、未使用の宣言の削除は修正前も成功する）。比較元 ref を付けない `check` の挙動は変えていない。

@@ -5,7 +5,7 @@ import { readChangeMetadata, readDefaultSchema } from './change-metadata.mjs';
 import { listActiveChanges, parseArchiveFolder } from './changes.mjs';
 import { asString, splitFrontmatter } from './frontmatter.mjs';
 import { git, gitShow, parseNameStatus } from './git.mjs';
-import { resolveSchemaFamily } from './schema-family.mjs';
+import { listCompatDeclarations, resolveSchemaFamily } from './schema-family.mjs';
 
 function stripArchiveId(folder) {
   return parseArchiveFolder(folder).id ?? folder;
@@ -82,10 +82,11 @@ function decorate(repo, record, baseRef, env) {
 }
 
 // Replaces each side's schema by its family, so a valid derived schema is gated as quality-driven-e2e from here on.
-// A declaration only adds gates. When HEAD has no valid declaration for its schema but the base had one (for that
-// schema, whether or not the change existed there), or when git cannot read the base declaration, the HEAD side is
-// broken and the base integrated, so resolveSchema keeps the change integrated and fails it. An invalid declaration
-// without a valid base one makes the change unknown.
+// A declaration only adds gates. A change in the integrated family at the base cannot leave it by renaming its schema:
+// a switch within the family passes, a switch out of it fails closed. When HEAD has no valid declaration for its
+// schema but the base had one (for that schema, whether or not the change existed there), or when git cannot read the
+// base declaration, the HEAD side is broken and the base integrated, so resolveSchema keeps the change integrated and
+// fails it. An invalid declaration without a valid base one makes the change unknown.
 function applyFamilies(repo, rawHead, rawBase, baseRef) {
   const failClosed = error => ({
     head: { ...rawHead, broken: true, error, familyError: error },
@@ -97,6 +98,9 @@ function applyFamilies(repo, rawHead, rawBase, baseRef) {
   if (!rawHead.schema || rawHead.broken) return { head: rawHead, base };
   const headFamily = resolveSchemaFamily(repo, rawHead.schema);
   if (headFamily.family === SCHEMA_INTEGRATED) return { head: { ...rawHead, schema: SCHEMA_INTEGRATED }, base };
+  if (baseFamily?.family === SCHEMA_INTEGRATED && rawHead.schema !== rawBase.schema) {
+    return failClosed(`比較元で統合系統だった change の schema が ${rawBase.schema} から ${rawHead.schema} に変更されています。統合 change として検査を続けます`);
+  }
   const atBase = baseRef ? resolveSchemaFamily(repo, rawHead.schema, { rev: baseRef }) : null;
   if (atBase?.unreadable) return failClosed(atBase.error);
   if (atBase?.derived) {
@@ -224,6 +228,20 @@ function gitOptionalName(repo, rev, dir) {
   return shown != null;
 }
 
+// Active changes at HEAD that declare a schema whose declaration was valid at the base but is removed or invalid at
+// HEAD. They join the selection even without a diff of their own, so dropping a declaration in one pull request and
+// finishing the change in the next cannot skip the integrated gates. Only runs when openspec/schemas changed.
+// Throws when git cannot list or read the base.
+function lapsedDeclarationRecords(repo, baseRef, selected) {
+  const changed = git(repo, ['diff', '--name-only', baseRef, 'HEAD', '--', 'openspec/schemas']).trim();
+  if (!changed) return [];
+  const lapsed = new Set(listCompatDeclarations(repo, { rev: baseRef })
+    .filter(name => !resolveSchemaFamily(repo, name).derived));
+  if (!lapsed.size) return [];
+  const taken = new Set(selected.filter(record => record.lifecycle === 'active').map(record => record.id));
+  return allActive(repo).filter(record => !taken.has(record.id) && lapsed.has(interpretSchema(repo, record.dir, null).schema));
+}
+
 function allActive(repo) {
   return listActiveChanges(repo)
     .map(({ id, dir }) => ({ id, lifecycle: 'active', dir, baseDir: dir }))
@@ -292,6 +310,11 @@ export function selectChanges({ repo, base, names = [], env = process.env }) {
       return { ok: false, exitCode: 2, error: `差分を取得できません: ${err.message}`, changes: [] };
     }
     records = recordsFromDiff(repo, baseRef, diff);
+    try {
+      records.push(...lapsedDeclarationRecords(repo, baseRef, records));
+    } catch (err) {
+      return { ok: false, exitCode: 2, error: `比較元の互換宣言を読めません: ${err.message}`, changes: [] };
+    }
   } else {
     records = allActive(repo);
   }

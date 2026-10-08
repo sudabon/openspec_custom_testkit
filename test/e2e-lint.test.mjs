@@ -8,7 +8,7 @@ import { doctor } from '../payload/scripts/lib/doctor.mjs';
 import { lintChange, lintRepo, lintSource } from '../payload/scripts/lib/e2e-lint.mjs';
 import { evaluateChange, maxLevel } from '../payload/scripts/lib/evaluate.mjs';
 import { runCiJob } from '../payload/scripts/ci-job.mjs';
-import { asDerived, capture, changeFixture, gitRepo, runGate, writeIn } from './support.mjs';
+import { asDerived, capture, changeFixture, gitRepo, runGate, writeDerivedSchema, writeIn } from './support.mjs';
 
 const fixtures = fileURLToPath(new URL('./fixtures/e2e-lint/', import.meta.url));
 const shippedPolicy = readFileSync(new URL('../payload/openspec/quality-policy.md', import.meta.url), 'utf8');
@@ -1115,5 +1115,52 @@ test('Derived changes inherit every integrated gate: the lint enforces the same 
     assert.equal(result.failed, integrated.failed);
   } finally {
     repo.cleanup();
+  }
+});
+
+// A base with the derived schema and an untouched change `demo` that declares `schema` and requires E2E. HEAD adds a
+// tagged source with a weak assertion and then applies `downgrade`.
+function downgradeRepo(schema, downgrade) {
+  const repo = gitRepo();
+  writeIn(repo.dir, 'openspec/quality-policy.md', shippedPolicy);
+  writeDerivedSchema(repo.dir);
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: ${schema}\nskip_specs: true\n`);
+  writeIn(repo.dir, 'openspec/changes/demo/test-plan.md', `---
+e2e: required
+---
+## E2E観点一覧
+| TP-ID | Requirement | Scenario | Risk | Oracle | Fixture | Intent | Expected |
+|-------|-------------|----------|------|--------|---------|--------|----------|
+| TP-001 | r | s | R1 | O1 | none | i | e |
+`);
+  repo.commit('base');
+  const base = repo.git(['rev-parse', 'HEAD']).trim();
+  writeIn(repo.dir, 'tests/e2e/tagged.spec.ts', `import { expect, test } from '@playwright/test';
+
+test('新しい TP', { tag: ['@demo', '@TP-001'] }, async ({ page }) => {
+  await expect(page.getByRole('heading')).toBeVisible();
+});
+`);
+  downgrade(repo.dir);
+  repo.commit('downgrade');
+  return { repo, base };
+}
+
+test('Lint cannot be weakened through a downgrade: switched or lapsed changes keep tagged sources enforced', () => {
+  const cases = [
+    ['switched to team-custom', 'quality-driven-e2e', dir => writeIn(dir, 'openspec/changes/demo/.openspec.yaml', 'schema: team-custom\nskip_specs: true\n')],
+    ['declaration removed', 'quality-driven-e2e-mockup', dir => rmSync(join(dir, 'openspec/schemas/quality-driven-e2e-mockup/testkit-compat.json'))],
+  ];
+  for (const [label, schema, downgrade] of cases) {
+    const { repo, base } = downgradeRepo(schema, downgrade);
+    try {
+      const env = { ...process.env, QE_E2E_LINT_MODE: 'warn', QE_E2E_LINT_SCOPE: 'changed' };
+      const result = runGate(repo.dir, ['lint', '--base', base], { env });
+      assert.equal(result.status, 1, `${label}\n${result.stdout}${result.stderr}`);
+      assert.match(result.stdout, /強制範囲[\s\S]*✗ e2e-lint weak-assertion tests\/e2e\/tagged\.spec\.ts:3/, label);
+      assert.match(result.stdout, /統合 schema の change \(demo\) では QE_E2E_LINT_MODE を無視します/, label);
+    } finally {
+      repo.cleanup();
+    }
   }
 });

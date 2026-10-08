@@ -90,8 +90,13 @@ node scripts/testkit-gate.mjs effort --format json
 宣言は検査を足す方向にしか働かない。次の場合、ゲートはその change を対象外にせず、診断を出して失敗する。
 
 - 宣言が JSON として読めない、または上の有効条件を満たさない（doctor も失敗する）
-- `--base` の比較元では有効だった宣言が、HEAD で削除または無効化されている。この場合は統合 change として検査を続けたうえで失敗する
 - 比較元の宣言を git で読めない（浅い clone など）
+- `--base` の比較元で有効だった宣言が、HEAD で削除または無効化されている。その schema を `.openspec.yaml` で宣言する HEAD の active change は、change 自体に差分が無くても選択に加わり、統合 change として検査されて失敗する。宣言ファイルの削除だけでなく、派生 schema の schema.yaml やテンプレート、統合 schema の変更で無効になった場合も同じである。その schema を使う active change が無ければ、宣言の削除（アドオンのアンインストール）は失敗しない
+- 比較元で統合系統（`quality-driven-e2e` または有効な派生 schema）だった change の `.openspec.yaml` の `schema:` を、統合系統の外（宣言の無い独自 schema、`spec-driven`、`quality-driven`、`spec-driven-e2e`、無効な宣言の schema）へ付け替えている。archive への移動と同時の付け替えも含む。統合 schema と派生 schema の間や、派生 schema どうしの付け替えは失敗しない
+
+上の2つで統合 change として扱う change では、lint も統合 schema と同じく `QE_E2E_LINT_MODE` / `QE_E2E_LINT_SCOPE` を無視し、タグ付きソースを強制する。統合 change を統合系統の外へ移したいときは、schema を付け替えずに新しい change-id で作り直す。元の change は archive して最終検査を受ける。
+
+これらの検出は、比較元 ref を付けた検査（`check --base` / `lint --base`、CI の `ci-job.mjs` は merge-base を渡す）が前提である。比較元 ref の無い検査は過去の宣言や schema を知らないので、2回の PR に分けた宣言の削除などを検出できない。PR の CI で必ず比較元 ref 付きの検査を通し、main への直接 push はブランチ保護で防ぐ。
 
 宣言の無い独自 schema は、これまでどおり理由付きの対象外になる。testkit の update で統合 schema の artifact が増えると、古い派生 schema の宣言は無効になる。アドオンで派生 schema を再生成する。
 

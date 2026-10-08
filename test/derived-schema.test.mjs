@@ -121,3 +121,104 @@ test('a default schema that is a valid derived schema is never a config fallback
   assert.equal(selected.changes[0].scope, 'unknown');
   assert.match(selected.changes[0].errors.join('\n'), /統合 schema の検査を対象外にしません/);
 });
+
+// A base commit with the derived schema and an untouched active change `demo` that declares `schema`.
+function baseWithChange(t, schema = DERIVED) {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  writeDerivedChange(repo.dir, 'demo', { schema });
+  repo.commit('base');
+  return { repo, base: repo.git(['rev-parse', 'HEAD']).trim() };
+}
+
+test('Declaration removed without touching the change: the change joins the selection and fails as integrated', t => {
+  const { repo, base } = baseWithChange(t);
+  rmSync(join(repo.dir, COMPAT));
+  repo.commit('drop declaration');
+  const selected = selectChanges({ repo: repo.dir, base, env: {} });
+  assert.deepEqual(selected.changes.map(change => change.id), ['demo']);
+  assert.equal(selected.changes[0].scope, 'integrated');
+  assert.equal(selected.changes[0].schema, 'quality-driven-e2e');
+  assert.equal(selected.ok, false);
+  const result = runGate(repo.dir, ['check', '--base', base]);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /互換宣言 .* が HEAD で失われています/);
+});
+
+test('Declaration invalidated through the schema file: the change joins the selection and fails', t => {
+  const { repo, base } = baseWithChange(t);
+  writeDerivedSchema(repo.dir, DERIVED, { mutate: schema => { schema.artifacts = schema.artifacts.filter(a => a.id !== 'test-plan'); } });
+  repo.commit('drop test-plan');
+  const selected = selectChanges({ repo: repo.dir, base, env: {} });
+  assert.deepEqual(selected.changes.map(change => change.id), ['demo']);
+  assert.equal(selected.changes[0].scope, 'integrated');
+  const result = runGate(repo.dir, ['check', '--base', base]);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /HEAD で無効になっています。.*artifact test-plan がありません/);
+});
+
+test('Unused declaration is removed: no change is added and the gate does not fail', t => {
+  const repo = gitRepo(t);
+  writeDerivedSchema(repo.dir);
+  writeDerivedChange(repo.dir, 'plain', { schema: 'quality-driven-e2e' });
+  repo.commit('base');
+  const base = repo.git(['rev-parse', 'HEAD']).trim();
+  rmSync(join(repo.dir, `openspec/schemas/${DERIVED}`), { recursive: true });
+  repo.commit('uninstall');
+  const selected = selectChanges({ repo: repo.dir, base, env: {} });
+  assert.deepEqual(selected.changes, []);
+  assert.equal(selected.ok, true);
+  assert.equal(runGate(repo.dir, ['check', '--base', base]).status, 0);
+});
+
+test('a declaration that cannot be read at the base is an input error, not "nothing lapsed"', t => {
+  const { repo, base } = baseWithChange(t);
+  rmSync(join(repo.dir, COMPAT));
+  repo.commit('drop declaration');
+  // Removing the base's openspec/schemas tree object leaves the merge-base resolvable but the declarations unreadable.
+  const schemasTree = repo.git(['rev-parse', `${base}:openspec/schemas`]).trim();
+  rmSync(join(repo.dir, '.git/objects', schemasTree.slice(0, 2), schemasTree.slice(2)));
+  const selected = selectChanges({ repo: repo.dir, base, env: {} });
+  assert.equal(selected.exitCode, 2, JSON.stringify(selected));
+  assert.match(selected.error, /比較元の互換宣言を読めません/);
+});
+
+test('Integrated change switched to an unrelated schema: it stays integrated and the gate fails', t => {
+  const { repo, base } = baseWithChange(t, 'quality-driven-e2e');
+  writeDerivedSchema(repo.dir, 'team-custom', { compat: null });
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: team-custom\ncreated: 2026-10-01\n');
+  repo.commit('switch');
+  const [change] = selectChanges({ repo: repo.dir, base, env: {} }).changes;
+  assert.equal(change.scope, 'integrated');
+  assert.equal(change.schema, 'quality-driven-e2e');
+  const result = runGate(repo.dir, ['check', '--base', base]);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /schema が quality-driven-e2e から team-custom に変更されています/);
+  assert.doesNotMatch(result.stdout, /無関係な schema/);
+});
+
+test('Derived change switched to a legacy schema: it is not gated as legacy QE', t => {
+  const { repo, base } = baseWithChange(t);
+  writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', 'schema: quality-driven\ncreated: 2026-10-01\n');
+  repo.commit('switch');
+  const [change] = selectChanges({ repo: repo.dir, base, env: {} }).changes;
+  assert.equal(change.scope, 'integrated');
+  assert.equal(change.schema, 'quality-driven-e2e');
+  const result = runGate(repo.dir, ['check', '--base', base], { env: { ...process.env, QE_SCHEMA: 'quality-driven' } });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stdout, /schema が quality-driven-e2e-mockup から quality-driven に変更されています/);
+});
+
+test('Switch within the integrated family: the switch itself does not fail', t => {
+  for (const [from, to] of [['quality-driven-e2e', DERIVED], [DERIVED, 'quality-driven-e2e']]) {
+    const { repo, base } = baseWithChange(t, from);
+    writeIn(repo.dir, 'openspec/changes/demo/.openspec.yaml', `schema: ${to}\ncreated: 2026-10-01\n`);
+    repo.commit('switch');
+    const selected = selectChanges({ repo: repo.dir, base, env: {} });
+    const [change] = selected.changes;
+    assert.equal(change.scope, 'integrated', to);
+    assert.deepEqual(change.errors, [], to);
+    const result = runGate(repo.dir, ['check', '--base', base]);
+    assert.doesNotMatch(result.stdout, /変更されています/, to);
+  }
+});
