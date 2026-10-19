@@ -12,7 +12,7 @@
 
 Agent は承認欄、QA レビュー欄、`oracle_digest`、seal を埋めない。evidence の `effort` の所要分も推測で埋めない。apply の指示は、未承認または未 seal のとき実装を止める。`scripts/qe-gate.sh seal` は本人確認をしない。CODEOWNERS とブランチ保護は PR レビューを要求する仕組みであり、seal 実行者や frontmatter の記名本人までは検証しない。
 
-役割の入力範囲は `openspec/roles/oracle-writer.md` と `openspec/roles/falsifier.md` が正本である。Claude の adapter は `.claude/agents/` からその定義を参照する。design と実装会話は Oracle の期待値に渡さない。別セッションを起動できない環境では、同じ会話の続きで Oracle や反証を書かず、人間に別セッションの開始を依頼して止まる。
+役割の入力範囲は `openspec/roles/oracle-writer.md` と `openspec/roles/falsifier.md` が正本である。Claude の adapter は `.claude/agents/` からその定義を参照する。Claude Code では `/qe-oracle <change>` で Oracle 作成を起動できる。このスキル（`.claude/skills/qe-oracle/SKILL.md`）は `qe-oracle-writer` を別コンテキストで起動し、入力を specs・quality.md・quality-policy.md に限定し、承認欄の編集と seal を禁じる指示を渡す。モデルが自動で呼び出さないよう `disable-model-invocation` を付けている。design と実装会話は Oracle の期待値に渡さない。別セッションを起動できない環境では、同じ会話の続きで Oracle や反証を書かず、人間に別セッションの開始を依頼して止まる。
 
 E2E 層の Oracle は test-plan の TP で観測する。同じ観測を単体テストとして再実装しない。Unit 層の Oracle に TP-ID は不要である。
 

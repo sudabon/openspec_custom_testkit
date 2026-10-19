@@ -50,6 +50,8 @@ install の終了コード 0 は処理が終わったことだけを表します
 
 統合 schema では low を含む全 Risk で、人間の承認、Oracle seal、独立反証が必須です。`QE_SEAL_REQUIRED_LEVELS` と `QE_SCHEMA` では外せません。手順、役割の入力範囲、別セッションの扱い、store への非対応、保護ファイルの限界は `docs/workflow.md` と `docs/migration.md` にあります。
 
+Claude Code では `/qe-oracle <change>` で Oracle テストの作成を `qe-oracle-writer` に別コンテキストで依頼できます。承認欄の編集と seal はしないので、Oracle を読んだ人間が行います。
+
 fixture に出る `FIXTURE-DUMMY-APPROVAL` は人間の承認ではありません。
 
 アドオン kit が統合 schema に artifact を足した派生 schema を配布する場合は、`openspec/schemas/<name>/testkit-compat.json` で互換を宣言すると、その change も同じゲートを受けます。宣言の形式と、壊れた宣言で検査が外れない仕組みは [docs/workflow.md](docs/workflow.md#派生-schema) にあります。
